@@ -51,7 +51,7 @@ APPS: list[dict] = [{'id': 'wordcraft',
   'glyph': '🏢',
   'desc': "le cartelle di reparto (lettura secondo i reparti dell'utente)",
   'admin': 'carica, sposta ed elimina i documenti nelle cartelle di reparto'}]
-CHILD_APP_IDS = {"wordcraft", "gridcraft", "pdfcraft", "deckcraft", "ideacraft"}
+CHILD_APP_IDS = {"wordcraft", "gridcraft", "pdfcraft", "deckcraft", "ideacraft", "messaggi"}
 
 APP_IDS = [a["id"] for a in APPS]
 PRODUCTIVITY_IDS = {"wordcraft", "gridcraft", "pdfcraft", "deckcraft", "ideacraft", "mailcraft", "messaggi", "archivio"}

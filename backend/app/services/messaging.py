@@ -34,7 +34,7 @@ TURN_TTL_S = 12 * 3600
 
 def can_use(user: User) -> bool:
     from .apps import app_enabled
-    return user.role != Role.child and user.is_active and app_enabled(user, APP_ID)
+    return user.is_active and app_enabled(user, APP_ID)
 
 
 def display_room_name(room: MsgRoom, members: list[User], me_id: str) -> str:
