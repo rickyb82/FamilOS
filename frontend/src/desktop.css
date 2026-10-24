@@ -203,3 +203,36 @@ html[data-theme] .familos { background:var(--desktop-background); }
 .familos.os-fullscreen > .os-topbar,.familos.os-fullscreen > .os-dock,.familos.os-fullscreen > .os-offline {display:none;}
 .familos.os-fullscreen > .os-board {margin:0;}
 .os-window.os-window-fullscreen {position:fixed!important;inset:0!important;width:100vw!important;height:100dvh!important;max-width:none;max-height:none;border:0;border-radius:0;z-index:100!important;}
+
+/* Personal desktop collections */
+:root { --desktop-glass:rgba(245,242,255,.83); --desktop-glow:#a88bfa; }
+html[data-desktop-style="oceano"] { --desktop-glass:rgba(231,250,252,.85); --desktop-glow:#56cddd; }
+html[data-desktop-style="tramonto"] { --desktop-glass:rgba(255,240,226,.86); --desktop-glow:#f5ac75; }
+html[data-theme="dark"] { --desktop-glass:rgba(29,32,47,.88); }
+html[data-desktop-style] .os-topbar,html[data-desktop-style] .os-dock { background:var(--desktop-glass); box-shadow:0 8px 30px #10142c26,inset 0 1px #ffffff70; backdrop-filter:blur(28px) saturate(145%); }
+html[data-desktop-style] .os-widget,html[data-desktop-style] .os-welcome { background:var(--desktop-glass); backdrop-filter:blur(24px); box-shadow:0 14px 35px #12122b24; }
+html[data-desktop-style] .os-home-heading,html[data-desktop-style] .os-section-heading,html[data-desktop-style] .os-home-footer { color:white; text-shadow:0 2px 12px #0008; }
+html[data-desktop-style] .os-home-heading h1>span,html[data-desktop-style] .os-home-heading .os-date,html[data-desktop-style] .os-section-heading>span { color:#fff; }
+html[data-desktop-style] .os-app-grid>button { color:white; text-shadow:0 1px 7px #000a; }
+.os-icon.os-icon-art { padding:0; border:0; background:transparent; box-shadow:0 7px 13px #10143235,inset 0 1px #fff9; overflow:hidden; }
+.os-icon-art svg,.os-icon-art img { width:100%; height:100%; display:block; object-fit:contain; }
+html[data-effects="full"] .os-icon-art { transition:transform .2s cubic-bezier(.2,.8,.2,1),box-shadow .2s; }
+@media(hover:hover) { html[data-effects="full"] button:hover>.os-icon-art { transform:translateY(-5px) scale(1.08); box-shadow:0 12px 19px #10143240; } }
+.desktop-theme-cards { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; }
+.desktop-theme-card { text-align:left; padding:0 0 14px; overflow:hidden; border:2px solid transparent; border-radius:18px; background:var(--surface,#f4f3f8); color:var(--text,#292638); box-shadow:0 5px 20px #00000012; }
+.desktop-theme-card[aria-pressed="true"] { border-color:var(--primary); outline:2px solid var(--accent-soft); outline-offset:3px; }
+.desktop-theme-card img { width:100%; aspect-ratio:16/10; object-fit:cover; display:block; margin-bottom:12px; }
+.desktop-theme-card strong,.desktop-theme-card small { display:block; margin:0 14px; }
+.desktop-theme-card small { margin-top:5px; font-size:12px; line-height:1.4; }
+html[data-effects="reduced"] .familos *,html[data-effects="off"] .familos * { animation:none!important; transition:none!important; scroll-behavior:auto!important; }
+html[data-effects="reduced"] button:hover>.os-icon,html[data-effects="off"] button:hover>.os-icon { transform:none; }
+html[data-effects="off"] .familos * { backdrop-filter:none!important; }
+html[data-effects="off"] { --desktop-glass:#f3f2f8; }
+html[data-effects="off"][data-theme="dark"] { --desktop-glass:#242633; }
+@media(prefers-reduced-motion:reduce) { .familos *,html[data-effects="full"] .os-icon-art { animation:none!important; transition:none!important; scroll-behavior:auto!important; } button:hover>.os-icon { transform:none!important; } }
+@media(max-width:560px) { .desktop-theme-cards { grid-template-columns:1fr; }.desktop-theme-card img { aspect-ratio:3/1; } }
+html[data-desktop-style] .os-search-button { background:var(--desktop-glass); color:var(--os-ink); text-shadow:none; }
+html[data-desktop-style] .os-search-button>span { color:var(--os-ink); }
+html[data-desktop-style] .os-home-heading>.os-eyebrow,html[data-desktop-style] .os-home-heading .os-eyebrow { color:#fff; }
+html[data-desktop-style] .os-widget p,html[data-desktop-style] .os-welcome>p:not(.os-eyebrow) { color:var(--os-muted); }
+html[data-theme="dark"] .desktop-theme-card { background:#282a39; color:#f4f1fc; }

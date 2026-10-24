@@ -1,3 +1,4 @@
+import AppIcon from "./AppIcon"
 import { lockSession } from './LockScreen'
 import DesktopCalls from './DesktopCalls'
 import AppLauncher from './AppLauncher'
@@ -19,7 +20,6 @@ import '../desktop.css'
 const uid = () => crypto.randomUUID()
 const initialPath = () => window.location.pathname + window.location.search
 
-function AppIcon({ app }: { app: AppEntry }) { return <span className={`os-icon ${app.color}`} aria-hidden="true">{app.iconUrl?<img src={app.iconUrl} width="48" height="48" alt=""/>:app.icon}</span> }
 
 export default function Desktop() {
   const { brand } = useBranding()

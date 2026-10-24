@@ -415,7 +415,9 @@ from typing import Literal
 class AppearanceIn(BaseModel):
     theme: Literal["system","light","dark"] = "system"
     accent: Literal["lavender","blue","green","rose","amber"] = "lavender"
-    wallpaper: Literal["soft","ocean","forest","sunset","midnight","custom"] = "soft"
+    desktop_style: Literal["aurora","oceano","tramonto"] = "aurora"
+    effects: Literal["full","reduced","off"] = "full"
+    wallpaper: Literal["aurora","oceano","tramonto","soft","ocean","forest","sunset","midnight","custom"] = "aurora"
     lock_after_minutes: Literal[0,1,5,15,30] = 5
 
 class PrefsIn(BaseModel):

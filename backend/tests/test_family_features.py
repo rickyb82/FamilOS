@@ -45,7 +45,7 @@ async def test_lock_passkey_requires_user_verification(admin,monkeypatch):
 
 async def test_appearance_is_personal_and_does_not_reset_tool_preferences(anna,bob):
     assert (await anna.put("/api/auth/prefs",json={"tools_off":["web_search"]})).status_code==200
-    look={"theme":"dark","accent":"green","wallpaper":"forest","lock_after_minutes":15}
+    look={"theme":"dark","accent":"green","wallpaper":"forest","lock_after_minutes":15,"desktop_style":"oceano","effects":"reduced"}
     assert (await anna.put("/api/auth/prefs",json={"appearance":look})).status_code==200
     prefs=(await anna.get("/api/auth/me")).json()["prefs"]
     assert prefs["appearance"]==look and prefs["tools_off"]==["web_search"]
@@ -149,3 +149,13 @@ async def test_child_cannot_change_browser_or_teaching_rules(kid):
     assert (await kid.get("/api/admin/browser")).status_code==403
     assert (await kid.put("/api/admin/browser",json={"sites":[]})).status_code==403
     assert (await kid.get("/api/admin/child-rules")).status_code==403
+
+
+@pytest.mark.parametrize("style", ["aurora", "oceano", "tramonto"])
+async def test_desktop_collections_persist(anna, style):
+    response = await anna.put("/api/auth/prefs", json={"appearance": {"desktop_style": style, "wallpaper": style, "effects": "off"}})
+    assert response.status_code == 200
+    prefs = (await anna.get("/api/auth/me")).json()["prefs"]["appearance"]
+    assert prefs["desktop_style"] == style and prefs["wallpaper"] == style
+    assert prefs["effects"] == "off"
+    assert (await anna.put("/api/auth/prefs", json={"appearance": {"desktop_style": "invalid"}})).status_code == 422
