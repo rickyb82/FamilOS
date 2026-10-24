@@ -88,7 +88,7 @@ async def status(ctx: AuthContext = Depends(require_auth)):
             ready = bool((await worker("GET", "/health"))["ready"])
         except HTTPException:
             pass
-    return {"ready": ready, "child": ctx.user.role == Role.child, "setup_command": "./familos.sh browser up"}
+    return {"ready": ready, "ai_review": safe_browser.ai_review_enabled(ctx.user), "child": ctx.user.role == Role.child, "setup_command": "./familos.sh browser up"}
 
 
 @router.post("/sessions")
@@ -145,7 +145,7 @@ async def action(lease_id: str, body: Action, ctx: AuthContext = Depends(require
         location = (await worker("GET", "/sessions/" + lease_id + "/location"))["url"]
         safe_browser.normalize_url(location)
         decision = await check_blocked(db, ctx.user.family_id, urlsplit(location).hostname, ctx.user.age_group.value)
-        if not decision or decision.status != "approved":
+        if safe_browser.ai_review_enabled(ctx.user) and (not decision or decision.status != "approved"):
             raise HTTPException(403, "Attendi l’approvazione del sito prima di interagire.")
         data["expected_url"] = location
     return await worker("POST", "/sessions/" + lease_id + "/action", data)
@@ -191,10 +191,12 @@ async def frame(lease_id: str, response: Response, ctx: AuthContext = Depends(re
     lease = owned(lease_id, ctx)
     async with lease.frames:
         initial_role, initial_age = ctx.user.role, ctx.user.age_group
+        initial_review = safe_browser.ai_review_enabled(ctx.user)
+        age = ctx.user.age_group.value
         result = await worker("GET", "/sessions/" + lease_id + "/frame")
         if result["url"] != "about:blank":
             safe_browser.normalize_url(result["url"])
-            if ctx.user.role == Role.child:
+            if initial_review:
                 if not result.get("document_ok"):
                     raise HTTPException(503, "Pagina non caricata: verifica non disponibile.")
                 from ..services.browser_approvals import approve_once
@@ -205,14 +207,14 @@ async def frame(lease_id: str, response: Response, ctx: AuthContext = Depends(re
                 await approve_once(db, ctx.user.family_id, urlsplit(result["url"]).hostname, age, review)
         # A provider review may take seconds: recheck logout/lock/role and current allowlist before returning pixels.
         current = await live_auth(lease, db)
-        if current.user.role != initial_role or current.user.age_group != initial_age:
+        if current.user.role != initial_role or current.user.age_group != initial_age or safe_browser.ai_review_enabled(current.user) != initial_review:
             raise HTTPException(409, "Profilo modificato: riapri il browser.")
         if result["url"] != "about:blank" and current.user.role == Role.child:
             from ..services.browser_approvals import check_blocked
             if current.user.age_group.value != age:
                 raise HTTPException(409, "Fascia d’età modificata: ripeti la verifica.")
             approval = await check_blocked(db, current.user.family_id, urlsplit(result["url"]).hostname, age)
-            if not approval or approval.status != "approved":
+            if initial_review and (not approval or approval.status != "approved"):
                 raise HTTPException(409, "Autorizzazione modificata: ripeti la verifica.")
         response.headers["Cache-Control"] = "no-store, private"
         return {key: result[key] for key in ("url", "title", "image", "width", "height", "notice")}

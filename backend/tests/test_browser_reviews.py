@@ -175,6 +175,7 @@ async def test_weekly_claim_survives_repeated_tick(seeded, monkeypatch):
     async with SessionLocal() as db:
         fam = await family(db)
         schedule = await reviews.schedule_for(db, fam)
+        schedule.enabled = True  # Weekly checks now require explicit opt-in.
         schedule.last_slot = '2000-01-01'
         await db.commit()
     check = AsyncMock()

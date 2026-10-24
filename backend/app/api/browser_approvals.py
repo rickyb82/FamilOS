@@ -51,6 +51,7 @@ async def change(body: Decision, request: Request, ctx=Depends(require_admin), d
 
 
 class Schedule(BaseModel):
+    enabled: bool = False
     weekday: int = Field(default=6, ge=0, le=6)
     hour: int = Field(default=3, ge=0, le=23)
     minute: int = Field(default=0, ge=0, le=59)
@@ -62,7 +63,7 @@ class Schedule(BaseModel):
 async def get_schedule(ctx=Depends(require_admin), db=Depends(get_db)):
     from ..services.browser_reviews import schedule_for
     row = await schedule_for(db, ctx.user.family_id)
-    return {key: getattr(row, key) for key in ("weekday", "hour", "minute", "timezone", "model",
+    return {key: getattr(row, key) for key in ("enabled", "weekday", "hour", "minute", "timezone", "model",
         "last_started_at", "last_finished_at", "last_error")}
 
 

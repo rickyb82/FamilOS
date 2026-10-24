@@ -5,7 +5,7 @@ import { useWindowActive } from '../lib/desktop'
 import ReadingBrowser from './ReadingBrowser'
 
 interface Frame { url: string; title: string; image: string; width: number; height: number; notice: string }
-interface Status { ready: boolean; child: boolean; setup_command: string }
+interface Status { ai_review: boolean; ready: boolean; child: boolean; setup_command: string }
 
 export default function SafeBrowser() {
   const { me } = useAuth()
@@ -122,12 +122,12 @@ export default function SafeBrowser() {
       <button disabled={!status?.ready || busy || !url.trim()}>{busy ? 'Carico…' : 'Apri'}</button>
       {session && <button type="button" onClick={end} title="Chiude la sessione e cancella i cookie del browser remoto">Chiudi</button>}
     </form>
-    <div className="remote-browser-status" role="status">{child ? 'Profilo bambino · siti verificati dall’AI e decisioni salvate per fascia d’età' : 'Chromium sul server · sessione personale temporanea'}{checking && ' · Verifica schermata…'}</div>
+    <div className="remote-browser-status" role="status">{child ? (status?.ai_review ? 'Profilo bambino · verifica AI alla prima visita del sito' : 'Profilo bambino · verifica AI disattivata') : 'Sessione personale · verifica AI disattivata per gli adulti'}{checking && ' · Caricamento…'}</div>
     {error && <p className="error remote-browser-error" role="alert">{error}</p>}
     {!session && <div className="safe-browser-body"><p className="os-eyebrow">IL WEB, NEL TUO DESKTOP</p><h1>Browser</h1><p>Pagine con grafica, immagini, JavaScript e ricerca. La navigazione avviene in una sessione isolata sul server.</p>
       {!status?.ready && <div className="installation-deployment"><h3>Attivazione del browser grafico</h3>{me?.user.role === 'admin' ? <><p>Esegui una volta sulla VM Ubuntu:</p><code>{status?.setup_command || './familos.sh browser up'}</code></> : <p>Chiedi all’amministratore di attivare il browser sul server.</p>}<button onClick={loadStatus}>Ricontrolla disponibilità</button></div>}
       <div className="safe-browser-sites">{sites.map(site => <button key={site} disabled={!status?.ready || busy} onClick={() => open('https://' + site)}>◎<span>{site}</span>↗</button>)}</div>
-      {child && <p className="muted">Alla prima visita l’AI controlla testo e immagine del sito. Le approvazioni restano salvate; solo gli amministratori possono modificarle. Un dominio approvato può cambiare contenuti nel tempo.</p>}
+      {child && status?.ai_review && <p className="muted">Alla prima visita l’AI controlla testo e immagine del sito. Le approvazioni restano salvate; solo gli amministratori possono modificarle. Un dominio approvato può cambiare contenuti nel tempo.</p>}
       <p className="muted small">Questa versione supporta pagine e ricerca interattive. Audio, videocamera, download, caricamento file, finestre popup e connessioni WebSocket non sono disponibili. Alcuni siti possono rifiutare un browser remoto. I bambini non possono inviare moduli POST.</p>
       {!child && <button className="ghost" onClick={() => setReader(true)}>Modalità lettura testuale</button>}
     </div>}

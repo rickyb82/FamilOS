@@ -613,6 +613,7 @@ class BrowserSiteApproval(Base):
 
 
 class BrowserReviewSchedule(Base):
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     __tablename__ = "browser_review_schedules"
     family_id: Mapped[str] = mapped_column(ForeignKey("families.id", ondelete="CASCADE"), primary_key=True)
     weekday: Mapped[int] = mapped_column(Integer, default=6)

@@ -21,7 +21,7 @@ export function ParentBrowserReview() {
   </section>
 }
 
-interface Schedule { weekday: number; hour: number; minute: number; timezone: 'Europe/Rome'; model: string; last_started_at?: string; last_finished_at?: string; last_error?: string }
+interface Schedule { enabled: boolean; weekday: number; hour: number; minute: number; timezone: 'Europe/Rome'; model: string; last_started_at?: string; last_finished_at?: string; last_error?: string }
 interface Approval { id: string; domain: string; age_group: string; status: string; source: string; last_checked_at?: string; last_error: string }
 export default function BrowserReviews() {
   const [schedule, setSchedule] = useState<Schedule | null>(null), [rows, setRows] = useState<Approval[]>([])
@@ -31,11 +31,11 @@ export default function BrowserReviews() {
   async function run(fn: () => Promise<void>) { setBusy(true); setError(''); setMessage(''); try { await fn(); await load() } catch (e: any) { setError(e.message) } finally { setBusy(false) } }
   async function decide(row: Approval, status: string) { await put('/admin/browser/approvals', { domain: row.domain, age_group: row.age_group, status }); setMessage('Decisione aggiornata.') }
   return <section className="card stack"><h2>Autorizzazioni e controlli settimanali</h2>
-    <p>Primo accesso automatico: OpenAI. Controlli settimanali: solo Ollama, senza passaggio automatico al cloud.</p>
-    {schedule && <><label>Giorno<select value={schedule.weekday} onChange={e => setSchedule({ ...schedule, weekday: Number(e.target.value) })}>{['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica'].map((d, i) => <option key={i} value={i}>{d}</option>)}</select></label>
+    <p>Verifica alla prima visita: disattivata per default, attivabile per singolo bambino nel pannello Genitori. Le altre pagine dello stesso dominio riutilizzano la decisione salvata.</p>
+    {schedule && <><label className="row"><input type="checkbox" checked={schedule.enabled} onChange={e=>setSchedule({...schedule,enabled:e.target.checked})} /> Ricontrolli settimanali con Ollama (facoltativi)</label><label>Giorno<select value={schedule.weekday} onChange={e => setSchedule({ ...schedule, weekday: Number(e.target.value) })}>{['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica'].map((d, i) => <option key={i} value={i}>{d}</option>)}</select></label>
       <label>Ora · Europe/Rome<input type="time" value={`${String(schedule.hour).padStart(2, '0')}:${String(schedule.minute).padStart(2, '0')}`} onChange={e => { const [hour, minute] = e.target.value.split(':').map(Number); if (Number.isFinite(hour) && Number.isFinite(minute)) setSchedule({ ...schedule, hour, minute }) }} /></label>
       <label>Modello Ollama con capacità visive<input value={schedule.model} onChange={e => setSchedule({ ...schedule, model: e.target.value })} placeholder="Vuoto: modello Ollama configurato" /></label>
-      <button disabled={busy} onClick={() => run(async () => { await put('/admin/browser/approvals/schedule', schedule); setMessage('Orario salvato. Il prossimo controllo seguirà questa programmazione.') })}>Salva programmazione</button>
+      <button disabled={busy} onClick={() => run(async () => { await put('/admin/browser/approvals/schedule', schedule); setMessage(schedule.enabled ? 'Ricontrolli settimanali attivati.' : 'Ricontrolli settimanali disattivati.') })}>Salva programmazione</button>
       {schedule.last_started_at && <small>Ultimo avvio: {new Date(schedule.last_started_at).toLocaleString('it-IT')}. {schedule.last_finished_at ? 'Ciclo terminato: consulta gli esiti sotto.' : 'Ciclo in corso o interrotto: consulta gli esiti sotto.'}</small>}
       {schedule.last_error && <p className="error">{schedule.last_error}</p>}</>}
     <button className="ghost" disabled={busy} onClick={() => run(load)}>Aggiorna esiti</button>

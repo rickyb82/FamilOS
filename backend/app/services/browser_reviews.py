@@ -95,6 +95,8 @@ async def tick():
         families = (await db.execute(select(BrowserSiteApproval.family_id).distinct())).scalars().all()
         for family in families:
             schedule = await schedule_for(db, family)
+            if not schedule.enabled:
+                continue
             due = slot(schedule, now())
             previous, model = schedule.last_slot, schedule.model
             if due <= previous:

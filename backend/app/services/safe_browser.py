@@ -180,3 +180,8 @@ async def check_page(page,age_group):
     except ValueError:allowed=False
     if not allowed:raise HTTPException(403,"Questa pagina non è adatta alla navigazione protetta. Chiedi a un genitore.")
     return page
+
+
+def ai_review_enabled(user):
+    from ..models import Role
+    return user.role == Role.child and (user.policy or {}).get("browser_ai_review") is True
