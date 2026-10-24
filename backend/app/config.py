@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     log_level: str = "info"
     cookie_secure: bool = True
     security_login_alerts: bool = True
+    updater_socket: str = "/run/familos-updater/control.sock"
     allow_code_execution: bool = False  # shared sandbox lacks per-job isolation; opt-in only
 
     # Esposizione / WebAuthn

@@ -94,7 +94,8 @@ async def private_response_cache(request, call_next):
 
 for r in (auth.router, google_auth.router, chat.router, projects.router, shares.router, admin.router, artifacts.router, tts.router, approvals.router, mail.router, folders.router, push.router, native_app.router, messaging.router, events.router, sync.router):
     app.include_router(r, prefix="/api")
-from .api import branding, installation, education, browser, parental, lockscreen, app_access
+from .api import branding, installation, education, browser, parental, lockscreen, app_access, updates
+app.include_router(updates.router, prefix="/api")
 app.include_router(app_access.router, prefix="/api")
 app.include_router(branding.router, prefix="/api")
 app.include_router(education.router, prefix="/api")

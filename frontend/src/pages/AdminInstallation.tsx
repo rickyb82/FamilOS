@@ -3,6 +3,7 @@ import { api, get, put } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import { useBranding } from '../lib/branding'
 import AdminBranding from './AdminBranding'
+import AdminUpdates from './AdminUpdates'
 import PanelMenu from '../components/PanelMenu'
 import '../panel-menu.css'
 
@@ -15,6 +16,7 @@ interface Installation {
 const groups = [{ label: 'Sistema', items: [
   { id: 'brand', label: 'Nome e logo', icon: '◈' }, { id: 'domain', label: 'Dominio e passkey', icon: '◎' },
   { id: 'google', label: 'Accesso con Google', icon: 'G' }, { id: 'tls', label: 'HTTPS e certificati', icon: '▣' },
+  { id: 'updates', label: 'Aggiornamenti e app', icon: '↻' },
 ] }]
 
 export default function AdminInstallation() {
@@ -60,7 +62,8 @@ export default function AdminInstallation() {
       {error && <p className="error" role="alert">{error}</p>}
       {message && <p className="ok" role="status">{message}</p>}
       {section === 'brand' && <AdminBranding />}
-      {section !== 'brand' && !config && <p>Caricamento configurazione…</p>}
+      {section === 'updates' && <AdminUpdates />}
+      {section !== 'brand' && section !== 'updates' && !config && <p>Caricamento configurazione…</p>}
       {config && section === 'domain' && <section className="card stack">
         <h2>Il tuo indirizzo pubblico</h2><p className="muted">Un solo indirizzo per raggiungere il sistema, completare il login Google e registrare le passkey.</p>
         <label>Dominio o URL pubblico<input placeholder="https://casa.example.it" value={url} onChange={e => setUrl(e.target.value)} autoComplete="url" /></label>

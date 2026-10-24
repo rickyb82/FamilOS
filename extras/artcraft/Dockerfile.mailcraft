@@ -5,7 +5,7 @@
 # Prima build: 20-40 minuti (compila Rust e WebAssembly); le successive sono rapide grazie alla cache.
 ARG REPO=https://github.com/rickyb82/mailcraft
 ARG REF=main
-# commit upstream (solo per invalidare la cache di build quando il repository e' cambiato: ./familai.sh mailcraft upgrade)
+# Commit esatto da compilare; REF viene usato solo quando SHA non è configurato.
 ARG UPSTREAM_SHA=
 
 FROM rust:1-bookworm AS build
@@ -18,7 +18,7 @@ RUN set -eux; arch="$(uname -m)"; case "$arch" in x86_64) t=x86_64-unknown-linux
     curl -fsSL "https://github.com/trunk-rs/trunk/releases/latest/download/trunk-${t}.tar.gz" | tar xz -C /usr/local/bin trunk; trunk --version
 WORKDIR /src
 RUN --mount=type=secret,id=gh_token set -e; t="$(tr -d ' \r\n' 2>/dev/null < /run/secrets/gh_token || true)"; if [ -n "$t" ]; then export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$t" | base64 | tr -d '\n')"; fi; \
-    echo "upstream: ${UPSTREAM_SHA:-latest}" && git clone --depth 1 --branch "$REF" "$REPO" . && git rev-parse HEAD
+    git init . && git remote add origin "$REPO" && git fetch --depth 1 origin "${UPSTREAM_SHA:-$REF}" && git checkout --detach FETCH_HEAD && if [ -n "$UPSTREAM_SHA" ]; then test "$(git rev-parse HEAD)" = "$UPSTREAM_SHA"; fi
 # il rust-toolchain.toml del repository puo' chiedere un'altra versione: rustup la scarica, qui le aggiungiamo il target wasm
 RUN rustup target add wasm32-unknown-unknown
 RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry \
