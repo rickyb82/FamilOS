@@ -24,7 +24,7 @@ export default function Desktop() {
   const { brand } = useBranding()
   const { me, logout } = useAuth()
   const storageKey = `familos:desktop:v1:${me!.user.id}`
-  const [windows, setWindows] = useState<DesktopWindow[]>(() => restoreWindows(storageKey))
+  const [windows, setWindows] = useState<DesktopWindow[]>(() => restoreWindows(storageKey).map(w => ({ ...w, minimized: true })))
   const [active, setActive] = useState<string | null>(null)
   const [showHome, setShowHome] = useState(true)
   const [launcherOpen, setLauncherOpen] = useState(false)

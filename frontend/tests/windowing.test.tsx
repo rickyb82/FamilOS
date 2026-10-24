@@ -152,3 +152,16 @@ it('leaves fullscreen when the session is locked',async()=>{
   fireEvent(window,new Event('familos:locked'))
   expect(file.className).not.toContain('os-window-fullscreen')
 })
+
+
+it('keeps restored Settings minimized when opening Emily until explicitly selected', async () => {
+  localStorage.setItem('familos:desktop:v1:family-user', JSON.stringify([{ id: 'saved-settings', path: '/settings', x: 20, y: 20, width: 600, height: 400, mode: 'float', minimized: false }]))
+  render(<Desktop />)
+  await act(async () => {})
+  fireEvent.click(app('Emily'))
+  expect(region('Emily')).toBeTruthy()
+  expect(screen.queryByRole('region', { name: 'Impostazioni, finestra' })).toBeNull()
+  expect(screen.getAllByRole('region', { name: /finestra$/ })).toHaveLength(1)
+  fireEvent.click(app('Impostazioni'))
+  expect(region('Impostazioni')).toBeTruthy()
+})
