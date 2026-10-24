@@ -44,3 +44,16 @@ async def test_old_qwen_template_does_not_leak_implicit_thinking(monkeypatch):
     monkeypatch.setattr("app.providers.ollama_provider.httpx.AsyncClient", lambda **kwargs: client(transport=httpx.MockTransport(respond)))
     events = [e async for e in OllamaProvider("http://local-test:11434", "qwen3:4b").stream("qwen3:4b", "", [], [])]
     assert "".join(e.text for e in events if e.type == "text_delta").strip() == "FamilOS pronto"
+
+async def test_ollama_400_reports_provider_reason_without_request_content(monkeypatch):
+    import pytest
+    client = httpx.AsyncClient
+    def respond(request):
+        if request.url.path == '/api/show':
+            return httpx.Response(200, json={'template':'normal'})
+        return httpx.Response(400, json={'error':'selected model does not support tools'})
+    monkeypatch.setattr('app.providers.ollama_provider.httpx.AsyncClient',lambda **kwargs:client(transport=httpx.MockTransport(respond)))
+    provider=OllamaProvider('http://local-test:11434','test-model')
+    with pytest.raises(RuntimeError,match='does not support tools') as exc:
+        _=[e async for e in provider.stream('test-model','private-system',[],[])]
+    assert 'private-system' not in str(exc.value)

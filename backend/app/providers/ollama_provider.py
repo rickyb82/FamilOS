@@ -164,7 +164,21 @@ class OllamaProvider(BaseProvider):
         think_buffer = ""
         async with httpx.AsyncClient(timeout=300) as client:
             async with client.stream("POST", self.base_url + "/api/chat", json=payload) as response:
-                response.raise_for_status()
+                if response.is_error:
+                    # Ollama returns the actionable cause in JSON; httpx's generic 400 hides it.
+                    raw = bytearray()
+                    async for part in response.aiter_bytes():
+                        raw.extend(part[:8192-len(raw)])
+                        if len(raw) >= 8192:
+                            break
+                    try:
+                        detail = json.loads(raw).get("error", "")
+                    except (ValueError, AttributeError):
+                        detail = ""
+                    if not isinstance(detail, str):
+                        detail = ""
+                    detail = " ".join(detail.split())[:1000]
+                    raise RuntimeError(f"Ollama HTTP {response.status_code}: " + (detail or "richiesta rifiutata dal server"))
                 async for line in response.aiter_lines():
                     if not line.strip():
                         continue
