@@ -37,6 +37,7 @@ export default function Notifications() {
   const load = () => get<{ unread: number; items: Notice[] }>('/notifications').then((r) => { r.items.forEach((n) => seen.current.add(n.id)); setItems(r.items); setUnread(r.unread) }).catch(() => {})
   useEffect(() => { load() }, [])
   useLiveEvents((e) => {
+    if (e.kind === 'hello') { load(); return }
     if (e.kind !== 'notification') return
     const n: Notice = { id: e.id, kind: e.nkind, text: e.text, link: e.link, actor: e.actor, read: false, created_at: new Date().toISOString() }
     if (seen.current.has(n.id)) return   // la stessa notifica arrivata due volte (riconnessione del flusso)
@@ -44,7 +45,7 @@ export default function Notifications() {
     setItems((l) => [n, ...l]); setUnread((u) => u + 1)
     setToasts((t) => [...t.filter((x) => !x.leaving).slice(-3), n])
     setTimeout(() => dismiss(n.id), 8000)
-    try { if ('Notification' in window && Notification.permission === 'granted') new Notification('Emily', { body: n.text }) } catch {}
+    try { if ('Notification' in window && Notification.permission === 'granted') new Notification(n.actor || 'Emily', { body: n.text, tag:n.kind }) } catch {}
   })
   // avvisi a comparsa di altre parti dell'app (es. un messaggio nuovo): stessi toast, senza finire nella campanella
   useEffect(() => {

@@ -29,10 +29,16 @@ class CallManager {
   private ringTimer: number | null = null
   me = ''
 
+  private onPageHide = () => { if (this.state.roomId) this.leaveBeacon(this.state.roomId) }
+  stop() {
+    this.unsub?.(); this.unsub = null; this.me = ''
+    window.removeEventListener('pagehide', this.onPageHide)
+    stopRing(); void this.hangup(); this.set({incoming:null})
+  }
   start(meId: string) {
     this.me = meId
     if (!this.unsub) this.unsub = subscribeLive((e) => this.onEvent(e))
-    window.addEventListener('pagehide', () => { if (this.state.roomId) this.leaveBeacon(this.state.roomId) })
+    window.addEventListener('pagehide', this.onPageHide)
   }
   clearError() { this.set({ error: '' }) }
   subscribe(l: Listener) { this.listeners.add(l); l(this.state); return () => { this.listeners.delete(l) } }

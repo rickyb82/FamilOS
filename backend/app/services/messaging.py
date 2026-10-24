@@ -110,14 +110,14 @@ async def post(db: AsyncSession, room: MsgRoom, sender: User | None, kind: str, 
     for uid in ids:
         events.publish(uid, "msg", {"message": message_out(m, uid, names), "room_name": room.name if room.kind == "group" else ""})
     if sender and kind in ("text", "file"):
-        # chi non ha Emily aperta riceve il messaggio come notifica sul telefono
-        from . import push
         who = names.get(sender.id, "") or sender.display_name
         title = f"{who} · {room.name}" if room.kind == "group" and room.name else who
         body = text[:200] if kind == "text" else f"📎 {file.get('file_name') or 'file'}"
-        for uid in ids:
-            if uid != sender.id and not events.online(uid):
-                push.send_later(uid, title, body, f"/messages?room={room.id}", f"msg-{room.id}")
+        for member in await members_of(db, room.id):
+            if member.user_id != sender.id and not member.muted:
+                await events.notify(db, member.user_id, "msg-" + room.id, body,
+                                    f"/messages?room={room.id}", actor=title)
+        await db.commit()
     return m
 
 

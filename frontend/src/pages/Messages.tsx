@@ -4,6 +4,7 @@ import { photoForUpload } from '../lib/photo'
 import { api, ApiError, del, get, patch, post } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import { useLiveEvents } from '../lib/events'
+import { useWindowActive } from '../lib/desktop'
 import { calls } from '../lib/calls'
 import { canEdit, editorPath } from '../lib/artcraft'
 
@@ -40,6 +41,7 @@ function preview(m: Msg | null, me: string) {
 
 /** 💬 Messaggi tra colleghi: conversazioni dirette e gruppi, foto e documenti, chiamate e videochiamate. */
 export default function Messages() {
+  const windowActive = useWindowActive()
   const { me } = useAuth()
   const meId = me?.user.id || ''
   const nav = useNavigate()
@@ -70,7 +72,7 @@ export default function Messages() {
     setMsgs([]); setInfo(false); setText('')
     if (!roomId) return
     get<{ messages: Msg[]; more: boolean }>(`/msg/rooms/${roomId}/messages`).then((r) => { setMsgs(r.messages); setMore(r.more); scrollEnd(false) }).catch((e) => setErr(e.message))
-    post(`/msg/rooms/${roomId}/read`).then(() => setRooms((rs) => rs.map((r) => (r.id === roomId ? { ...r, unread: 0 } : r)))).catch(() => {})
+    if (windowActive && document.visibilityState === 'visible') post(`/msg/rooms/${roomId}/read`).then(() => setRooms((rs) => rs.map((r) => (r.id === roomId ? { ...r, unread: 0 } : r)))).catch(() => {})
   }, [roomId])
 
   function scrollEnd(smooth = true) { requestAnimationFrame(() => list.current?.scrollTo({ top: 1e9, behavior: smooth ? 'smooth' : 'auto' })) }
@@ -83,6 +85,7 @@ export default function Messages() {
   }
 
   useLiveEvents((e) => {
+    if (e.kind === 'hello') { loadRooms(); if(roomId)get<{messages:Msg[];more:boolean}>(`/msg/rooms/${roomId}/messages`).then(r=>{setMsgs(r.messages);setMore(r.more)}).catch(()=>{}); get<Contact[]>('/msg/contacts').then(setContacts).catch(()=>{}); return }
     if (e.kind === 'msg') {
       const m: Msg = e.message
       if (m.room_id === roomId) {
@@ -90,14 +93,14 @@ export default function Messages() {
         if (!e.update) {
           const atEnd = list.current ? list.current.scrollHeight - list.current.scrollTop - list.current.clientHeight < 160 : true
           if (atEnd || m.sender_id === meId) scrollEnd()
-          if (m.sender_id !== meId && document.visibilityState === 'visible') post(`/msg/rooms/${m.room_id}/read`).catch(() => {})
+          if (m.sender_id !== meId && windowActive && document.visibilityState === 'visible') post(`/msg/rooms/${m.room_id}/read`).catch(() => {})
           setTyping((t) => { const n = { ...t }; if (m.sender_id) delete n[m.sender_id]; return n })
         }
       }
       setRooms((rs) => {
         const r = rs.find((x) => x.id === m.room_id)
         if (!r) { loadRooms(); return rs }
-        const unread = m.room_id === roomId || m.sender_id === meId || e.update ? r.unread : r.unread + 1
+        const unread = (m.room_id === roomId && windowActive && document.visibilityState === 'visible') || m.sender_id === meId || e.update ? r.unread : r.unread + 1
         const nr = { ...r, last: e.update && r.last?.id !== m.id ? r.last : m, last_at: e.update ? r.last_at : m.created_at, unread }
         return e.update ? rs.map((x) => (x.id === r.id ? nr : x)) : [nr, ...rs.filter((x) => x.id !== r.id)]
       })
@@ -112,9 +115,22 @@ export default function Messages() {
   })
   useEffect(() => { const t = setInterval(() => setTyping((ty) => Object.fromEntries(Object.entries(ty).filter(([, v]) => Date.now() - v.at < 4500))), 1500); return () => clearInterval(t) }, [])
   useEffect(() => {
-    const v = () => { if (document.visibilityState === 'visible' && roomId) post(`/msg/rooms/${roomId}/read`).then(() => setRooms((rs) => rs.map((r) => (r.id === roomId ? { ...r, unread: 0 } : r)))).catch(() => {}) }
+    const v = () => { if (windowActive && document.visibilityState === 'visible' && roomId) post(`/msg/rooms/${roomId}/read`).then(() => setRooms((rs) => rs.map((r) => (r.id === roomId ? { ...r, unread: 0 } : r)))).catch(() => {}) }
+    v()
     document.addEventListener('visibilitychange', v); return () => document.removeEventListener('visibilitychange', v)
-  }, [roomId])
+  }, [roomId, windowActive])
+
+  useEffect(() => {
+    const refresh = () => {
+      if (!windowActive || document.visibilityState !== 'visible') return
+      loadRooms()
+      get<Contact[]>('/msg/contacts').then(setContacts).catch(()=>{})
+    }
+    refresh()
+    const timer = setInterval(refresh, 15000)
+    document.addEventListener('visibilitychange', refresh)
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', refresh) }
+  }, [windowActive])
 
   async function send() {
     const t = text.trim()

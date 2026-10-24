@@ -1,4 +1,5 @@
 import { lockSession } from './LockScreen'
+import DesktopCalls from './DesktopCalls'
 import AppLauncher from './AppLauncher'
 import { useLiveEvents } from '../lib/events'
 import { useBranding } from '../lib/branding'
@@ -208,6 +209,7 @@ export default function Desktop() {
   const firstName = me!.user.display_name.split(' ')[0]
   const today = now.toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long' })
   return <div className={`familos ${fullId ? "os-fullscreen" : ""}`}>
+    {me?.features?.messaggi && <DesktopCalls userId={me.user.id} />}
     <header className="os-topbar">
       <button className="os-wordmark" onClick={() => setShowHome(true)} aria-label={`Home ${brand.name}`}><img src={brand.logo_url} alt="" /> {brand.name}</button>
       <span className="os-household">{me!.family_name || 'La nostra casa'}</span>

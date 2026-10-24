@@ -83,3 +83,9 @@ async def clear_notifications(ctx: AuthContext = Depends(require_auth), db: Asyn
     res = await db.execute(delete(Notification).where(Notification.user_id == ctx.user.id))
     await db.commit()
     return {"ok": True, "deleted": res.rowcount or 0}
+
+
+@router.post("/events/heartbeat")
+async def heartbeat(ctx: AuthContext = Depends(require_auth)):
+    events.touch(ctx.user.id)
+    return {"ok": True}

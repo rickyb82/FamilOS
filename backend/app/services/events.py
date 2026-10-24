@@ -21,11 +21,17 @@ log = logging.getLogger(__name__)
 
 _queues: dict[str, set[asyncio.Queue]] = defaultdict(set)
 MAX_QUEUE = 200
+_last_seen: dict[str, float] = {}
+PRESENCE_TTL = 90
+
+def touch(user_id: str) -> None:
+    _last_seen[user_id] = time.monotonic()
 
 
 def subscribe(user_id: str) -> asyncio.Queue:
     q: asyncio.Queue = asyncio.Queue(maxsize=MAX_QUEUE)
     _queues[user_id].add(q)
+    touch(user_id)
     return q
 
 
@@ -33,6 +39,7 @@ def unsubscribe(user_id: str, q: asyncio.Queue) -> None:
     _queues[user_id].discard(q)
     if not _queues[user_id]:
         _queues.pop(user_id, None)
+        _last_seen.pop(user_id, None)
 
 
 def publish(user_id: str, kind: str, data: dict | None = None) -> None:
@@ -50,7 +57,7 @@ def publish(user_id: str, kind: str, data: dict | None = None) -> None:
 
 
 def online(user_id: str) -> bool:
-    return bool(_queues.get(user_id))
+    return bool(_queues.get(user_id)) and time.monotonic() - _last_seen.get(user_id, float("-inf")) < PRESENCE_TTL
 
 
 async def notify(db: AsyncSession, user_id: str, kind: str, text: str, link: str = "", actor: str = "") -> Notification:
