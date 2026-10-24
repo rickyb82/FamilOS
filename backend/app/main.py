@@ -16,6 +16,8 @@ from .tools.mcp_client import mcp_manager
 
 settings = get_settings()
 logging.basicConfig(level=settings.log_level.upper())
+# Remote page URLs may contain searches or credentials in query strings.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("familai")
 
 
@@ -62,9 +64,14 @@ async def lifespan(app: FastAPI):
     from .services.security_alerts import worker
     from contextlib import suppress
     alerts = asyncio.create_task(worker())
+    from .services.browser_reviews import worker_loop
+    browser_checks = asyncio.create_task(worker_loop())
     try:
         yield
     finally:
+        browser_checks.cancel()
+        with suppress(asyncio.CancelledError):
+            await browser_checks
         alerts.cancel()
         with suppress(asyncio.CancelledError):
             await alerts
@@ -95,6 +102,11 @@ async def private_response_cache(request, call_next):
 for r in (auth.router, google_auth.router, chat.router, projects.router, shares.router, admin.router, artifacts.router, tts.router, approvals.router, mail.router, folders.router, push.router, native_app.router, messaging.router, events.router, sync.router):
     app.include_router(r, prefix="/api")
 from .api import branding, installation, education, browser, parental, lockscreen, app_access, updates
+from .api import remote_browser
+app.include_router(remote_browser.router, prefix="/api")
+from .api import browser_approvals
+app.include_router(browser_approvals.router, prefix="/api")
+app.include_router(browser_approvals.parent_router, prefix="/api")
 app.include_router(updates.router, prefix="/api")
 app.include_router(app_access.router, prefix="/api")
 app.include_router(branding.router, prefix="/api")

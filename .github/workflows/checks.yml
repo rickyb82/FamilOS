@@ -35,4 +35,5 @@ jobs:
       - run: pip install -r requirements.txt -r requirements-dev.txt
       - run: python -m pytest -q
       - run: pip-audit
-      - run: bandit -r app ../sandbox ../extras/updater -lll
+      - run: pip-audit -r ../extras/browser/requirements.txt
+      - run: bandit -r app ../sandbox ../extras/updater ../extras/browser -lll

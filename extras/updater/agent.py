@@ -261,7 +261,7 @@ class Updater:
                     values.update({prefix + "_HOST": "" if disable else f"{target}:{port}", prefix + "_WEB": "0" if disable else "1"})
                 self.update_env(values)
             self.phase("Preparazione immagini. Il sistema resta disponibile durante la compilazione…")
-            build = ["backend", "frontend", "sandbox"] if target == "core" else ["backend"] + ([] if disable else [target] + ([] if target == "mailcraft" else [target + "-web"]))
+            build = (["backend", "frontend", "sandbox"] + (["browser"] if "browser" in running else [])) if target == "core" else ["backend"] + ([] if disable else [target] + ([] if target == "mailcraft" else [target + "-web"]))
             self.compose("build", *build)
             # Stop writers before snapshotting SQLite/WAL and user files. Only this Compose project.
             self.phase("Modalità manutenzione: arresto servizi e backup…", maintenance=True, previous_commit=old_commit)
