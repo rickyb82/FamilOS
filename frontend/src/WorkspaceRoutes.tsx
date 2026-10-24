@@ -2,7 +2,7 @@ const InstalledApp = lazy(() => import("./pages/InstalledApp"))
 const SafeBrowser = lazy(() => import('./pages/SafeBrowser'))
 const ParentalControls = lazy(() => import('./pages/ParentalControls'))
 import { lazy, Suspense } from 'react'
-import { Navigate, Route, Routes, useSearchParams } from 'react-router-dom'
+import { Route, Routes, useSearchParams } from 'react-router-dom'
 import { useAuth } from './lib/auth'
 const Chat = lazy(() => import('./pages/Chat'))
 const Projects = lazy(() => import('./pages/Projects'))
@@ -36,12 +36,12 @@ export function WorkspaceRoutes() {
         <Route path="/documents" element={<Documents />} />
         <Route path="/editor" element={<EditorRoute />} />
         {me.user.role !== 'child' && <Route path="/mail" element={<Mail />} />}
-        {me.user.role !== 'child' && <Route path="/messages" element={<Messages />} />}
+        {me.features?.messaggi && <Route path="/messages" element={<Messages />} />}
         {me.user.role === 'admin' && <Route path="/admin/*" element={<Admin />} />}
         {me.user.role === 'admin' && <Route path="/installation" element={<AdminInstallation />} />}
         {/* dopo l'accesso: la pagina da cui si era partiti (link di una notifica…), sul telefono la home delle app */}
 
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<div className="center muted" role="status">Questa app non è disponibile per il tuo profilo. Puoi chiudere la finestra.</div>} />
       </Routes></Suspense>
   )
 }
