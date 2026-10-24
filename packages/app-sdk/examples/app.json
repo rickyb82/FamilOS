@@ -1,0 +1,26 @@
+{
+  "manifest_version": 1,
+  "id": "document-editor",
+  "name": "Editor documenti",
+  "description": "Esempio di contratto per un editor integrabile in FamilOS.",
+  "version": "1.0.0",
+  "sdk_version": "1",
+  "icon": "assets/icon.png",
+  "category": "documents",
+  "services": {
+    "web": {
+      "image": "ghcr.io/example/document-editor@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "architectures": ["linux/amd64", "linux/arm64"],
+      "port": 8080,
+      "health_path": "/health",
+      "uid": 1000,
+      "memory_mb": 512,
+      "cpus": 1.0,
+      "volumes": [{"name": "documents", "mount": "/app-data/documents", "backup": "stop-and-copy"}]
+    }
+  },
+  "launch": {"service": "web", "path": "/", "mode": "window"},
+  "permissions": {"documents": "none", "network": "none", "children": false},
+  "authentication": "familos-gateway",
+  "data_version": 1
+}

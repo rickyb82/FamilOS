@@ -1,0 +1,257 @@
+{
+  "$defs": {
+    "Launch": {
+      "additionalProperties": false,
+      "properties": {
+        "service": {
+          "pattern": "^[a-z][a-z0-9-]{1,47}$",
+          "title": "Service",
+          "type": "string"
+        },
+        "path": {
+          "pattern": "^/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]*$",
+          "title": "Path",
+          "type": "string"
+        },
+        "mode": {
+          "const": "window",
+          "title": "Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "service",
+        "path",
+        "mode"
+      ],
+      "title": "Launch",
+      "type": "object"
+    },
+    "Permissions": {
+      "additionalProperties": false,
+      "properties": {
+        "documents": {
+          "enum": [
+            "none",
+            "user-selected-read",
+            "user-selected-read-write"
+          ],
+          "title": "Documents",
+          "type": "string"
+        },
+        "network": {
+          "enum": [
+            "none",
+            "internet"
+          ],
+          "title": "Network",
+          "type": "string"
+        },
+        "children": {
+          "default": false,
+          "title": "Children",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "documents",
+        "network"
+      ],
+      "title": "Permissions",
+      "type": "object"
+    },
+    "Service": {
+      "additionalProperties": false,
+      "properties": {
+        "image": {
+          "pattern": "^[a-z0-9][a-z0-9./:_-]*@sha256:[a-f0-9]{64}$",
+          "title": "Image",
+          "type": "string"
+        },
+        "architectures": {
+          "items": {
+            "enum": [
+              "linux/amd64",
+              "linux/arm64"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Architectures",
+          "type": "array"
+        },
+        "port": {
+          "maximum": 65535,
+          "minimum": 1024,
+          "title": "Port",
+          "type": "integer"
+        },
+        "health_path": {
+          "pattern": "^/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]*$",
+          "title": "Health Path",
+          "type": "string"
+        },
+        "uid": {
+          "maximum": 65535,
+          "minimum": 1,
+          "title": "Uid",
+          "type": "integer"
+        },
+        "memory_mb": {
+          "maximum": 16384,
+          "minimum": 64,
+          "title": "Memory Mb",
+          "type": "integer"
+        },
+        "cpus": {
+          "exclusiveMinimum": 0,
+          "maximum": 16,
+          "title": "Cpus",
+          "type": "number"
+        },
+        "volumes": {
+          "items": {
+            "$ref": "#/$defs/Volume"
+          },
+          "maxItems": 8,
+          "title": "Volumes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "image",
+        "architectures",
+        "port",
+        "health_path",
+        "uid",
+        "memory_mb",
+        "cpus"
+      ],
+      "title": "Service",
+      "type": "object"
+    },
+    "Volume": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "pattern": "^[a-z][a-z0-9-]{1,47}$",
+          "title": "Name",
+          "type": "string"
+        },
+        "mount": {
+          "pattern": "^/app-data/[a-z][a-z0-9-]{1,47}$",
+          "title": "Mount",
+          "type": "string"
+        },
+        "backup": {
+          "const": "stop-and-copy",
+          "title": "Backup",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "mount",
+        "backup"
+      ],
+      "title": "Volume",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "manifest_version": {
+      "const": 1,
+      "title": "Manifest Version",
+      "type": "integer"
+    },
+    "id": {
+      "pattern": "^[a-z][a-z0-9-]{1,47}$",
+      "title": "Id",
+      "type": "string"
+    },
+    "name": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Name",
+      "type": "string"
+    },
+    "description": {
+      "maxLength": 500,
+      "minLength": 1,
+      "title": "Description",
+      "type": "string"
+    },
+    "version": {
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+      "title": "Version",
+      "type": "string"
+    },
+    "sdk_version": {
+      "const": "1",
+      "title": "Sdk Version",
+      "type": "string"
+    },
+    "icon": {
+      "pattern": "^assets/[a-zA-Z0-9_-]+\\.png$",
+      "title": "Icon",
+      "type": "string"
+    },
+    "category": {
+      "enum": [
+        "documents",
+        "spreadsheets",
+        "presentations",
+        "communication",
+        "browser",
+        "other"
+      ],
+      "title": "Category",
+      "type": "string"
+    },
+    "services": {
+      "maxProperties": 8,
+      "minProperties": 1,
+      "patternProperties": {
+        "^[a-z][a-z0-9-]{1,47}$": {
+          "$ref": "#/$defs/Service"
+        }
+      },
+      "title": "Services",
+      "type": "object"
+    },
+    "launch": {
+      "$ref": "#/$defs/Launch"
+    },
+    "permissions": {
+      "$ref": "#/$defs/Permissions"
+    },
+    "authentication": {
+      "const": "familos-gateway",
+      "title": "Authentication",
+      "type": "string"
+    },
+    "data_version": {
+      "minimum": 1,
+      "title": "Data Version",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "manifest_version",
+    "id",
+    "name",
+    "description",
+    "version",
+    "sdk_version",
+    "icon",
+    "category",
+    "services",
+    "launch",
+    "permissions",
+    "authentication",
+    "data_version"
+  ],
+  "title": "Manifest",
+  "type": "object"
+}
