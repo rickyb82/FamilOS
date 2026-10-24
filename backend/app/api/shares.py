@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import get_db
-from ..models import Share, User
+from ..models import Role, Share, User
 from ..policy.permissions import effective_policy
 from ..schemas import ShareOut, ShareRequest
 from ..security.sessions import AuthContext, require_auth
@@ -19,7 +19,7 @@ async def family_members(q: str = "", limit: int = 8, ctx: AuthContext = Depends
     """Membri con cui condividere. Con ?q= cerca in tempo reale per nome, username o email (prefisso di parola o sottostringa)."""
     rows = (await db.execute(select(User).where(User.family_id == ctx.user.family_id, User.is_active == True))).scalars().all()  # noqa: E712
     out = [{"id": u.id, "display_name": u.display_name, "avatar": u.avatar, "role": u.role.value,
-            "email": u.email or "", "username": u.username} for u in rows if u.id != ctx.user.id]
+            "email": u.email or "", "username": u.username} for u in rows if u.id != ctx.user.id and (ctx.user.role != Role.child or u.role in (Role.admin, Role.adult))]
     ql = q.strip().lower()
     if ql:
         def score(m: dict) -> int:
@@ -52,10 +52,14 @@ async def share(body: ShareRequest, ctx: AuthContext = Depends(require_auth), db
     resource, level = await require_access(db, body.resource_type, body.resource_id, ctx.user)
     if level != "owner":
         raise HTTPException(403, "Solo il proprietario può condividere")
+    if ctx.user.role == Role.child and not body.target_user_id:
+        raise HTTPException(403, "Scegli un adulto della tua famiglia con cui condividere")
     if body.target_user_id:
         target = await db.get(User, body.target_user_id)
-        if not target or target.family_id != ctx.user.family_id:
+        if not target or not target.is_active or target.family_id != ctx.user.family_id:
             raise HTTPException(404, "Utente non trovato")
+        if ctx.user.role == Role.child and target.role not in (Role.admin, Role.adult):
+            raise HTTPException(403, "Puoi condividere con gli adulti della tua famiglia")
     perm = "write" if body.permission == "write" else "read"
     existing = (await db.execute(select(Share).where(
         Share.resource_type == body.resource_type, Share.resource_id == body.resource_id,

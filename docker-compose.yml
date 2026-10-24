@@ -383,6 +383,8 @@ services:
       secrets:
       - gh_token
     image: familai-mailcraft
+    init: true
+    stop_grace_period: 90s
     profiles:
     - mailcraft
     restart: unless-stopped

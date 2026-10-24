@@ -36,7 +36,7 @@ def main():
    assert p.parts[0] not in ('data','private','.env','.git'),'Archivio contiene dati locali'
    member.uid=member.gid=0;member.uname=member.gname='root';t.extract(member,release)
  # Un nuovo layout richiede prima l'aggiornamento dell'adattatore Orbita.
- expected='47e3d2450d3959bd45d26873064ad4cef13d6b9e61cbde84ac27750a951af045'
+ expected='4ec54eb75b7b0616d5c87f9a8fe6c85bff0da2ec0c161d8cf55bf57c64d2b7c4'
  assert hashlib.sha256((release/'docker-compose.yml').read_bytes()).hexdigest()==expected,'Compose upstream cambiato: serve adeguare integrazione Orbita prima di procedere'
  (saved/'compose.previous.json').write_bytes(oldcompose);(saved/'status.previous.json').write_bytes(oldstatus)
  for name,context,dockerfile in [('familos-backend',release,'backend/Dockerfile'),('familos-frontend',release/'frontend','Dockerfile'),('familos-sandbox',release/'sandbox','Dockerfile')]:

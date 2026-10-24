@@ -476,7 +476,9 @@
       },
       "security_opt": [
         "no-new-privileges:true"
-      ]
+      ],
+      "init": true,
+      "stop_grace_period": "90s"
     }
   },
   "secrets": {

@@ -72,7 +72,7 @@ def apply_to_policy(user, policy: dict) -> dict:
         return policy
     profile = rules()["profiles"].get(user.age_group.value,DEFAULTS["young"])
     policy.update(education_mode=mode_for(user),homework_mode="allow" if mode_for(user)=="standard" else "tutor",safe_search=True,moderation=True,parent_can_view=True,
-                  can_share=False,cloud_allowed=cloud_allowed(user),
+                  cloud_allowed=cloud_allowed(user),
                   time_windows=[{"days":list(range(7)),"start":profile["start"],"end":profile["end"]}])
     limit = int(policy.get("daily_message_limit") or profile["daily_message_limit"])
     policy["daily_message_limit"] = min(limit,profile["daily_message_limit"])

@@ -11,6 +11,7 @@ interface Share { id: string; target_user_id: string | null; permission: string 
  */
 export default function ShareDialog({ type, id, onClose }: { type: 'conversation' | 'project' | 'file'; id: string; onClose: () => void }) {
   const { me } = useAuth()
+  const child = me?.user.role === 'child'
   const org = !!me?.features?.org_mode
   const [shares, setShares] = useState<Share[]>([])
   const [people, setPeople] = useState<Record<string, Member>>({})
@@ -93,8 +94,9 @@ export default function ShareDialog({ type, id, onClose }: { type: 'conversation
           {!q.trim() && <p className="muted small" style={{ margin: '6px 2px 0' }}>I suggerimenti compaiono mentre scrivi: Invio aggiunge il primo, frecce per scegliere.</p>}
         </div>
         <label className="share-label">Chi ha accesso</label>
+        {child && <p className="muted small">Puoi condividere con gli adulti della tua famiglia. Cerca il loro nome qui sopra.</p>}
         <ul className="share-people">
-          <li>
+          {!child && <li>
             <span className="share-avatar org">{org ? '🏢' : '👪'}</span>
             <span className="share-who"><b>{org ? 'Tutta la famiglia' : 'Tutta la famiglia'}</b><small className="muted">{everyone ? (everyone.permission === 'write' ? 'tutti possono modificare' : 'tutti possono vedere') : 'solo le persone qui sotto'}</small></span>
             <select className="perm" value={everyone?.permission ?? 'none'} onChange={(e) => (e.target.value === 'none' ? everyone && unshare(everyone) : share(null, e.target.value))}>
@@ -102,7 +104,7 @@ export default function ShareDialog({ type, id, onClose }: { type: 'conversation
               <option value="read">Può vedere</option>
               <option value="write">Può modificare</option>
             </select>
-          </li>
+          </li>}
           <li>
             <span className="share-avatar me">{me?.user.avatar}</span>
             <span className="share-who"><b>{me?.user.display_name} (tu)</b><small className="muted">proprietario</small></span>
