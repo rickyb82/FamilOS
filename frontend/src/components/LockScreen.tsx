@@ -14,7 +14,7 @@ export default function LockScreen({children}:{children:ReactNode}){
   const update=()=>{lastActivity.current=Date.now()}
   const timer=window.setInterval(()=>{
    const minutes=me?.prefs?.appearance?.lock_after_minutes??5
-   if(me&&!locked&&minutes&&Date.now()-lastActivity.current>minutes*60000&&!locking.current){locking.current=true;lockSession().catch(()=>{}).finally(()=>locking.current=false)}
+   if(document.visibilityState==='visible'&&me&&!locked&&minutes&&Date.now()-lastActivity.current>minutes*60000&&!locking.current){locking.current=true;lockSession().catch(()=>{}).finally(()=>locking.current=false)}
    setNow(new Date())
   },10000)
   window.addEventListener('pointerdown',update);window.addEventListener('keydown',update);window.addEventListener('pointermove',update)

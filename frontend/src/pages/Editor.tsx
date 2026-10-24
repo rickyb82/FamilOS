@@ -1,3 +1,4 @@
+import { useLiveEvents } from '../lib/events'
 import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { WindowCommands } from '../lib/desktop'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
@@ -81,6 +82,8 @@ export default function Editor() {
       nav(`/editor?${next}`, { replace: true })
     } catch { /* an export can finish before the source document is saved */ }
   }
+
+  useLiveEvents(event => { if (isNew && !promoted.current && (event.kind === 'sync' || event.kind === 'files')) void markSaved() })
 
   // PdfCraft parla con la pagina che lo incornicia via postMessage (host=parent): riceviamo i salvataggi e li
   // scriviamo sul server, come fanno WordCraft/GridCraft con ?save=.
