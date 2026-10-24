@@ -128,3 +128,27 @@ it('rejects corrupt layouts and does not restore an unsaved editor', () => {
   localStorage.setItem('layout', '{broken')
   expect(restoreWindows('layout')).toEqual([])
 })
+
+it('uses native fullscreen until the user restores the previous window', async()=>{
+  const request=vi.fn().mockResolvedValue(undefined)
+  Object.defineProperty(document.documentElement,'requestFullscreen',{configurable:true,value:request})
+  Object.defineProperty(document,'exitFullscreen',{configurable:true,value:vi.fn().mockResolvedValue(undefined)})
+  render(<Desktop/>);await act(async()=>{})
+  fireEvent.click(app('File'))
+  const file=region('File');const before={left:file.style.left,top:file.style.top,width:file.style.width,height:file.style.height}
+  fireEvent.click(within(file).getByRole('button',{name:'Schermo intero'}))
+  expect(request).toHaveBeenCalledOnce()
+  expect(file.className).toContain('os-window-fullscreen')
+  fireEvent(window,new Event('resize'))
+  expect(file.className).toContain('os-window-fullscreen')
+  fireEvent.click(within(file).getByRole('button',{name:'Torna in finestra'}))
+  expect(file.className).not.toContain('os-window-fullscreen')
+  expect({left:file.style.left,top:file.style.top,width:file.style.width,height:file.style.height}).toEqual(before)
+})
+
+it('leaves fullscreen when the session is locked',async()=>{
+  render(<Desktop/>);await act(async()=>{});fireEvent.click(app('File'))
+  const file=region('File');fireEvent.click(within(file).getByRole('button',{name:'Schermo intero'}))
+  fireEvent(window,new Event('familos:locked'))
+  expect(file.className).not.toContain('os-window-fullscreen')
+})

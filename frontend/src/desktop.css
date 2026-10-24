@@ -198,3 +198,8 @@ html[data-theme] .familos { background:var(--desktop-background); }
 .os-lock-card small { font-size:10px;line-height:1.6;color:var(--muted);text-align:center; }
 
 .app-catalog-grid {display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;}
+
+/* Native fullscreen keeps global security overlays inside the fullscreen document. */
+.familos.os-fullscreen > .os-topbar,.familos.os-fullscreen > .os-dock,.familos.os-fullscreen > .os-offline {display:none;}
+.familos.os-fullscreen > .os-board {margin:0;}
+.os-window.os-window-fullscreen {position:fixed!important;inset:0!important;width:100vw!important;height:100dvh!important;max-width:none;max-height:none;border:0;border-radius:0;z-index:100!important;}

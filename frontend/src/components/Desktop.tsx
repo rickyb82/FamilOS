@@ -43,6 +43,31 @@ export default function Desktop() {
   const board = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const booted = useRef(false)
+  const fullscreen = useRef<{id:string; previous:DesktopWindow['mode']} | null>(null)
+  const [fullId, setFullId] = useState<string | null>(null)
+  function leaveFullscreen() {
+    const saved = fullscreen.current
+    fullscreen.current = null; setFullId(null)
+    if (saved) setWindows(ws=>ws.map(w=>w.id===saved.id?{...w,mode:saved.previous}:w))
+    if (document.fullscreenElement) document.exitFullscreen().catch(()=>{})
+  }
+  function toggleFullscreen(w:DesktopWindow) {
+    if (fullscreen.current?.id===w.id) {leaveFullscreen();return}
+    const previous=fullscreen.current
+    if(previous)setWindows(ws=>ws.map(x=>x.id===previous.id?{...x,mode:previous.previous}:x))
+    fullscreen.current={id:w.id,previous:w.mode==='full'?'float':w.mode};setFullId(w.id)
+    setWindows(ws=>ws.map(x=>x.id===w.id?{...x,mode:'full',minimized:false}:x));setActive(w.id);setShowHome(false)
+    // Request from the click gesture; CSS fills the viewport if the browser declines.
+    document.documentElement.requestFullscreen?.().catch(()=>{})
+  }
+  useEffect(()=>{
+    const changed=()=>{if (!document.fullscreenElement && fullscreen.current) leaveFullscreen()}
+    const escaped=(e:KeyboardEvent)=>{if(e.key==='Escape' && !document.fullscreenElement && fullscreen.current) leaveFullscreen()}
+    const locked=()=>leaveFullscreen()
+    document.addEventListener('fullscreenchange',changed);window.addEventListener('keydown',escaped);window.addEventListener('familos:locked',locked)
+    return ()=>{document.removeEventListener('fullscreenchange',changed);window.removeEventListener('keydown',escaped);window.removeEventListener('familos:locked',locked);if(document.fullscreenElement)document.exitFullscreen().catch(()=>{})}
+  },[])
+  useEffect(()=>{if(me?.session_locked)leaveFullscreen()},[me?.session_locked])
   const [installed, setInstalled] = useState<AppEntry[]>([])
   useEffect(() => {
     let alive = true
@@ -75,12 +100,15 @@ export default function Desktop() {
     const existing = state.current.find(w => app.id === 'editor' ? w.path === path || (appForPath(w.path).id !== 'editor' && windowAppId(w.path) === windowAppId(path)) : windowAppId(w.path) === app.id)
     if (existing && !fresh) {
       if (path !== app.path || app.id === 'editor') setWindows(ws => ws.map(w => w.id === existing.id ? { ...w, path } : w))
+      if(fullscreen.current && fullscreen.current.id!==existing.id)toggleFullscreen(existing)
       focus(existing.id); return
     }
     const offset = (state.current.length % 5) * 28
     const id = uid()
-    setWindows(ws => [...ws, { id, path, x: 36 + offset, y: 26 + offset,
-      width: Math.min(1000, window.innerWidth - 80), height: Math.min(700, window.innerHeight - 185), minimized: false, mode: 'float' }])
+    const previousFullscreen=fullscreen.current
+    if(previousFullscreen){fullscreen.current={id,previous:'float'};setFullId(id)}
+    setWindows(ws => [...ws.map(w=>previousFullscreen?.id===w.id?{...w,mode:previousFullscreen.previous}:w), { id, path, x: 36 + offset, y: 26 + offset,
+      width: Math.min(1000, window.innerWidth - 80), height: Math.min(700, window.innerHeight - 185), minimized: false, mode: previousFullscreen?'full':'float' }])
     setActive(id); setShowHome(false); setSwitcher(false); setLauncherOpen(false)
   }, [focus])
 
@@ -144,10 +172,11 @@ export default function Desktop() {
 
   function close(w: DesktopWindow) {
     if (appForPath(w.path).id === 'editor' && !confirm('Chiudere il documento? Verifica di avere salvato le modifiche. In caso di conflitto, esporta prima una copia.')) return
+    if(fullscreen.current?.id===w.id)leaveFullscreen()
     setWindows(ws => ws.filter(x => x.id !== w.id))
     if (active === w.id) { setActive(null); setShowHome(true) }
   }
-  function arrange(id: string, mode: DesktopWindow['mode']) { setWindows(ws => ws.map(w => w.id === id ? { ...w, mode } : w)) }
+  function arrange(id: string, mode: DesktopWindow['mode']) { if(fullscreen.current?.id===id)leaveFullscreen(); setWindows(ws => ws.map(w => w.id === id ? { ...w, mode } : w)) }
   function drag(e: PointerEvent<HTMLElement>, w: DesktopWindow, resize = false) {
     if (e.button !== 0 || (!resize && (e.target as HTMLElement).closest('button'))) return
     if (viewport.width <= 720 || w.mode !== 'float') return
@@ -178,7 +207,7 @@ export default function Desktop() {
   const matches = apps.filter(a => a.title.toLocaleLowerCase().includes(q))
   const firstName = me!.user.display_name.split(' ')[0]
   const today = now.toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long' })
-  return <div className="familos">
+  return <div className={`familos ${fullId ? "os-fullscreen" : ""}`}>
     <header className="os-topbar">
       <button className="os-wordmark" onClick={() => setShowHome(true)} aria-label={`Home ${brand.name}`}><img src={brand.logo_url} alt="" /> {brand.name}</button>
       <span className="os-household">{me!.family_name || 'La nostra casa'}</span>
@@ -220,9 +249,9 @@ export default function Desktop() {
         const style = full ? { left: 8, top: 8, width: 'calc(100% - 16px)', height: 'calc(100% - 16px)' }
           : half ? { left: w.mode === 'left' ? 8 : '50%', top: 8, width: 'calc(50% - 12px)', height: 'calc(100% - 16px)' }
           : { left: Math.max(0, Math.min(w.x, viewport.width - Math.min(w.width, viewport.width - 24) - 16)), top, width: Math.min(w.width, viewport.width - 24), height: Math.min(w.height, availableHeight - top - 8) }
-        return <section key={w.id} className={`os-window ${active === w.id ? 'active' : ''}`} style={{ ...style, zIndex: i + 1, display: hidden ? 'none' : undefined }} aria-label={`${app.title}, finestra`} onPointerDownCapture={() => { if (active !== w.id) focus(w.id) }}>
-          <header className="os-window-bar" onPointerDown={e => drag(e, w)} onDoubleClick={() => arrange(w.id, w.mode === 'full' ? 'float' : 'full')}>
-            <div className="os-window-controls"><button title="Chiudi finestra" aria-label={`Chiudi ${app.title}`} onClick={() => close(w)}>×</button><button title="Riduci nel dock" aria-label={`Riduci ${app.title}`} onClick={() => { setWindows(ws => ws.map(x => x.id === w.id ? { ...x, minimized: true } : x)); if (active === w.id) setShowHome(true) }}>−</button><button title="Schermo intero" aria-label="Schermo intero" onClick={() => arrange(w.id, w.mode === 'full' ? 'float' : 'full')}>↗</button></div>
+        return <section key={w.id} className={`os-window ${active === w.id ? 'active' : ''} ${fullId===w.id?'os-window-fullscreen':''}`} style={{ ...style, zIndex: i + 1, display: hidden ? 'none' : undefined }} aria-label={`${app.title}, finestra`} onPointerDownCapture={() => { if (active !== w.id) focus(w.id) }}>
+          <header className="os-window-bar" onPointerDown={e => drag(e, w)} onDoubleClick={() => toggleFullscreen(w)}>
+            <div className="os-window-controls"><button title="Chiudi finestra" aria-label={`Chiudi ${app.title}`} onClick={() => close(w)}>×</button><button title="Riduci nel dock" aria-label={`Riduci ${app.title}`} onClick={() => { if(fullscreen.current?.id===w.id)leaveFullscreen(); setWindows(ws => ws.map(x => x.id === w.id ? { ...x, minimized: true } : x)); if (active === w.id) setShowHome(true) }}>−</button><button title={fullId===w.id?"Torna in finestra":"Schermo intero"} aria-label={fullId===w.id?"Torna in finestra":"Schermo intero"} onClick={() => toggleFullscreen(w)}>↗</button></div>
             <span className="os-window-title">{app.icon} {app.id === 'editor' ? new URLSearchParams(w.path.split('?')[1]).get('name') || 'Documento' : app.title}</span>
             <div className="os-window-layout"><button title="Affianca a sinistra" aria-label="Affianca a sinistra" onClick={() => arrange(w.id, 'left')}>▏</button><button title="Affianca a destra" aria-label="Affianca a destra" onClick={() => arrange(w.id, 'right')}>▕</button><button title="Finestra libera" aria-label="Finestra libera" onClick={() => arrange(w.id, 'float')}>▢</button></div>
           </header>
