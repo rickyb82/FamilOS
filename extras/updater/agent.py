@@ -316,25 +316,9 @@ class Updater:
             build = (["backend", "frontend", "sandbox"] + (["browser"] if "browser" in running else [])) if target == "core" else ["backend"] + ([] if disable else [target] + ([] if target == "mailcraft" else [target + "-web"]))
             self.compose("build", *build)
             # Stop writers before snapshotting SQLite/WAL and user files. Only this Compose project.
-            self.phase("Modalità manutenzione: arresto servizi e backup…", maintenance=True, previous_commit=old_commit)
+            self.phase("Modalità manutenzione: arresto servizi…", maintenance=True, previous_commit=old_commit)
             self.compose("stop", *running)
-            backup = self.root / "backups" / ("update-" + self.state["job"]["id"] + ".tar.gz")
-            backup.parent.mkdir(exist_ok=True, mode=0o700)
-            self.phase("Creazione del backup coerente…", backup=str(backup))
-            # Save the pre-update environment, not the modified application configuration.
-            new_env = (self.root / ".env").read_bytes()
-            (self.root / ".env").write_bytes(original_env)
-            try:
-                with tarfile.open(backup, "w:gz") as archive:
-                    for name in ("data", ".env", "private"):
-                        if (self.root / name).exists():
-                            archive.add(self.root / name, arcname=name, filter=backup_filter)
-                os.chmod(backup, 0o600)
-                with tarfile.open(backup) as archive:
-                    if ".env" not in archive.getnames():
-                        raise ValueError("Backup incompleto.")
-            finally:
-                (self.root / ".env").write_bytes(new_env)
+            self.phase("Backup automatico disattivato: gestione manuale dell’amministratore.")
             self.phase("Avvio e verifica dei servizi aggiornati…")
             desired = set(running) - {"caddy"}
             if target != "core":

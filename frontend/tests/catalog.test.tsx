@@ -17,7 +17,7 @@ it('requires confirmation before stopping an installed app and preserves data',a
   render(<AppCatalog disabled={false} onChange={()=>{}}/>)
   const stop=await screen.findByRole('button',{name:'Disattiva conservando i dati'}) as HTMLButtonElement
   expect(stop.disabled).toBe(true)
-  fireEvent.click(screen.getByLabelText('Confermo il backup e l’interruzione temporanea dei servizi.'))
+  fireEvent.click(screen.getByLabelText('Gestisco manualmente i backup e confermo l’interruzione temporanea dei servizi.'))
   fireEvent.click(stop)
   await waitFor(()=>expect(post).toHaveBeenCalledWith('/admin/app-catalog/notes/action',{action:'stop',users:[],confirm_maintenance:true}))
 })

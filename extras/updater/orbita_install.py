@@ -19,16 +19,6 @@ def install(root):
         raise SystemExit('Attendere il termine dell’operazione prima di reinstallare l’agente')
     directory = Path('/etc/familos-updater')
     directory.mkdir(mode=0o700, exist_ok=True)
-    key = directory / 'backup-passphrase'
-    if not key.exists():
-        password = getpass.getpass('Password dei backup automatici (almeno 16 caratteri; conservarla fuori dal server): ')
-        if len(password) < 16 or '\n' in password or password != getpass.getpass('Ripeti password: '):
-            raise SystemExit('Password non valida o non coincidente')
-        fd = os.open(key, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, 'w') as stream:
-            stream.write(password + '\n')
-    if key.is_symlink() or key.stat().st_uid or key.stat().st_mode & 0o077:
-        raise SystemExit('Chiave backup non protetta: richiesti proprietario root e permessi 0600')
     config_path = directory / 'config.json'
     previous = json.loads(config_path.read_text()) if config_path.exists() else {}
     if previous and previous.get('root') != str(root):
@@ -81,4 +71,4 @@ WantedBy=multi-user.target
         subprocess.run(['systemctl', *args], check=True)
     dc('up','-d','--no-deps','--no-build','familos-backend')
     print('Agente Orbita attivato. Apri Installazione → Aggiornamenti e app.')
-    print('Conserva la password backup separatamente. Dopo un ripristino su nuovo nodo reinstalla questo agente.')
+    print('Backup gestiti manualmente. Dopo un ripristino su nuovo nodo reinstalla questo agente.')

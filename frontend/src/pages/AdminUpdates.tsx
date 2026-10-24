@@ -65,7 +65,7 @@ export default function AdminUpdates() {
     <button disabled={disabled} onClick={() => act('check')}>Controlla release</button>
     {status?.offers && target in status.offers && !status.offers[target] && <p role="status">Nessuna release compatibile pubblicata per il canale verificato.</p>}
     {offer && <div className="installation-deployment"><h3>{offer.tag} {offer.experimental ? '· Sperimentale' : '· Stabile'}</h3><p>{offer.newer ? 'Release disponibile per l’installazione.' : 'Nessuna versione successiva a quella installata.'}</p><details><summary>Novità della release</summary><p style={{ whiteSpace: 'pre-wrap' }}>{offer.notes}</p></details></div>}
-    <label className="row"><input type="checkbox" checked={confirmed} disabled={disabled} onChange={e => setConfirmed(e.target.checked)} />Confermo il backup e l’interruzione temporanea del servizio.</label>
+    <label className="row"><input type="checkbox" checked={confirmed} disabled={disabled} onChange={e => setConfirmed(e.target.checked)} />Confermo l’interruzione temporanea del servizio. I backup sono gestiti manualmente.</label>
     {offer?.experimental && <label className="row"><input type="checkbox" checked={experimental} disabled={disabled} onChange={e => setExperimental(e.target.checked)} />Accetto di installare questa release sperimentale.</label>}
     <button disabled={disabled || !offer?.newer || !confirmed || (offer.experimental && !experimental)} onClick={() => act('install')}>Installa release {offer?.tag || ''}</button>
     {target !== 'core' && <button className="ghost" disabled={disabled || !confirmed} onClick={() => act('disable')}>Disattiva app conservando i dati</button>}

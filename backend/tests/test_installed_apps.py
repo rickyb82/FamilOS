@@ -141,7 +141,7 @@ def test_log_filter_redacts_capability():
     api.GatewayLogFilter().filter(record)
     assert 'secret-token' not in record.getMessage()
 
-@pytest.mark.parametrize('failure',[None,'backup','health'])
+@pytest.mark.parametrize('failure',[None,'health'])
 def test_catalog_transaction_and_rollback(tmp_path,monkeypatch,failure):
     import shutil
     monkeypatch.setattr('catalog.os.chown',lambda *a:None)
@@ -167,7 +167,7 @@ def test_catalog_transaction_and_rollback(tmp_path,monkeypatch,failure):
         return ''
     def backup(*args):
         commands.append(('backup',))
-        if failure=='backup':raise RuntimeError('backup failed')
+        raise AssertionError('Automatic backup must not run')
     worker.run=run;worker.compose=compose;worker.execute=backup
     catalog=Catalog(worker)
     manifest=json.loads((ROOT/'packages/app-sdk/examples/app.json').read_text())
@@ -185,9 +185,8 @@ def test_catalog_transaction_and_rollback(tmp_path,monkeypatch,failure):
         assert catalog.compose_file.read_bytes()==old_compose
         assert (platform/'.env').read_bytes()==old_env
         assert catalog.read()[manifest['id']]['manifest']['version']=='1.0.0'
-        if failure=='backup':assert not any(c[0] in ('stop','up') for c in commands)
     else:
         catalog.execute(body)
         assert catalog.read()[manifest['id']]['manifest']['version']=='1.0.1'
-        assert commands.index(('backup',))<next(i for i,c in enumerate(commands) if c[0]=='stop')
+        assert ('backup',) not in commands
     assert (data/'notes.txt').read_text()=='important data'

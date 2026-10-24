@@ -118,8 +118,7 @@ def main():
   else:
    port=7982+catalog['apps'].index(a)
    updates[key+'_HOST']=a+':'+str(port) if enabled else '';updates[key+'_WEB']='1' if enabled else ''
- print('Backup completo Orbita: inserisci la password GPG quando richiesta.',flush=True)
- subprocess.run(['python3','scripts/backup.py','/var/backups/orbita'],cwd=ROOT,check=True)
+ print('Backup automatico disattivato: gestione manuale dell’amministratore.',flush=True)
  saved=Path('/var/lib/orbita-install')/('productivity-'+time.strftime('%Y%m%dT%H%M%S'));saved.mkdir(mode=0o700)
  for p,content in originals.items():(saved/('app.env' if p==appenv else p.name)).write_bytes(content)
  copied=[];mutated=False

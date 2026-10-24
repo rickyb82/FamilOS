@@ -1,3 +1,5 @@
+> I backup sono gestiti manualmente dall’amministratore. Nessun aggiornamento crea archivi automatici o richiede password GPG.
+
 # Aggiornamenti da interfaccia
 
 In **Installazione → Aggiornamenti e app**, un amministratore può controllare le
@@ -68,14 +70,7 @@ fidato dall'amministratore. Il controllo del commit impedisce cambiamenti
 silenziosi tra verifica e installazione, ma **non equivale a una firma del
 publisher o a un audit della release**. Non configurare repository non fidati.
 
-Le immagini vengono compilate mentre il sistema è ancora disponibile. Poi
-vengono fermati i servizi del solo progetto Compose FamilOS e creato un archivio
-in `backups/update-<id>.tar.gz` con `data`, `.env` precedente e `private`
-(escluso il socket). Link e file speciali nei dati bloccano il backup, invece di
-essere ignorati. Proteggere gli archivi: contengono segreti e dati familiari.
-I volumi Docker di Caddy, cache di ricerca e modelli Ollama non sono inclusi.
-Non vengono modificati container appartenenti a progetti separati, come Pi-hole
-o SMTP; non inserirli nello stesso progetto Compose di FamilOS.
+Le immagini vengono compilate mentre il sistema è disponibile. I servizi vengono poi fermati per applicare la modifica. Nessun archivio automatico viene creato. Preparare e conservare autonomamente i backup necessari; le copie locali di rollback Orbita non costituiscono un backup completo.
 
 L'agente avvia i servizi e verifica il backend prima di riavviare Caddy. Questa
 è una verifica operativa minima, non un collaudo completo delle singole app.
@@ -99,7 +94,7 @@ la configurazione precedente anche quando l'archivio dati non è stato completat
 
 1. Fermare l'agente (`sudo systemctl stop familos-updater`) e i servizi FamilOS.
 2. Verificare l'integrità dell'archivio indicato nello stato (`sudo tar -tzf ...`).
-   Se il backup è incompleto, non usarlo: i dati originali sono ancora sul server.
+   Usare un backup manuale verificato; non viene creato un backup durante l’aggiornamento.
 3. Per tornare indietro dopo una migrazione, conservare separatamente i dati
    attuali e ripristinare **insieme** codice del commit precedente, `.env` e dati
    del backup verificato. Non sovrascrivere un database mentre un servizio lo usa.
@@ -126,13 +121,13 @@ cd /opt/orbita/apps/familos
 sudo python3 extras/updater/install.py
 ```
 
-Richiede Python 3 con `venv`, Docker Compose, GPG e systemd. Durante il setup viene chiesta due volte una password di almeno 16 caratteri per i backup automatici. Conservarla separatamente dal server: il file root `0600` `/etc/familos-updater/backup-passphrase` non viene incluso nei backup. Il servizio usa un virtualenv proprio e un socket locale `/run/familos-updater/control.sock`, montato in sola lettura nel backend. Il backend viene ricreato una volta per applicare il mount. Non occorrono nuove regole sul router.
+Richiede Python 3 con `venv`, Docker Compose e systemd. Il setup non chiede password di backup. Il servizio usa un virtualenv e un socket locale montato nel backend; il backend viene ricreato per applicare il mount.
 
 Da **Installazione → Aggiornamenti e app**:
 
 1. Seleziona FamilOS e il canale Sviluppo per installare le modifiche pubblicate sul ramo predefinito. Stabile/Sperimentale continuano a usare release GitHub.
 2. Controlla, conferma manutenzione e versione sperimentale se richiesta, quindi Installa.
-3. Il servizio host esegue build, backup cifrato completo Orbita, aggiornamento e controlli. La pagina può scollegarsi durante il backup; l’operazione continua su systemd e lo stato torna disponibile alla riconnessione.
+3. Il servizio host esegue build, aggiornamento e controlli senza backup automatico. La pagina può scollegarsi durante il riavvio; l’operazione continua su systemd e lo stato torna disponibile alla riconnessione.
 4. Le app Craft sono installabili/aggiornabili selezionandole nello stesso pannello. I repository privati richiedono il token già salvato in `private/github-token` sul nodo.
 
 Il backup include tutti i servizi del progetto Orbita, immagini Docker e dati interni alla piattaforma; non è un backup della VM Proxmox né di Pi-hole se esterno allo stack. Un mount persistente esterno causa un errore esplicito. Il browser grafico upstream viene incluso dall’adattatore del core, con rete interna, token, seccomp e limiti risorse. Il layout Compose upstream è verificato per hash: cambi strutturali non riconosciuti bloccano l’aggiornamento prima dello stop e richiedono aggiornare l’adattatore.
@@ -145,10 +140,10 @@ Importa JSON e PNG, seleziona gli adulti autorizzati, conferma e installa. La sc
 
 I dati vivono in `/opt/orbita/data/app-catalog/<id>/data/`, il Compose generato in `compose.apps.json`; nessuna porta host è pubblicata. Il gateway applica sandbox CSP e autorizzazione per ogni richiesta. La coerenza dei dati personali dentro il servizio resta responsabilità dello sviluppatore; l’esempio Note mostra la separazione per utente. Vedi `packages/app-sdk/README.md` per il contratto e i limiti HTTP.
 
-Le installazioni fanno backup prima di modificare la configurazione, verificano i servizi e conservano uno snapshot per recuperare i dati precedenti. Modifiche al formato dati o ai mount non sono applicate automaticamente. Si accettano soltanto publisher approvati dall’amministratore; non esiste una verifica automatica della reputazione delle immagini.
+Le installazioni verificano i servizi e conservano una copia locale per il rollback, senza generare backup completi. Modifiche al formato dati o ai mount non sono applicate automaticamente. Si accettano soltanto publisher approvati dall’amministratore; non esiste una verifica automatica della reputazione delle immagini.
 
 ## Ripristino Orbita su nuova macchina
 
-Usare gli strumenti di ripristino Orbita con la password conservata esternamente. Il backup contiene catalogo, configurazioni Compose, immagini e dati; `data/updater-host-config.json` conserva anche la configurazione host da confrontare con quella nuova. Dopo aver verificato DNS, IP, TLS e dati, reinstallare l’agente con il comando di setup e configurare nuovamente la password dei backup automatici. Lo stato dei lavori e il socket sono transitori e non devono essere ripristinati come servizi attivi. Il test definitivo del backup resta un ripristino su un nodo isolato.
+Usare gli strumenti di ripristino Orbita con la password conservata esternamente. Il backup contiene catalogo, configurazioni Compose, immagini e dati; `data/updater-host-config.json` conserva anche la configurazione host da confrontare con quella nuova. Dopo aver verificato DNS, IP, TLS e dati, reinstallare l’agente con il comando di setup senza configurare password di backup automatici. Lo stato dei lavori e il socket sono transitori e non devono essere ripristinati come servizi attivi. Il test definitivo del backup resta un ripristino su un nodo isolato.
 
 Per aggiornare il codice del servizio host dopo future modifiche al protocollo/adattatore, rieseguire il setup a lavori terminati. L’aggiornamento del framework non riavvia il proprio agente nel mezzo del lavoro.

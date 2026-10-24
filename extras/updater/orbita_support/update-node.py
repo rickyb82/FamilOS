@@ -61,8 +61,7 @@ def main():
   'security_opt':['no-new-privileges:true','seccomp=./apps/familos/extras/browser/seccomp_profile.json'],
   'cap_drop':['ALL'],'pids_limit':512,'mem_limit':'2g','cpus':2.0,'expose':['8080']}
  dc('config','--quiet')
- print('Backup completo cifrato Orbita: GPG richiederà la password dell’archivio.',flush=True)
- run('python3','scripts/backup.py','/var/backups/orbita')
+ print('Backup automatico disattivato: gestione manuale dell’amministratore.',flush=True)
  # Snapshot coerente aggiuntivo per rollback automatico, protetto root:0700.
  original_moved=False;new_active=False
  try:
@@ -111,7 +110,7 @@ def main():
   dc('up','-d','--no-build',*names)
   print('Ripristino avviato. Copia fallita conservata in '+str(saved));raise
  print('AGGIORNAMENTO RIUSCITO: '+rev)
- print('Backup cifrato: /var/backups/orbita. Copia precedente protetta: '+str(saved))
+ print('Backup gestito manualmente. Copia precedente per rollback: '+str(saved))
  print('Verificare login e documenti. Per il pannello web attivare una volta extras/updater/install.py con sudo.')
 if __name__=='__main__':
  os.umask(0o077)

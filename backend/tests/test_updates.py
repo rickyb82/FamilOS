@@ -176,7 +176,7 @@ async def test_non_admin_cannot_check(anna, kid, monkeypatch):
         assert (await client.post("/api/admin/updates/check", json={})).status_code == 403
 
 
-@pytest.mark.parametrize("failure", [None, "build", "backup", "health"])
+@pytest.mark.parametrize("failure", [None, "build", "health"])
 def test_update_lifecycle_preserves_data_and_stops_on_failure(updater, monkeypatch, failure):
     (updater.root / "data").mkdir()
     (updater.root / "data/test.txt").write_text("family data")
@@ -200,8 +200,7 @@ def test_update_lifecycle_preserves_data_and_stops_on_failure(updater, monkeypat
     monkeypatch.setattr(updater, "run", run)
     monkeypatch.setattr(updater, "compose", compose)
     monkeypatch.setattr(agent.time, "sleep", lambda _: None)
-    if failure == "backup":
-        monkeypatch.setattr(agent.tarfile, "open", lambda *a, **kw: (_ for _ in ()).throw(OSError("disk full")))
+    monkeypatch.setattr(agent.tarfile, "open", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("Automatic backup must not run")))
     updater.work(body)
     assert (updater.root / "data/test.txt").read_text() == "family data"
     job = updater.state["job"]
@@ -209,16 +208,13 @@ def test_update_lifecycle_preserves_data_and_stops_on_failure(updater, monkeypat
         assert job["status"] == "failed"
         assert (updater.root / ".env").read_text() == old_env
         assert not any(c[0] in ("up", "stop") for c in commands)
-    elif failure in ("backup", "health"):
+    elif failure == "health":
         assert job["status"] == "recovery_required"
         assert commands[-1][0] == "stop"
         assert not any(c[0] == "up" and c[-1] == "caddy" for c in commands)
-        if failure == "backup": assert not any(c[0] == "up" for c in commands)
     else:
         assert job["status"] == "complete"
-        with tarfile.open(job["backup"]) as archive:
-            assert archive.extractfile(".env").read().decode() == old_env
-            assert archive.extractfile("data/test.txt").read() == b"family data"
+        assert not job.get("backup")
         stop_index = next(i for i, c in enumerate(commands) if c[0] == "stop")
         up_index = next(i for i, c in enumerate(commands) if c[0] == "up")
         assert stop_index < up_index

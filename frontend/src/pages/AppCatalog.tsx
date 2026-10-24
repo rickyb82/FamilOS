@@ -39,7 +39,7 @@ export default function AppCatalog({ disabled, onChange }: { disabled:boolean; o
     }}/></label>
     {manifest && <div className="installation-deployment"><b>{typeof manifest.name==='string'?manifest.name:'Manifest'} · {typeof manifest.version==='string'?manifest.version:''}</b><p>{typeof manifest.description==='string'?manifest.description:''}</p><p>Il server verifica compatibilità, digest delle immagini e permessi prima di installare.</p></div>}
     <fieldset><legend>Adulti da autorizzare</legend>{members.map(m=><label key={m.id} className="row"><input type="checkbox" checked={users.includes(m.id)} onChange={e=>setUsers(v=>e.target.checked?[...v,m.id]:v.filter(x=>x!==m.id))}/>{m.display_name}</label>)}<p className="muted">La selezione si applica alla nuova installazione oppure premendo “Salva accessi” su un’app esistente.</p></fieldset>
-    <label className="row"><input type="checkbox" checked={confirmed} onChange={e=>setConfirmed(e.target.checked)} disabled={busy||disabled}/>Confermo il backup e l’interruzione temporanea dei servizi.</label>
+    <label className="row"><input type="checkbox" checked={confirmed} onChange={e=>setConfirmed(e.target.checked)} disabled={busy||disabled}/>Gestisco manualmente i backup e confermo l’interruzione temporanea dei servizi.</label>
     <button onClick={install} disabled={disabled||busy||!manifest||!icon||!confirmed}>Installa o aggiorna applicazione</button>
     <div className="app-catalog-grid">{apps.map(app=><article key={app.id} className="installation-deployment">
       <img src={'data:image/png;base64,'+app.icon} alt="" width="48" height="48"/>

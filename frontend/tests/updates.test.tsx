@@ -15,7 +15,7 @@ it('requires both confirmations before installing an experimental release', asyn
   render(<AdminUpdates />)
   const install = await screen.findByRole('button', { name: 'Installa release v1.1.0-rc.1' }) as HTMLButtonElement
   expect(install.disabled).toBe(true)
-  fireEvent.click(screen.getByLabelText('Confermo il backup e l’interruzione temporanea del servizio.'))
+  fireEvent.click(screen.getByLabelText('Confermo l’interruzione temporanea del servizio. I backup sono gestiti manualmente.'))
   expect(install.disabled).toBe(true)
   fireEvent.click(screen.getByLabelText('Accetto di installare questa release sperimentale.'))
   expect(install.disabled).toBe(false)

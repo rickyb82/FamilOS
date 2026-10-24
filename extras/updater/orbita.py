@@ -38,7 +38,7 @@ class OrbitaUpdater(Updater):
 
     def execute(self, script, *args, extra=None):
         env = {**os.environ, 'ORBITA_WEB_UPDATE': '1',
-               'ORBITA_BACKUP_KEY_FILE': '/etc/familos-updater/backup-passphrase', **(extra or {})}
+               **(extra or {})}
         with open(self.directory / 'last-command.log', 'w') as log:
             process = subprocess.Popen([sys.executable, str(script), *args], cwd=self.platform,
                 env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -56,9 +56,6 @@ class OrbitaUpdater(Updater):
     def install(self, body):
         target = body['target']
         offer = None if body['action'] == 'disable' else self.validate_offer(body)
-        key = Path('/etc/familos-updater/backup-passphrase')
-        if not key.is_file() or key.is_symlink() or key.stat().st_uid != 0 or key.stat().st_mode & 0o077:
-            raise ValueError('Configurare la chiave backup con sudo python3 extras/updater/install.py')
         support = Path(__file__).with_name('orbita_support')
         self.phase('Preparazione aggiornamento Orbita. Il registro completo resta sulla VM.')
         if target == 'core':
@@ -80,10 +77,10 @@ class OrbitaUpdater(Updater):
                     hashes[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
             (stage / 'release.json').write_text(json.dumps({'revision': offer['sha'], 'integration': hashes,
                 'sha256': hashlib.sha256((stage / 'source.tar.gz').read_bytes()).hexdigest()}))
-            self.phase('Build, backup cifrato e installazione. Attendere la riconnessione.', maintenance=False)
+            self.phase('Build e installazione; backup manuale. Attendere la riconnessione.', maintenance=False)
             self.execute(stage / 'update-node.py', extra={'ORBITA_UPDATE_STAGE': str(stage)})
         else:
-            self.phase('Build modulo, backup cifrato e verifica servizi. Attendere la riconnessione.', maintenance=False)
+            self.phase('Build modulo e verifica servizi; backup manuale. Attendere la riconnessione.', maintenance=False)
             self.execute(support / 'productivity.py', target, 'down' if offer is None else 'upgrade',
                          extra={'ORBITA_PINNED_APP': target, 'ORBITA_PINNED_SHA': offer['sha'] if offer else ''})
         self.state['installed'][target] = {'enabled': offer is not None,

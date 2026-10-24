@@ -59,7 +59,7 @@ class DisableIn(BaseModel):
 
 def recent_admin(ctx: AuthContext, confirmed: bool) -> None:
     if not confirmed:
-        raise HTTPException(400, "Conferma il backup e l’interruzione temporanea del servizio.")
+        raise HTTPException(400, "Conferma l’interruzione temporanea del servizio. I backup sono gestiti manualmente.")
     if ctx.session.created_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc)-timedelta(minutes=15):
         raise HTTPException(403, "Per modificare il server, esci e accedi di nuovo: serve un accesso negli ultimi 15 minuti.")
 

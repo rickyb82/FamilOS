@@ -153,8 +153,7 @@ class Catalog:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             if not self.orbita:
                 raise ValueError('Installazione app da manifest disponibile per Orbita; configurare l’adattatore host')
-            w.phase('Backup cifrato della piattaforma prima della modifica…')
-            w.execute(self.root/'scripts/backup.py','/var/backups/orbita')
+            w.phase('Backup gestito manualmente dall’amministratore.')
             if body['action']=='app-access':
                 self.save(apps);self.publish(apps);return
             services = ['app-'+app_id+'-'+s for s in item['manifest']['services']]
