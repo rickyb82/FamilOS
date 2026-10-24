@@ -243,3 +243,13 @@ def test_development_channel_pins_head_and_rejects_moved_branch(updater,monkeypa
     assert updater.validate_offer(body)['sha']==head
     head='b'*40
     with pytest.raises(ValueError,match='cambiato'):updater.validate_offer(body)
+
+@pytest.mark.parametrize('suffix,path',[('', '/repos/rickyb82/FamilOS'),('commits/main','/repos/rickyb82/FamilOS/commits/main')])
+def test_github_repository_metadata_has_no_trailing_slash(updater,monkeypatch,suffix,path):
+    import io
+    updater.repos['core']='rickyb82/FamilOS'
+    def urlopen(request,timeout):
+        assert request.full_url == 'https://api.github.com'+path
+        return io.BytesIO(b'{"default_branch":"main"}')
+    monkeypatch.setattr(agent.urllib.request,'urlopen',urlopen)
+    assert updater.github('core',suffix)['default_branch']=='main'

@@ -105,7 +105,7 @@ class Updater:
         token = self.root / "private/github-token"
         if token.exists() and token.read_text().strip():
             headers["Authorization"] = "Bearer " + token.read_text().strip()
-        request = urllib.request.Request(f"https://api.github.com/repos/{self.repos[target]}/{suffix}", headers=headers)
+        request = urllib.request.Request(f"https://api.github.com/repos/{self.repos[target]}" + ("/" + suffix.lstrip("/") if suffix else ""), headers=headers)
         with urllib.request.urlopen(request, timeout=30) as response:
             return json.loads(response.read(2_000_000))
 
