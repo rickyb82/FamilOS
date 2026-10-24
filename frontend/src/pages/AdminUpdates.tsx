@@ -1,13 +1,14 @@
+import AppCatalog from "./AppCatalog"
 import { useEffect, useState } from 'react'
 import { get, post } from '../lib/api'
 
-type Channel = 'stable' | 'experimental'
+type Channel = 'stable' | 'experimental' | 'development'
 interface Offer { id: string; tag: string; channel: Channel; experimental: boolean; newer: boolean; notes: string }
 interface Status {
-  connected: boolean; version?: string; channel: Channel; message?: string; setup_command?: string
+  catalog_enabled?: boolean; connected: boolean; version?: string; channel: Channel; message?: string; setup_command?: string
   repositories?: Record<string, string>; offers?: Record<string, Offer | null>
   installed?: Record<string, { tag: string | null; enabled: boolean }>
-  job?: { status: string; message: string; backup?: string; previous_commit?: string } | null
+  job?: { events?: Array<{time:number;message:string}>; status: string; message: string; backup?: string; previous_commit?: string } | null
 }
 const targets = [['core', 'FamilOS'], ['wordcraft', 'WordCraft'], ['gridcraft', 'GridCraft'], ['pdfcraft', 'PdfCraft'], ['deckcraft', 'DeckCraft'], ['ideacraft', 'IdeaCraft'], ['mailcraft', 'MailCraft']]
 
@@ -51,6 +52,7 @@ export default function AdminUpdates() {
   }
   return <section className="card stack">
     <h2>Aggiornamenti e app</h2>
+    {status?.catalog_enabled && <AppCatalog disabled={disabled} onChange={() => get<Status>("/admin/updates").then(setStatus).catch(e => setError(e.message))} />}
     <p>Le release si installano solo su richiesta dell’amministratore. Versione del sistema: <b>{status?.version || '—'}</b>.</p>
     {error && <p role="alert" className="error">{error}</p>}
     {!status && <p>Connessione all’agente aggiornamenti…</p>}
@@ -58,8 +60,8 @@ export default function AdminUpdates() {
     <label>Sistema o applicazione<select value={target} disabled={busy || blocked} onChange={e => { setTarget(e.target.value); setConfirmed(false); setExperimental(false) }}>{targets.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
     {status?.repositories?.[target] && <p className="muted">Sorgente configurata sul server: {status.repositories[target]}</p>}
     {target !== 'core' && <p>Release registrata: {status?.installed?.[target]?.tag || 'Non registrata dall’agente'}</p>}
-    <label>Canale aggiornamenti<select value={channel} disabled={busy || blocked} onChange={e => { setChannel(e.target.value as Channel); setConfirmed(false); setExperimental(false) }}><option value="stable">Stabile · consigliato</option><option value="experimental">Sperimentale · include prerelease</option></select></label>
-    <p className="muted">{channel === 'stable' ? 'Solo release stabili pubblicate. Nessun aggiornamento automatico.' : 'Include alpha, beta e release candidate pubblicate. Possono contenere problemi: scegli questo canale solo se vuoi provare le novità.'} Tornare al canale stabile non installa versioni precedenti e non annulla le migrazioni dei dati.</p>
+    <label>Canale aggiornamenti<select value={channel} disabled={busy || blocked} onChange={e => { setChannel(e.target.value as Channel); setConfirmed(false); setExperimental(false) }}><option value="stable">Stabile · consigliato</option><option value="experimental">Sperimentale · include prerelease</option><option value="development">Sviluppo · ultimo commit Git</option></select></label>
+    <p className="muted">{channel === 'development' ? 'Installa l’ultimo commit pubblicato sul ramo predefinito GitHub. Richiede conferma esplicita; non è una release stabile.' : channel === 'stable' ? 'Solo release stabili pubblicate. Nessun aggiornamento automatico.' : 'Include alpha, beta e release candidate pubblicate. Possono contenere problemi: scegli questo canale solo se vuoi provare le novità.'} Tornare al canale stabile non installa versioni precedenti e non annulla le migrazioni dei dati.</p>
     <button disabled={disabled} onClick={() => act('check')}>Controlla release</button>
     {status?.offers && target in status.offers && !status.offers[target] && <p role="status">Nessuna release compatibile pubblicata per il canale verificato.</p>}
     {offer && <div className="installation-deployment"><h3>{offer.tag} {offer.experimental ? '· Sperimentale' : '· Stabile'}</h3><p>{offer.newer ? 'Release disponibile per l’installazione.' : 'Nessuna versione successiva a quella installata.'}</p><details><summary>Novità della release</summary><p style={{ whiteSpace: 'pre-wrap' }}>{offer.notes}</p></details></div>}
@@ -67,7 +69,7 @@ export default function AdminUpdates() {
     {offer?.experimental && <label className="row"><input type="checkbox" checked={experimental} disabled={disabled} onChange={e => setExperimental(e.target.checked)} />Accetto di installare questa release sperimentale.</label>}
     <button disabled={disabled || !offer?.newer || !confirmed || (offer.experimental && !experimental)} onClick={() => act('install')}>Installa release {offer?.tag || ''}</button>
     {target !== 'core' && <button className="ghost" disabled={disabled || !confirmed} onClick={() => act('disable')}>Disattiva app conservando i dati</button>}
-    <p className="muted small">Per installare o disattivare serve un accesso effettuato negli ultimi 15 minuti. Le prime compilazioni delle app possono richiedere molto tempo. Se il controllo finale fallisce, il recupero avviene dalla VM usando il backup; non è previsto un downgrade automatico.</p>
-    {status?.job && <div className="installation-deployment" role="status"><h3>Stato operazione</h3><p>{status.job.message}</p>{status.job.backup && <p>Backup sulla VM: <code>{status.job.backup}</code></p>}{status.job.previous_commit && <p>Commit precedente: <code>{status.job.previous_commit}</code></p>}{['interrupted', 'recovery_required'].includes(status.job.status) && <p>È necessario un intervento sulla VM. Segui docs/UPDATES.md prima di avviare un altro aggiornamento.</p>}</div>}
+    <p className="muted small">Per installare o disattivare serve un accesso effettuato negli ultimi 15 minuti. Le prime compilazioni delle app possono richiedere molto tempo. Se il controllo finale fallisce, il recupero avviene dalla VM usando il backup; gli esiti del ripristino sono indicati nello stato dell’operazione.</p>
+    {status?.job && <div className="installation-deployment" role="status"><h3>Stato operazione</h3><p>{status.job.message}</p>{!!status.job.events?.length && <details><summary>Avanzamento operazione</summary><ol>{status.job.events.map((e,i)=><li key={i}>{new Date(e.time*1000).toLocaleTimeString()} · {e.message}</li>)}</ol></details>}{status.job.backup && <p>Backup sulla VM: <code>{status.job.backup}</code></p>}{status.job.previous_commit && <p>Commit precedente: <code>{status.job.previous_commit}</code></p>}{['interrupted', 'recovery_required'].includes(status.job.status) && <p>È necessario un intervento sulla VM. Segui docs/UPDATES.md prima di avviare un altro aggiornamento.</p>}</div>}
   </section>
 }

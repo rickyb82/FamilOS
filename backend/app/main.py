@@ -83,8 +83,15 @@ from pathlib import Path as _P
 _VERSION = next((p.read_text().strip() for p in (_P("VERSION"), _P("../VERSION"), _P("/app/VERSION")) if p.exists()), "dev")
 app = FastAPI(title="FamilOS", version=_VERSION, lifespan=lifespan, docs_url="/api/docs", openapi_url="/api/openapi.json")
 
+class DevelopmentCORS(CORSMiddleware):
+    async def __call__(self, scope, receive, send):
+        # App capabilities are checked by the gateway, including CORS preflight.
+        if scope.get('type') == 'http' and scope.get('path','').startswith('/api/app-gateway/'):
+            return await self.app(scope, receive, send)
+        return await super().__call__(scope, receive, send)
+
 if not settings.cookie_secure:  # solo sviluppo: frontend Vite su un'altra porta
-    app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"], allow_credentials=True,
+    app.add_middleware(DevelopmentCORS, allow_origins=["http://localhost:5173"], allow_credentials=True,
                        allow_methods=["*"], allow_headers=["*"])
 
 from .services import activity as _activity  # noqa: E402
@@ -108,6 +115,8 @@ from .api import browser_approvals
 app.include_router(browser_approvals.router, prefix="/api")
 app.include_router(browser_approvals.parent_router, prefix="/api")
 app.include_router(updates.router, prefix="/api")
+from .api import installed_apps
+app.include_router(installed_apps.router, prefix="/api")
 app.include_router(app_access.router, prefix="/api")
 app.include_router(branding.router, prefix="/api")
 app.include_router(education.router, prefix="/api")

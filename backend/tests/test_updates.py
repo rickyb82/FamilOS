@@ -232,3 +232,18 @@ def test_old_admin_session_cannot_install():
     with pytest.raises(HTTPException) as error:
         updates.recent_admin(ctx, True)
     assert error.value.status_code == 403
+
+
+def test_development_channel_pins_head_and_rejects_moved_branch(updater,monkeypatch):
+    head='a'*40
+    def github(target,path):
+        if not path:return {'default_branch':'main'}
+        if path.startswith('commits/'):return {'sha':head,'commit':{'message':'Change'}}
+        return {'status':'ahead'}
+    monkeypatch.setattr(updater,'github',github)
+    updater.check('core','development')
+    offer=updater.state['offers']['core']
+    body={'target':'core','channel':'development','offer_id':offer['id'],'accept_experimental':True}
+    assert updater.validate_offer(body)['sha']==head
+    head='b'*40
+    with pytest.raises(ValueError,match='cambiato'):updater.validate_offer(body)

@@ -55,6 +55,8 @@ class Manifest(Strict):
     def references(self):
         if self.launch.service not in self.services:
             raise ValueError('launch.service must reference a declared service')
+        if any(len('app-'+self.id+'-'+name)>63 for name in self.services):
+            raise ValueError('Combined app and service name exceeds 63 characters')
         names = [v.name for s in self.services.values() for v in s.volumes]
         if len(set(names)) != len(names):
             raise ValueError('volume names must be unique across services')

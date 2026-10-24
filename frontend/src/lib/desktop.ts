@@ -6,7 +6,7 @@ export const WindowActivity = createContext(true)
 export const WindowCommands = createContext<{ close: () => void } | null>(null)
 export const useWindowActive = () => useContext(WindowActivity)
 
-export type AppEntry = { id: string; title: string; icon: string; color: string; path: string; feature?: string; admin?: boolean; description?: string; appId?: string }
+export type AppEntry = { id: string; title: string; icon: string; iconUrl?:string; color: string; path: string; feature?: string; admin?: boolean; description?: string; appId?: string }
 export const PRODUCTIVITY_APPS: AppEntry[] = [
   { id: 'wordcraft', appId: 'wordcraft', title: 'WordCraft', icon: 'W', color: 'blue', path: '/productivity/wordcraft', feature: 'wordcraft_web', description: 'Documenti, lettere e testi.' },
   { id: 'gridcraft', appId: 'gridcraft', title: 'GridCraft', icon: 'X', color: 'green', path: '/productivity/gridcraft', feature: 'gridcraft_web', description: 'Fogli di calcolo, tabelle e budget.' },
@@ -36,6 +36,7 @@ export function desktopApps(me: Me): AppEntry[] {
 
 export function appForPath(path: string): AppEntry {
   const pathname = path.split('?')[0]
+  if (pathname.startsWith('/installed/')) return {id:'installed-'+pathname.split('/')[2],title:'App installata',icon:'▦',color:'lavender',path}
   if (pathname === '/editor') {
     const query = new URLSearchParams(path.split('?')[1])
     const kind = (query.get('app') || editorFor(query.get('name') || '')) as ArtApp | undefined

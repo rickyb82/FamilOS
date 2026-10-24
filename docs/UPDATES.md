@@ -11,6 +11,7 @@ previsto e protezione CSRF.
 - **Stabile** è il valore iniziale: esclude draft, prerelease e tag con suffissi.
 - **Sperimentale** include le prerelease pubblicate e richiede una conferma
   aggiuntiva per installarle. Non segue i commit di `main`.
+- **Sviluppo** segue l’ultimo commit del ramo predefinito GitHub, con conferma sperimentale esplicita. È il canale da usare dopo un push senza pubblicare una release. Il commit viene ricontrollato e bloccato durante la preparazione.
 - Sono supportati tag `v1.2.3`, `v1.3.0-alpha.1`, `v1.3.0-beta.1`,
   `v1.3.0-preview.1`, `v1.3.0-rc.1` (anche senza `v`). La selezione considera
   le prime 100 release restituite da GitHub e sceglie la versione più alta,
@@ -22,7 +23,7 @@ previsto e protezione CSRF.
   numero è successiva alla sua prerelease.
 - Per FamilOS il contenuto di `VERSION` deve corrispondere al tag.
 
-## Prima attivazione su Ubuntu
+## Prima attivazione standalone su Ubuntu
 
 È necessario Docker Compose e un'installazione di produzione già funzionante,
 con checkout Git pulito e remoto `origin` GitHub. Dal progetto:
@@ -49,12 +50,10 @@ Il repository del framework deriva da `origin`, quindi un fork segue il proprio
 repository. Le sei app predefinite sono WordCraft, GridCraft, PdfCraft,
 DeckCraft, IdeaCraft e MailCraft; i loro repository sono configurabili soltanto
 sul server nel file dell'agente. Dopo una modifica riavviare il servizio.
-Solo queste app integrate sono installabili: nuove integrazioni richiedono una
-release del framework e, se cambia il catalogo dell'agente, la sua reinstallazione.
+Nel deploy standalone questo catalogo comprende le sei app integrate. Il catalogo manifest descritto sotto richiede l’adattatore Orbita.
 
 I repository privati richiedono `private/github-token` con permesso di lettura
-dei repository interessati. Il token non viene restituito al browser. Una
-release non pubblicata non compare: un semplice tag o un commit non basta.
+dei repository interessati. Il token non viene restituito al browser. Nel canale stabile una release non pubblicata non compare; per seguire i commit usare Sviluppo.
 Il repository non viene reso pubblico da questo sistema; pubblicazione e scelta
 della licenza rimangono decisioni del proprietario.
 
@@ -116,3 +115,40 @@ la configurazione precedente anche quando l'archivio dati non è stato completat
 La procedura è intenzionalmente locale per evitare che un clic nel browser
 elimini dati successivi a un aggiornamento. Provare il ciclo completo su una
 copia della VM prima di affidargli l'installazione di produzione.
+
+
+## Orbita: attivazione e aggiornamenti dal browser
+
+Il percorso gestito è `/opt/orbita/apps/familos`, con Caddy condiviso nel progetto Orbita. L’adattatore preserva questo layout e non avvia un secondo proxy. Dopo avere installato questa versione del framework e i relativi helper Orbita, eseguire una sola volta sul nodo:
+
+```sh
+cd /opt/orbita/apps/familos
+sudo python3 extras/updater/install.py
+```
+
+Richiede Python 3 con `venv`, Docker Compose, GPG e systemd. Durante il setup viene chiesta due volte una password di almeno 16 caratteri per i backup automatici. Conservarla separatamente dal server: il file root `0600` `/etc/familos-updater/backup-passphrase` non viene incluso nei backup. Il servizio usa un virtualenv proprio e un socket locale `/run/familos-updater/control.sock`, montato in sola lettura nel backend. Il backend viene ricreato una volta per applicare il mount. Non occorrono nuove regole sul router.
+
+Da **Installazione → Aggiornamenti e app**:
+
+1. Seleziona FamilOS e il canale Sviluppo per installare le modifiche pubblicate sul ramo predefinito. Stabile/Sperimentale continuano a usare release GitHub.
+2. Controlla, conferma manutenzione e versione sperimentale se richiesta, quindi Installa.
+3. Il servizio host esegue build, backup cifrato completo Orbita, aggiornamento e controlli. La pagina può scollegarsi durante il backup; l’operazione continua su systemd e lo stato torna disponibile alla riconnessione.
+4. Le app Craft sono installabili/aggiornabili selezionandole nello stesso pannello. I repository privati richiedono il token già salvato in `private/github-token` sul nodo.
+
+Il backup include tutti i servizi del progetto Orbita, immagini Docker e dati interni alla piattaforma; non è un backup della VM Proxmox né di Pi-hole se esterno allo stack. Un mount persistente esterno causa un errore esplicito. Il browser grafico upstream viene incluso dall’adattatore del core, con rete interna, token, seccomp e limiti risorse. Il layout Compose upstream è verificato per hash: cambi strutturali non riconosciuti bloccano l’aggiornamento prima dello stop e richiedono aggiornare l’adattatore.
+
+I log riservati restano in `/var/lib/familos-updater/last-command.log` e `last-compose.log`; sul web arrivano solo fasi controllate. Gli snapshot di rollback restano protetti sulla VM. L’adattatore core ripristina codice, dati e immagini precedenti se l’attivazione fallisce; anche dopo un tentativo di rollback l’agente richiede una verifica amministrativa prima di nuovi lavori. Nessun backup o vecchia immagine viene eliminato automaticamente.
+
+## Catalogo manifest
+
+Importa JSON e PNG, seleziona gli adulti autorizzati, conferma e installa. La scheda mostra versione e stato; l’app compare nel desktop e in Tutte le app. Il pulsante Disattiva conserva dati e immagini. Per aggiornare importa un manifest con versione maggiore e nuovi digest. “Salva accessi selezionati” sostituisce gli adulti autorizzati; gli amministratori mantengono accesso e i minori non sono supportati dal runtime v1.
+
+I dati vivono in `/opt/orbita/data/app-catalog/<id>/data/`, il Compose generato in `compose.apps.json`; nessuna porta host è pubblicata. Il gateway applica sandbox CSP e autorizzazione per ogni richiesta. La coerenza dei dati personali dentro il servizio resta responsabilità dello sviluppatore; l’esempio Note mostra la separazione per utente. Vedi `packages/app-sdk/README.md` per il contratto e i limiti HTTP.
+
+Le installazioni fanno backup prima di modificare la configurazione, verificano i servizi e conservano uno snapshot per recuperare i dati precedenti. Modifiche al formato dati o ai mount non sono applicate automaticamente. Si accettano soltanto publisher approvati dall’amministratore; non esiste una verifica automatica della reputazione delle immagini.
+
+## Ripristino Orbita su nuova macchina
+
+Usare gli strumenti di ripristino Orbita con la password conservata esternamente. Il backup contiene catalogo, configurazioni Compose, immagini e dati; `data/updater-host-config.json` conserva anche la configurazione host da confrontare con quella nuova. Dopo aver verificato DNS, IP, TLS e dati, reinstallare l’agente con il comando di setup e configurare nuovamente la password dei backup automatici. Lo stato dei lavori e il socket sono transitori e non devono essere ripristinati come servizi attivi. Il test definitivo del backup resta un ripristino su un nodo isolato.
+
+Per aggiornare il codice del servizio host dopo future modifiche al protocollo/adattatore, rieseguire il setup a lavori terminati. L’aggiornamento del framework non riavvia il proprio agente nel mezzo del lavoro.

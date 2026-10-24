@@ -196,3 +196,5 @@ html[data-theme] .familos { background:var(--desktop-background); }
 .os-lock-card p { margin:0; }
 .os-lock-card form { display:flex;flex-direction:column;gap:10px;width:100%; }
 .os-lock-card small { font-size:10px;line-height:1.6;color:var(--muted);text-align:center; }
+
+.app-catalog-grid {display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;}

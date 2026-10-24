@@ -16,6 +16,10 @@ def main():
     root = Path(__file__).resolve().parents[2]
     if not (root / ".env").is_file():
         raise SystemExit("Configurare e avviare prima FamilOS in produzione.")
+    if (root.parent.parent / 'compose.familos.yaml').exists():
+        from orbita_install import install
+        install(root)
+        return
     remote = subprocess.check_output(["git", "-c", f"safe.directory={root}", "-C", str(root), "remote", "get-url", "origin"], text=True).strip()
     repos = {"core": repository(remote), **{app: "rickyb82/" + app for app in APPS}}
     directory = Path("/etc/familos-updater")

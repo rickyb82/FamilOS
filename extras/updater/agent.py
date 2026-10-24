@@ -20,7 +20,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler
 
 APPS = ("wordcraft", "gridcraft", "pdfcraft", "deckcraft", "ideacraft", "mailcraft")
-CHANNELS = ("stable", "experimental")
+CHANNELS = ("stable", "experimental", "development")
 TAG = re.compile(r"v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:alpha|beta|rc|preview)\.[0-9]+))?\Z")
 SLUG = re.compile(r"[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+\Z")
 
@@ -76,6 +76,7 @@ class Updater:
         if set(self.repos) != {"core", *APPS}:
             raise ValueError("Catalogo host non valido.")
         self.lock = threading.RLock()
+        self.config = config
         path = self.directory / "state.json"
         self.state = json.loads(path.read_text()) if path.exists() else {"channel": "stable", "offers": {}, "installed": {}, "job": None}
         if self.state.get("job", {}) and self.state["job"]["status"] == "running":
@@ -88,11 +89,15 @@ class Updater:
     def status(self):
         with self.lock:
             return json.loads(json.dumps({**self.state, "repositories": self.repos,
+                "catalog_enabled": self.config.get("adapter") == "orbita",
                 "version": (self.root / "VERSION").read_text().strip(), "protocol": 1}))
 
     def phase(self, message, **fields):
         with self.lock:
             self.state["job"].update(message=message, **fields)
+            events = self.state["job"].setdefault("events", [])
+            events.append({"time":time.time(),"message":message})
+            self.state["job"]["events"] = events[-50:]
             self.save()
 
     def github(self, target, suffix):
@@ -124,7 +129,40 @@ class Updater:
     def compose(self, *args):
         return self.run("docker", "compose", "--project-directory", str(self.root), "-f", str(self.root / "docker-compose.yml"), *args)
 
+    def installed_sha(self, target):
+        if target == "core" and (self.root / ".git").exists():
+            return self.run("git", "rev-parse", "HEAD")
+        return self.state["installed"].get(target, {}).get("sha")
+
+    def development_offer(self, target):
+        info = self.github(target, "")
+        branch = info["default_branch"]
+        from urllib.parse import quote
+        commit = self.github(target, "commits/" + quote(branch, safe=""))
+        sha = commit["sha"]
+        if not re.fullmatch(r"[a-f0-9]{40}", sha):
+            raise ValueError("Commit Git non valido")
+        current = self.installed_sha(target)
+        newer = sha != current
+        if current and newer:
+            comparison = self.github(target, "compare/" + current + "..." + sha)
+            if comparison.get("status") != "ahead":
+                raise ValueError("Il ramo non avanza dalla revisione installata: verificare la cronologia Git.")
+        if target != "core" and self.state["installed"].get(target, {}).get("enabled") is False:
+            newer = True
+        return {"id": secrets.token_hex(16), "tag": branch+"@"+sha[:12], "sha": sha,
+                "branch": branch, "channel": "development", "target": target,
+                "created": time.time(), "newer": newer, "experimental": True,
+                "notes": "Commit del ramo di sviluppo, non una release stabile.\n"+commit.get("commit", {}).get("message", "")[:10000]}
+
     def check(self, target, channel):
+        if channel == "development":
+            offer = self.development_offer(target)
+            with self.lock:
+                self.state["channel"] = channel
+                self.state["offers"] = {target: offer}
+                self.save()
+            return
         release = select_release(self.github(target, "releases?per_page=100"), channel)
         offer = None
         if release:
@@ -135,9 +173,9 @@ class Updater:
             installed = self.state["installed"].get(target, {}).get("tag")
             if target == "core":
                 installed = (self.root / "VERSION").read_text().strip()
-            newer = not installed or version(tag) > version(installed)
+            newer = not installed or not TAG.fullmatch(installed) or version(tag) > version(installed)
             # Re-enable an app at its existing release without permitting a downgrade.
-            if target != "core" and installed and self.state["installed"].get(target, {}).get("enabled") is False:
+            if target != "core" and installed and TAG.fullmatch(installed) and self.state["installed"].get(target, {}).get("enabled") is False:
                 newer = version(tag) >= version(installed)
             offer = {"id": secrets.token_hex(16), "release_id": release["id"], "tag": tag, "sha": sha,
                      "channel": channel, "target": target, "created": time.time(), "newer": newer,
@@ -156,6 +194,11 @@ class Updater:
             raise ValueError("Offerta scaduta o versione non successiva a quella installata.")
         if offer["experimental"] and body.get("accept_experimental") is not True:
             raise ValueError("Confermare esplicitamente la release sperimentale.")
+        if body["channel"] == "development":
+            latest = self.development_offer(body["target"])
+            if latest["sha"] != offer["sha"] or not latest["newer"]:
+                raise ValueError("Il ramo è cambiato: ricontrollare prima di installare.")
+            return offer
         release = self.github(body["target"], "releases/" + str(offer["release_id"]))
         valid = select_release([release], body["channel"])
         if not valid or release["tag_name"] != offer["tag"] or bool(release.get("prerelease") or "-" in release["tag_name"]) != offer["experimental"]:
@@ -166,10 +209,16 @@ class Updater:
 
     def submit(self, body):
         action, target = body.get("action"), body.get("target")
-        if action not in ("check", "install", "disable") or target not in self.repos:
+        is_app = isinstance(action, str) and action.startswith('app-')
+        if is_app:
+            if self.config.get('adapter') != 'orbita':
+                raise ValueError('Catalogo manifest disponibile solo con agente Orbita')
+            from catalog import Catalog
+            Catalog(self).validate_body(body)
+        if not is_app and (action not in ("check", "install", "disable") or target not in self.repos):
             raise ValueError("Operazione non valida.")
         allowed = {"action", "target", "channel"} if action == "check" else {"action", "target", "channel", "offer_id", "accept_experimental", "confirm_maintenance"}
-        if set(body) - allowed or (action != "disable" and body.get("channel") not in CHANNELS):
+        if not is_app and (set(body) - allowed or (action != "disable" and body.get("channel") not in CHANNELS)):
             raise ValueError("Parametri non validi.")
         if action != "check" and body.get("confirm_maintenance") is not True:
             raise ValueError("Confermare l’interruzione temporanea.")
@@ -186,7 +235,10 @@ class Updater:
 
     def work(self, body):
         try:
-            if body["action"] == "check":
+            if body["action"].startswith("app-"):
+                from catalog import Catalog
+                Catalog(self).execute(body)
+            elif body["action"] == "check":
                 self.check(body["target"], body["channel"])
             else:
                 self.install(body)
@@ -213,7 +265,7 @@ class Updater:
         if self.run("git", "status", "--porcelain"):
             raise ValueError("Sono presenti modifiche locali: salvarle nel proprio fork prima di aggiornare.")
         old_commit = self.run("git", "rev-parse", "HEAD")
-        if target == "core" and version(offer["tag"]) <= version((self.root / "VERSION").read_text().strip()):
+        if target == "core" and body["channel"] != "development" and version(offer["tag"]) <= version((self.root / "VERSION").read_text().strip()):
             raise ValueError("La release non è successiva alla versione attuale.")
         original_env = (self.root / ".env").read_bytes()
         running = self.compose("ps", "--services", "--status", "running").splitlines()
@@ -234,10 +286,10 @@ class Updater:
         try:
             if target == "core":
                 self.phase("Scaricamento del commit della release verificata…")
-                self.run("git", "-c", "core.hooksPath=/dev/null", "fetch", "--no-tags", "https://github.com/" + self.repos[target] + ".git", "refs/tags/" + offer["tag"])
+                self.run("git", "-c", "core.hooksPath=/dev/null", "fetch", "--no-tags", "https://github.com/" + self.repos[target] + ".git", (offer["sha"] if body["channel"] == "development" else "refs/tags/" + offer["tag"]))
                 if self.run("git", "rev-parse", "FETCH_HEAD^{commit}") != offer["sha"]:
                     raise ValueError("Il commit scaricato non corrisponde alla release.")
-                if version(self.run("git", "show", offer["sha"] + ":VERSION")) != version(offer["tag"]):
+                if body["channel"] != "development" and version(self.run("git", "show", offer["sha"] + ":VERSION")) != version(offer["tag"]):
                     raise ValueError("VERSION non corrisponde al tag pubblicato.")
                 self.run("git", "-c", "core.hooksPath=/dev/null", "checkout", "--detach", offer["sha"])
                 changed_code = True
@@ -302,7 +354,7 @@ class Updater:
             self.compose("up", "-d", "--no-build", "--no-deps", "caddy")
             self.compose("exec", "-T", "caddy", "caddy", "validate", "--config", "/etc/caddy/Caddyfile")
             with self.lock:
-                self.state["installed"][target] = {"tag": offer["tag"] if offer else self.state["installed"].get(target, {}).get("tag"), "enabled": not disable}
+                self.state["installed"][target] = {"tag": offer["tag"] if offer else self.state["installed"].get(target, {}).get("tag"), "enabled": not disable, "sha": offer["sha"] if offer else self.installed_sha(target)}
                 self.state["offers"] = {}
                 self.save()
         except Exception:
@@ -343,7 +395,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(404, {"error": "Non trovato"})
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if not 0 < length <= 4096:
+            if not 0 < length <= 262144:
                 raise ValueError("Richiesta non valida")
             body = json.loads(self.rfile.read(length))
             if not isinstance(body, dict):
@@ -365,8 +417,12 @@ class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
 if __name__ == "__main__":
     os.umask(0o077)
     config = json.loads(Path(sys.argv[1]).read_text())
-    updater = Updater(config)
-    socket = updater.root / "private/updater-socket/control.sock"
+    if config.get("adapter") == "orbita":
+        from orbita import OrbitaUpdater
+        updater = OrbitaUpdater(config)
+    else:
+        updater = Updater(config)
+    socket = Path(config.get("socket", str(updater.root / "private/updater-socket/control.sock")))
     socket.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     socket.unlink(missing_ok=True)
     with Server(str(socket), Handler) as server:

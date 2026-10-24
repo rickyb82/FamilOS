@@ -12,6 +12,8 @@ export default function Productivity() {
   const { me } = useAuth()
   const { appId } = useParams()
   const navigate = useNavigate()
+  const [installed,setInstalled] = useState<Array<{id:string;name:string;description:string;enabled:boolean;icon:string}>>([])
+  useEffect(()=>{get<typeof installed>('/installed-apps').then(setInstalled).catch(()=>{})},[])
   const [files, setFiles] = useState<FileOut[]>([])
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -41,6 +43,7 @@ export default function Productivity() {
 
   if (!appId) return <div className="page productivity-library"><p className="productivity-eyebrow">LA TUA SUITE</p><h1>Spazio alle cose che fai.</h1><p className="muted">Documenti, fogli, presentazioni, mappe e posta. Ogni app nella sua finestra.</p>
     <div className="productivity-cards">{PRODUCTIVITY_APPS.filter(allowed).map(a => <button key={a.id} onClick={() => navigate(a.path)}><span className={`os-icon ${a.color}`}>{a.icon}</span><h2>{a.title}</h2><p>{a.description}</p><small className={active(a) ? 'productivity-connected' : ''}>{active(a) ? 'Collegata' : 'Da attivare sul server'} <span>↗</span></small></button>)}</div>
+    <div className="productivity-cards">{installed.filter(a=>a.enabled).map(a=><button key={a.id} onClick={()=>navigate('/installed/'+a.id)}><img src={'data:image/png;base64,'+a.icon} width="48" height="48" alt=""/><h2>{a.name}</h2><p>{a.description}</p></button>)}</div>
     {!!me?.features?.messaggi && <button className="productivity-messages" onClick={() => navigate('/messages')}>☏ <span><b>Messaggi</b><small>Conversazioni e chiamate con la famiglia.</small></span><span>↗</span></button>}
   </div>
   if (!app || !allowed(app)) return <div className="page"><h2>App non disponibile</h2><p>Questa app non è abilitata per il tuo profilo.</p><button onClick={() => navigate('/apps')}>Torna alla suite</button></div>

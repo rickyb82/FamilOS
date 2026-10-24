@@ -73,6 +73,8 @@ async def middleware(request: Request, call_next):
         if request.method not in MUTATING and not opened and not denied:
             return response
         params = request.scope.get("path_params") or {}
+        if section == "app-gateway":
+            params = {"app_id": params.get("app_id", "")}  # Never persist launch capabilities.
         event = (f"{section}.denied" if denied else f"{section}.opened" if opened else describe(request.method, route, section))[:60]
         from ..security.sessions import client_ip
         row = {

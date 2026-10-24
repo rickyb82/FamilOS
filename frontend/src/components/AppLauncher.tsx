@@ -38,7 +38,7 @@ export default function AppLauncher({ open, apps, onClose, onOpen }: { open: boo
     <section ref={panel} className="os-launchpad" role="dialog" aria-modal="true" aria-label="Applicazioni" onClick={e => e.stopPropagation()}>
       <header><div><p>IL TUO SPAZIO DI LAVORO</p><h2>Applicazioni</h2></div><button className="os-launchpad-close" onClick={onClose} aria-label="Chiudi applicazioni">×</button></header>
       <div className="os-launchpad-search"><span aria-hidden="true">⌕</span><input ref={input} placeholder="Cerca un’app…" aria-label="Cerca applicazioni" value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && filtered[0]) onOpen(filtered[0].path, e.shiftKey) }} /></div>
-      <div className="os-launchpad-grid">{filtered.map((app, index) => <button key={app.id} style={{ animationDelay: `${Math.min(index,12)*16}ms` }} onClick={e => onOpen(app.path,e.shiftKey)}><span className={`os-icon ${app.color}`} aria-hidden="true">{app.icon}</span><span>{app.title}</span></button>)}</div>
+      <div className="os-launchpad-grid">{filtered.map((app, index) => <button key={app.id} style={{ animationDelay: `${Math.min(index,12)*16}ms` }} onClick={e => onOpen(app.path,e.shiftKey)}><span className={`os-icon ${app.color}`} aria-hidden="true">{app.iconUrl?<img src={app.iconUrl} width="48" height="48" alt=""/>:app.icon}</span><span>{app.title}</span></button>)}</div>
       {!filtered.length && <p className="os-launchpad-empty">Nessuna app trovata.</p>}
       <footer>Seleziona un’app per aprirla · Esc o clic fuori per chiudere</footer>
     </section>

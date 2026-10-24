@@ -41,7 +41,7 @@ async def status(ctx: AuthContext = Depends(require_admin)):
 
 class CheckIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    channel: Literal["stable", "experimental"] = "stable"
+    channel: Literal["stable", "experimental", "development"] = "stable"
     target: Target = "core"
 
 

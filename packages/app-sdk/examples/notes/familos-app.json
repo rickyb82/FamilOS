@@ -1,0 +1,43 @@
+{
+  "manifest_version": 1,
+  "id": "personal-notes",
+  "name": "Note personali",
+  "description": "Esempio completo: note salvate separatamente per utente.",
+  "version": "1.0.0",
+  "sdk_version": "1",
+  "icon": "assets/icon.png",
+  "category": "documents",
+  "services": {
+    "web": {
+      "image": "ghcr.io/example/familos-notes@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "architectures": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "port": 8080,
+      "health_path": "/health",
+      "uid": 1000,
+      "memory_mb": 512,
+      "cpus": 1.0,
+      "volumes": [
+        {
+          "name": "notes",
+          "mount": "/app-data/notes",
+          "backup": "stop-and-copy"
+        }
+      ]
+    }
+  },
+  "launch": {
+    "service": "web",
+    "path": "/",
+    "mode": "window"
+  },
+  "permissions": {
+    "documents": "none",
+    "network": "none",
+    "children": false
+  },
+  "authentication": "familos-gateway",
+  "data_version": 1
+}

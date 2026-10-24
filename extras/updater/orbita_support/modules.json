@@ -1,0 +1,487 @@
+{
+  "apps": [
+    "wordcraft",
+    "gridcraft",
+    "pdfcraft",
+    "deckcraft",
+    "ideacraft",
+    "mailcraft"
+  ],
+  "services": {
+    "familos-wordcraft": {
+      "build": {
+        "context": "./apps/familos/extras/artcraft",
+        "dockerfile": "Dockerfile.cli",
+        "args": {
+          "APP": "wordcraft",
+          "UPSTREAM_SHA": "${FAMILOS_WORDCRAFT_SHA:-}"
+        },
+        "secrets": [
+          {
+            "source": "familos_gh_token",
+            "target": "gh_token"
+          }
+        ]
+      },
+      "image": "orbita-familos-wordcraft:local",
+      "profiles": [
+        "familos-wordcraft"
+      ],
+      "restart": "unless-stopped",
+      "environment": [
+        "MCP_PORT=7982",
+        "MCP_ARGS=--author FamilAI --automation-read-root /data --automation-write-root /data/wordcraft"
+      ],
+      "volumes": [
+        "./apps/familos/data:/data"
+      ],
+      "expose": [
+        "7982"
+      ],
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "1m",
+          "max-file": "1"
+        }
+      },
+      "networks": {
+        "familos": {
+          "aliases": [
+            "wordcraft"
+          ]
+        }
+      },
+      "security_opt": [
+        "no-new-privileges:true"
+      ]
+    },
+    "familos-wordcraft-web": {
+      "build": {
+        "context": "./apps/familos/extras/artcraft",
+        "dockerfile": "Dockerfile.web",
+        "args": {
+          "APP": "wordcraft",
+          "UPSTREAM_SHA": "${FAMILOS_WORDCRAFT_SHA:-}"
+        },
+        "secrets": [
+          {
+            "source": "familos_gh_token",
+            "target": "gh_token"
+          }
+        ]
+      },
+      "image": "orbita-familos-wordcraft-web:local",
+      "profiles": [
+        "familos-wordcraft"
+      ],
+      "restart": "unless-stopped",
+      "expose": [
+        "80"
+      ],
+      "networks": {
+        "familos": {
+          "aliases": [
+            "wordcraft-web"
+          ]
+        }
+      },
+      "security_opt": [
+        "no-new-privileges:true"
+      ]
+    },
+    "familos-gridcraft": {
+      "build": {
+        "context": "./apps/familos/extras/artcraft",
+        "dockerfile": "Dockerfile.cli",
+        "args": {
+          "APP": "gridcraft",
+          "UPSTREAM_SHA": "${FAMILOS_GRIDCRAFT_SHA:-}"
+        },
+        "secrets": [
+          {
+            "source": "familos_gh_token",
+            "target": "gh_token"
+          }
+        ]
+      },
+      "image": "orbita-familos-gridcraft:local",
+      "profiles": [
+        "familos-gridcraft"
+      ],
+      "restart": "unless-stopped",
+      "environment": [
+        "MCP_PORT=7983",
+        "MCP_ARGS="
+      ],
+      "volumes": [
+        "./apps/familos/data:/data:ro",
+        "./apps/familos/data/gridcraft:/data/gridcraft"
+      ],
+      "expose": [
+        "7983"
+      ],
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "1m",
+          "max-file": "1"
+        }
+      },
+      "networks": {
+        "familos": {
+          "aliases": [
+            "gridcraft"
+          ]
+        }
+      },
+      "security_opt": [
+        "no-new-privileges:true"
+      ]
+    },
+    "familos-gridcraft-web": {
+      "build": {
+        "context": "./apps/familos/extras/artcraft",
+        "dockerfile": "Dockerfile.web",
+        "args": {
+          "APP": "gridcraft",
+          "UPSTREAM_SHA": "${FAMILOS_GRIDCRAFT_SHA:-}"
+        },
+        "secrets": [
+          {
+            "source": "familos_gh_token",
+            "target": "gh_token"
+          }
+        ]
+      },
+      "image": "orbita-familos-gridcraft-web:local",
+      "profiles": [
+        "familos-gridcraft"
+      ],
+      "restart": "unless-stopped",
+      "expose": [
+        "80"
+      ],
+      "networks": {
+        "familos": {
+          "aliases": [
+            "gridcraft-web"
+          ]
+        }
+      },
+      "security_opt": [
+        "no-new-privileges:true"
+      ]
+    },
+    "familos-pdfcraft": {
+      "build": {
+        "context": "./apps/familos/extras/artcraft",
+        "dockerfile": "Dockerfile.cli",
+        "args": {
+          "APP": "pdfcraft",
+          "UPSTREAM_SHA": "${FAMILOS_PDFCRAFT_SHA:-}"
+        },
+        "secrets": [
+          {
+            "source": "familos_gh_token",
+            "target": "gh_token"
+          }
+        ]
+      },
+      "image": "orbita-familos-pdfcraft:local",
+      "profiles": [
+        "familos-pdfcraft"
+      ],
+      "restart": "unless-stopped",
+      "environment": [
+        "MCP_PORT=7984",
+        "MCP_ARGS=--root /data --compact"
+      ],
+      "volumes": [
+        "./apps/familos/data:/data:ro",
+        "./apps/familos/data/pdfcraft:/data/pdfcraft"
+      ],
+      "expose": [
+        "7984"
+      ],
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "1m",
+          "max-file": "1"
+        }
+      },
+      "networks": {
+        "familos": {
+          "aliases": [
+            "pdfcraft"
+          ]
+        }
+      },
+      "security_opt": [
+        "no-new-privileges:true"
+      ]
+    },
+    "familos-pdfcraft-web": {
+      "build": {
+        "context": "./apps/familos/extras/artcraft",
+        "dockerfile": "Dockerfile.web",
+        "args": {
+          "APP": "pdfcraft",
+          "UPSTREAM_SHA": "${FAMILOS_PDFCRAFT_SHA:-}"
+        },
+        "secrets": [
+          {
+            "source": "familos_gh_token",
+            "target": "gh_token"
+          }
+        ]
+      },
+      "image": "orbita-familos-pdfcraft-web:local",
+      "profiles": [
+        "familos-pdfcraft"
+      ],
+      "restart": "unless-stopped",
+      "expose": [
+        "80"
+      ],
+      "networks": {
+        "familos": {
+          "aliases": [
+            "pdfcraft-web"
+          ]
+        }
+      },
+      "security_opt": [
+        "no-new-privileges:true"
+      ]
+    },
+    "familos-deckcraft": {
+      "build": {
+        "context": "./apps/familos/extras/artcraft",
+        "dockerfile": "Dockerfile.cli",
+        "args": {
+          "APP": "deckcraft",
+          "UPSTREAM_SHA": "${FAMILOS_DECKCRAFT_SHA:-}"
+        },
+        "secrets": [
+          {
+            "source": "familos_gh_token",
+            "target": "gh_token"
+          }
+        ]
+      },
+      "image": "orbita-familos-deckcraft:local",
+      "profiles": [
+        "familos-deckcraft"
+      ],
+      "restart": "unless-stopped",
+      "environment": [
+        "MCP_PORT=7985",
+        "MCP_ARGS="
+      ],
+      "volumes": [
+        "./apps/familos/data:/data:ro",
+        "./apps/familos/data/deckcraft:/data/deckcraft"
+      ],
+      "expose": [
+        "7985"
+      ],
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "1m",
+          "max-file": "1"
+        }
+      },
+      "networks": {
+        "familos": {
+          "aliases": [
+            "deckcraft"
+          ]
+        }
+      },
+      "security_opt": [
+        "no-new-privileges:true"
+      ]
+    },
+    "familos-deckcraft-web": {
+      "build": {
+        "context": "./apps/familos/extras/artcraft",
+        "dockerfile": "Dockerfile.web",
+        "args": {
+          "APP": "deckcraft",
+          "UPSTREAM_SHA": "${FAMILOS_DECKCRAFT_SHA:-}"
+        },
+        "secrets": [
+          {
+            "source": "familos_gh_token",
+            "target": "gh_token"
+          }
+        ]
+      },
+      "image": "orbita-familos-deckcraft-web:local",
+      "profiles": [
+        "familos-deckcraft"
+      ],
+      "restart": "unless-stopped",
+      "expose": [
+        "80"
+      ],
+      "networks": {
+        "familos": {
+          "aliases": [
+            "deckcraft-web"
+          ]
+        }
+      },
+      "security_opt": [
+        "no-new-privileges:true"
+      ]
+    },
+    "familos-ideacraft": {
+      "build": {
+        "context": "./apps/familos/extras/artcraft",
+        "dockerfile": "Dockerfile.cli",
+        "args": {
+          "APP": "ideacraft",
+          "UPSTREAM_SHA": "${FAMILOS_IDEACRAFT_SHA:-}"
+        },
+        "secrets": [
+          {
+            "source": "familos_gh_token",
+            "target": "gh_token"
+          }
+        ]
+      },
+      "image": "orbita-familos-ideacraft:local",
+      "profiles": [
+        "familos-ideacraft"
+      ],
+      "restart": "unless-stopped",
+      "environment": [
+        "MCP_PORT=7986",
+        "MCP_ARGS="
+      ],
+      "volumes": [
+        "./apps/familos/data:/data:ro",
+        "./apps/familos/data/ideacraft:/data/ideacraft"
+      ],
+      "expose": [
+        "7986"
+      ],
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "1m",
+          "max-file": "1"
+        }
+      },
+      "networks": {
+        "familos": {
+          "aliases": [
+            "ideacraft"
+          ]
+        }
+      },
+      "security_opt": [
+        "no-new-privileges:true"
+      ]
+    },
+    "familos-ideacraft-web": {
+      "build": {
+        "context": "./apps/familos/extras/artcraft",
+        "dockerfile": "Dockerfile.web",
+        "args": {
+          "APP": "ideacraft",
+          "UPSTREAM_SHA": "${FAMILOS_IDEACRAFT_SHA:-}"
+        },
+        "secrets": [
+          {
+            "source": "familos_gh_token",
+            "target": "gh_token"
+          }
+        ]
+      },
+      "image": "orbita-familos-ideacraft-web:local",
+      "profiles": [
+        "familos-ideacraft"
+      ],
+      "restart": "unless-stopped",
+      "expose": [
+        "80"
+      ],
+      "networks": {
+        "familos": {
+          "aliases": [
+            "ideacraft-web"
+          ]
+        }
+      },
+      "security_opt": [
+        "no-new-privileges:true"
+      ]
+    },
+    "familos-mailcraft": {
+      "build": {
+        "context": "./apps/familos/extras/artcraft",
+        "dockerfile": "Dockerfile.mailcraft",
+        "args": {
+          "UPSTREAM_SHA": "${FAMILOS_MAILCRAFT_SHA:-}"
+        },
+        "secrets": [
+          {
+            "source": "familos_gh_token",
+            "target": "gh_token"
+          }
+        ]
+      },
+      "image": "orbita-familos-mailcraft:local",
+      "profiles": [
+        "familos-mailcraft"
+      ],
+      "restart": "unless-stopped",
+      "environment": [
+        "MAILCRAFT_TOKEN=${FAMILOS_MAILCRAFT_TOKEN:-}",
+        "MAILCRAFT_LANG=it",
+        "MCP_PORT=7889",
+        "MAILCRAFT_GOOGLE_CLIENT_ID=${FAMILOS_MAILCRAFT_GOOGLE_CLIENT_ID:-}",
+        "MAILCRAFT_GOOGLE_CLIENT_SECRET=${FAMILOS_MAILCRAFT_GOOGLE_CLIENT_SECRET:-}",
+        "MAILCRAFT_MICROSOFT_CLIENT_ID=${FAMILOS_MAILCRAFT_MICROSOFT_CLIENT_ID:-}",
+        "MAILCRAFT_MICROSOFT_CLIENT_SECRET=${FAMILOS_MAILCRAFT_MICROSOFT_CLIENT_SECRET:-}",
+        "MAILCRAFT_PUBLIC_URL=${FAMILOS_MAILCRAFT_PUBLIC_URL:-}"
+      ],
+      "volumes": [
+        "./apps/familos/private/mailcraft:/mail",
+        "./apps/familos/data:/data:ro",
+        "./apps/familos/data/mailcraft:/data/mailcraft"
+      ],
+      "expose": [
+        "7878",
+        "7889"
+      ],
+      "logging": {
+        "driver": "json-file",
+        "options": {
+          "max-size": "1m",
+          "max-file": "1"
+        }
+      },
+      "networks": {
+        "familos": {
+          "aliases": [
+            "mailcraft"
+          ]
+        }
+      },
+      "security_opt": [
+        "no-new-privileges:true"
+      ]
+    }
+  },
+  "secrets": {
+    "familos_gh_token": {
+      "file": "./apps/familos/private/github-token"
+    }
+  }
+}

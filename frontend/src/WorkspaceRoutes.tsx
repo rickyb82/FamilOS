@@ -1,3 +1,4 @@
+const InstalledApp = lazy(() => import("./pages/InstalledApp"))
 const SafeBrowser = lazy(() => import('./pages/SafeBrowser'))
 const ParentalControls = lazy(() => import('./pages/ParentalControls'))
 import { lazy, Suspense } from 'react'
@@ -26,6 +27,7 @@ export function WorkspaceRoutes() {
         <Route path="/c/:id" element={<Chat />} />
         <Route path="/browser" element={<SafeBrowser />} />
         {me.user.role !== "child" && <Route path="/parental" element={<ParentalControls />} />}
+        <Route path="/installed/:appId" element={<InstalledApp />} />
         <Route path="/apps" element={<Productivity />} />
         <Route path="/productivity/:appId" element={<Productivity />} />
         <Route path="/projects" element={<Projects />} />

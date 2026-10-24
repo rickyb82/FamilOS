@@ -18,7 +18,7 @@ import '../desktop.css'
 const uid = () => crypto.randomUUID()
 const initialPath = () => window.location.pathname + window.location.search
 
-function AppIcon({ app }: { app: AppEntry }) { return <span className={`os-icon ${app.color}`} aria-hidden="true">{app.icon}</span> }
+function AppIcon({ app }: { app: AppEntry }) { return <span className={`os-icon ${app.color}`} aria-hidden="true">{app.iconUrl?<img src={app.iconUrl} width="48" height="48" alt=""/>:app.icon}</span> }
 
 export default function Desktop() {
   const { brand } = useBranding()
@@ -43,7 +43,16 @@ export default function Desktop() {
   const board = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const booted = useRef(false)
-  const apps = desktopApps(me!)
+  const [installed, setInstalled] = useState<AppEntry[]>([])
+  useEffect(() => {
+    let alive = true
+    const refresh = () => get<Array<{id:string;name:string;enabled:boolean;description:string;icon:string}>>('/installed-apps').then(items => {
+      if (alive) setInstalled(items.filter(a=>a.enabled).map(a=>({id:'installed-'+a.id,title:a.name,icon:'▦',iconUrl:'data:image/png;base64,'+a.icon,color:'lavender',path:'/installed/'+a.id,description:a.description})))
+    }).catch(()=>{})
+    refresh(); const timer = window.setInterval(refresh, 10000)
+    return () => {alive=false;clearInterval(timer)}
+  }, [])
+  const apps = [...desktopApps(me!), ...installed]
 
   const focus = useCallback((id: string) => {
     setWindows(ws => {
