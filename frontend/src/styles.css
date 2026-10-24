@@ -879,3 +879,9 @@ html[data-theme="dark"] { .login-primary { background: #fff; color: #111; } .log
   .login-hero { flex: 0 0 auto; padding-bottom: 8px; }
   .login-sheet { width: 100%; max-width: 440px; border-radius: 24px; border: 1px solid var(--border); box-shadow: 0 12px 40px rgba(0,0,0,.08); padding: 26px 24px; }
 }
+
+/* Calls stay inside Messages and inherit its window/fullscreen bounds. */
+.msg-page { position: relative; }
+.msg-page > .call-embedded { position: absolute; inset: 0; z-index: 20; }
+.msg-page > .call-embedded.mini { inset: auto 12px 12px auto; width: min(320px, calc(100% - 24px)); height: min(240px, calc(100% - 24px)); }
+.call-embedded .call-grid { grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); }

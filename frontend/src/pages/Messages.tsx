@@ -5,6 +5,7 @@ import { api, ApiError, del, get, patch, post } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import { useLiveEvents } from '../lib/events'
 import { useWindowActive } from '../lib/desktop'
+import CallOverlay from '../components/CallOverlay'
 import { calls } from '../lib/calls'
 import { canEdit, editorPath } from '../lib/artcraft'
 
@@ -164,6 +165,7 @@ export default function Messages() {
 
   return (
     <div className={`msg-page ${roomId ? 'has-room' : ''}`}>
+      <CallOverlay roomId={roomId} names={Object.fromEntries(contacts.map(c=>[c.id,c.name]))} />
       <aside className="msg-side">
         <div className="msg-side-head">
           <h2>💬 Messaggi</h2>

@@ -141,14 +141,17 @@ class CallManager {
     pc.onicecandidate = (e) => { if (e.candidate) this.signal(peerId, { ice: e.candidate.toJSON() }) }
     pc.ontrack = (e) => { this.streams.set(peerId, e.streams[0] || new MediaStream([e.track])); this.set({ peers: this.peersOut(), status: 'active' }) }
     pc.onconnectionstatechange = () => {
-      if (pc!.connectionState === 'failed' || pc!.connectionState === 'closed') this.dropPeer(peerId)
+      if (pc!.connectionState === 'failed') { this.set({error:'Collegamento audio/video non riuscito. Verifica la connettività WebRTC e la configurazione TURN del server.'}); this.dropPeer(peerId) }
+      else if (pc!.connectionState === 'closed') this.dropPeer(peerId)
       else this.set({ peers: this.peersOut() })
     }
     this.set({ peers: this.peersOut() })
     return pc
   }
   private dropPeer(peerId: string) {
-    this.pcs.get(peerId)?.close(); this.pcs.delete(peerId); this.streams.delete(peerId)
+    const pc = this.pcs.get(peerId)
+    this.pcs.delete(peerId); this.streams.delete(peerId)
+    if(pc){pc.onconnectionstatechange=null;pc.close()}
     this.set({ peers: this.peersOut() })
   }
   private async offer(peerId: string) {

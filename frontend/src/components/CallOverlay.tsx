@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { calls, type CallState } from '../lib/calls'
 
 /** Chiamata in corso e squillo in arrivo, sopra tutta l'app (portal su body). Riducibile a una finestrella. */
-export default function CallOverlay({ names }: { names: Record<string, string> }) {
+export default function CallOverlay({ names, mode = "embedded", roomId, onAnswer }: { names: Record<string, string>; mode?: "embedded" | "incoming"; roomId?: string | null; onAnswer?: (roomId:string)=>void }) {
   const [s, setS] = useState<CallState>(calls.state)
   const [mini, setMini] = useState(false)
   const [now, setNow] = useState(Date.now())
@@ -16,9 +15,9 @@ export default function CallOverlay({ names }: { names: Record<string, string> }
   const dur = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`
   const nm = (id: string) => names[id] || 'Partecipante'
 
-  return createPortal(
+  return (
     <>
-      {s.incoming && s.status === 'idle' && (
+      {mode === 'incoming' && s.incoming && s.status === 'idle' && (
         <div className="call-ring" role="dialog" aria-label="Chiamata in arrivo">
           <div className="call-ring-avatar">{s.incoming.video ? '🎥' : '📞'}</div>
           <div className="call-ring-text">
@@ -26,16 +25,17 @@ export default function CallOverlay({ names }: { names: Record<string, string> }
             <small>{s.incoming.video ? 'Videochiamata' : 'Chiamata'}{s.incoming.roomName ? ` · ${s.incoming.roomName}` : ''}</small>
           </div>
           <button className="call-btn red" title="Rifiuta" onClick={() => calls.decline()}>✕</button>
-          <button className="call-btn green" title="Rispondi" onClick={() => calls.accept()}>{s.incoming.video ? '🎥' : '📞'}</button>
+          <button className="call-btn green" title="Rispondi" onClick={() => { onAnswer?.(s.incoming!.roomId); void calls.accept() }}>{s.incoming.video ? '🎥' : '📞'}</button>
         </div>
       )}
-      {s.error && s.status === 'idle' && <div className="call-error" onClick={() => calls.clearError()}>{s.error}</div>}
-      {s.status !== 'idle' && (
-        <div className={`call-overlay ${mini ? 'mini' : ''}`}>
+      {mode === 'incoming' && s.error && s.status === 'idle' && <div className="call-error" onClick={() => calls.clearError()}>{s.error}</div>}
+      {mode === 'embedded' && s.status !== 'idle' && s.roomId === roomId && (
+        <div className={`call-overlay call-embedded ${mini ? 'mini' : ''}`}>
           <div className="call-head">
             <span>{s.video ? '🎥' : '📞'} <b>{s.roomName || (s.peers[0] ? nm(s.peers[0].id) : 'Chiamata')}</b></span>
             <small>{s.status === 'starting' ? 'Avvio…' : s.status === 'calling' ? 'Squilla…' : dur}</small>
             {s.notice && <small className="call-notice">{s.notice}</small>}
+            {s.error && <small role="alert">{s.error}</small>}
             <span style={{ flex: 1 }} />
             <button className="call-icon" title={mini ? 'Ingrandisci' : 'Riduci'} onClick={() => setMini(!mini)}>{mini ? '⤢' : '—'}</button>
           </div>
@@ -52,14 +52,13 @@ export default function CallOverlay({ names }: { names: Record<string, string> }
           </div>
         </div>
       )}
-    </>,
-    document.body,
+    </>
   )
 }
 
 function Tile({ stream, label, video, self, muted, state }: { stream: MediaStream | null; label: string; video: boolean; self?: boolean; muted?: boolean; state?: string }) {
-  const v = useRef<HTMLVideoElement>(null)
-  const a = useRef<HTMLAudioElement>(null)
+  const v = useRef<HTMLVideoElement | null>(null)
+  const a = useRef<HTMLAudioElement | null>(null)
   useEffect(() => {
     if (v.current && v.current.srcObject !== stream) v.current.srcObject = stream
     if (a.current && a.current.srcObject !== stream) a.current.srcObject = stream
@@ -67,8 +66,8 @@ function Tile({ stream, label, video, self, muted, state }: { stream: MediaStrea
   const hasVideo = video && !!stream?.getVideoTracks().some((t) => t.enabled && t.readyState === 'live')
   return (
     <div className={`call-tile ${self ? 'self' : ''}`}>
-      {hasVideo ? <video ref={v} autoPlay playsInline muted={self} className={self ? 'mirror' : ''} /> : <div className="call-noface">{label.slice(0, 1).toUpperCase()}</div>}
-      {!self && !hasVideo && <audio ref={a} autoPlay />}
+      {hasVideo ? <video ref={node => { v.current=node; if(node && node.srcObject!==stream)node.srcObject=stream }} autoPlay playsInline muted={self} className={self ? 'mirror' : ''} /> : <div className="call-noface">{label.slice(0, 1).toUpperCase()}</div>}
+      {!self && !hasVideo && <audio ref={node => { a.current=node; if(node && node.srcObject!==stream)node.srcObject=stream }} autoPlay />}
       <span className="call-name">{label}{muted ? ' 🔇' : ''}{state && state !== 'connected' && state !== 'new' ? ` · ${state === 'connecting' ? 'collegamento…' : state}` : ''}</span>
     </div>
   )

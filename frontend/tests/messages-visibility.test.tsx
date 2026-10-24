@@ -8,6 +8,7 @@ import { WindowActivity } from '../src/lib/desktop'
 import { post } from '../src/lib/api'
 vi.mock('../src/lib/auth',()=>({useAuth:()=>({me:{user:{id:'me'},features:{messaggi:true}}})}))
 vi.mock('../src/lib/events',()=>({useLiveEvents:vi.fn()}))
+vi.mock('../src/components/CallOverlay',()=>({default:()=>null}))
 vi.mock('../src/lib/calls',()=>({calls:{state:{},join:vi.fn()}}))
 vi.mock('../src/lib/api',()=>({post:vi.fn(async()=>({})),get:vi.fn(async(path:string)=>path.includes('/messages')?{messages:[],more:false}:[]),api:vi.fn(),ApiError:class{},patch:vi.fn(),del:vi.fn()}))
 afterEach(()=>{cleanup();vi.clearAllMocks()})
