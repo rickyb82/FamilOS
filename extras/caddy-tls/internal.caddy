@@ -1,0 +1,3 @@
+# Certificato emesso dalla CA interna di Caddy: per server in rete locale senza nome pubblico (anche con un indirizzo IP).
+# I PC devono fidarsi della CA: ./familai.sh ca-cert esporta data/emily-ca.crt da installare come autorita' attendibile.
+tls internal

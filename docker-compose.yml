@@ -1,0 +1,412 @@
+# FamilOS: family core and optional productivity suite.
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+    - SEARXNG_URL=${SEARXNG_URL:-http://searxng:8080}
+    - FAMILAI_IN_DOCKER=1
+    - DATA_DIR=/data
+    - DATABASE_URL=sqlite+aiosqlite:////data/familai.db
+    - SANDBOX_URL=http://sandbox:8080
+    - WORDCRAFT_HOST=${WORDCRAFT_HOST:-}
+    - WORDCRAFT_WEB=${WORDCRAFT_WEB:-0}
+    - GRIDCRAFT_HOST=${GRIDCRAFT_HOST:-}
+    - GRIDCRAFT_WEB=${GRIDCRAFT_WEB:-0}
+    - PDFCRAFT_HOST=${PDFCRAFT_HOST:-}
+    - PDFCRAFT_WEB=${PDFCRAFT_WEB:-0}
+    - DECKCRAFT_HOST=${DECKCRAFT_HOST:-}
+    - DECKCRAFT_WEB=${DECKCRAFT_WEB:-0}
+    - IDEACRAFT_HOST=${IDEACRAFT_HOST:-}
+    - IDEACRAFT_WEB=${IDEACRAFT_WEB:-0}
+    - MAILCRAFT_URL=${MAILCRAFT_URL:-}
+    - MAILCRAFT_MCP_HOST=${MAILCRAFT_MCP_HOST:-}
+    - MAILCRAFT_TOKEN=${MAILCRAFT_TOKEN:-}
+    - TURN_URLS=${TURN_URLS:-}
+    - TURN_SECRET=${TURN_SECRET:-}
+    - STUN_URLS=${STUN_URLS:-}
+    volumes:
+    - ./data:/data
+    - ./mcp_servers.json:/app/mcp_servers.json:ro
+    expose:
+    - '8000'
+    healthcheck:
+      test:
+      - CMD
+      - python
+      - -c
+      - import urllib.request;urllib.request.urlopen('http://localhost:8000/api/health')
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+    - default
+    - sandbox_net
+    depends_on:
+    - sandbox
+    extra_hosts:
+    - host.docker.internal:host-gateway
+  sandbox:
+    build: ./sandbox
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+    - /tmp:size=256m,mode=1777
+    - /work:size=512m,uid=10001,gid=10001
+    networks:
+    - sandbox_net
+    security_opt:
+    - no-new-privileges:true
+    cap_drop:
+    - ALL
+    pids_limit: 256
+    mem_limit: 1g
+    cpus: 1.0
+    environment:
+    - SANDBOX_MAX_TIMEOUT=120
+    healthcheck:
+      test:
+      - CMD
+      - python
+      - -c
+      - import urllib.request;urllib.request.urlopen('http://localhost:8080/health')
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    expose:
+    - '80'
+    depends_on:
+    - backend
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+    - PUBLIC_HOST=${PUBLIC_HOST:-localhost}
+    - EXTRA_HOSTS=${EXTRA_HOSTS:-}
+    - ACME_EMAIL=${ACME_EMAIL:-}
+    - ACME_CA=${ACME_CA:-https://acme-v02.api.letsencrypt.org/directory}
+    - TLS_MODE=${TLS_MODE:-acme}
+    - TLS_DEFAULT_SNI=${TLS_DEFAULT_SNI:-localhost}
+    - HTTP_PORT=${HTTP_PORT:-80}
+    - HTTPS_PORT=${HTTPS_PORT:-443}
+    ports:
+    - ${HTTP_PORT:-80}:${HTTP_PORT:-80}
+    - ${HTTPS_PORT:-443}:${HTTPS_PORT:-443}
+    - ${HTTPS_PORT:-443}:${HTTPS_PORT:-443}/udp
+    volumes:
+    - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    - ./extras/caddy-tls:/etc/caddy/tls:ro
+    - ./data/installation/tls:/etc/caddy/installation/tls:ro
+    - caddy_data:/data
+    - caddy_config:/config
+    depends_on:
+    - backend
+    - frontend
+  searxng:
+    image: searxng/searxng:latest
+    restart: unless-stopped
+    environment:
+    - SEARXNG_BASE_URL=http://searxng:8080/
+    - SEARXNG_SECRET=${SECRET_KEY:-cambiami}
+    volumes:
+    - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    - searxng_cache:/var/cache/searxng
+    cap_drop:
+    - ALL
+    cap_add:
+    - CHOWN
+    - SETGID
+    - SETUID
+    logging:
+      driver: json-file
+      options:
+        max-size: 1m
+        max-file: '1'
+  ollama:
+    image: ollama/ollama:latest
+    profiles:
+    - ollama
+    restart: unless-stopped
+    volumes:
+    - ollama_models:/root/.ollama
+  wordcraft:
+    build:
+      context: extras/artcraft
+      dockerfile: Dockerfile.cli
+      args:
+        APP: wordcraft
+        UPSTREAM_SHA: ${WORDCRAFT_SHA:-}
+      secrets:
+      - gh_token
+    image: familai-wordcraft
+    profiles:
+    - wordcraft
+    restart: unless-stopped
+    environment:
+    - MCP_PORT=7982
+    - MCP_ARGS=--author FamilAI --automation-read-root /data --automation-write-root /data/wordcraft
+    volumes:
+    - ./data:/data
+    expose:
+    - '7982'
+    logging:
+      driver: json-file
+      options:
+        max-size: 1m
+        max-file: '1'
+  wordcraft-web:
+    build:
+      context: extras/artcraft
+      dockerfile: Dockerfile.web
+      args:
+        APP: wordcraft
+        UPSTREAM_SHA: ${WORDCRAFT_SHA:-}
+      secrets:
+      - gh_token
+    image: familai-wordcraft-web
+    profiles:
+    - wordcraft
+    restart: unless-stopped
+    expose:
+    - '80'
+  gridcraft:
+    build:
+      context: extras/artcraft
+      dockerfile: Dockerfile.cli
+      args:
+        APP: gridcraft
+        UPSTREAM_SHA: ${GRIDCRAFT_SHA:-}
+      secrets:
+      - gh_token
+    image: familai-gridcraft
+    profiles:
+    - gridcraft
+    restart: unless-stopped
+    environment:
+    - MCP_PORT=7983
+    - MCP_ARGS=
+    volumes:
+    - ./data:/data:ro
+    - ./data/gridcraft:/data/gridcraft
+    expose:
+    - '7983'
+    logging:
+      driver: json-file
+      options:
+        max-size: 1m
+        max-file: '1'
+  gridcraft-web:
+    build:
+      context: extras/artcraft
+      dockerfile: Dockerfile.web
+      args:
+        APP: gridcraft
+        UPSTREAM_SHA: ${GRIDCRAFT_SHA:-}
+      secrets:
+      - gh_token
+    image: familai-gridcraft-web
+    profiles:
+    - gridcraft
+    restart: unless-stopped
+    expose:
+    - '80'
+  pdfcraft:
+    build:
+      context: extras/artcraft
+      dockerfile: Dockerfile.cli
+      args:
+        APP: pdfcraft
+        UPSTREAM_SHA: ${PDFCRAFT_SHA:-}
+      secrets:
+      - gh_token
+    image: familai-pdfcraft
+    profiles:
+    - pdfcraft
+    restart: unless-stopped
+    environment:
+    - MCP_PORT=7984
+    - MCP_ARGS=--root /data --compact
+    volumes:
+    - ./data:/data:ro
+    - ./data/pdfcraft:/data/pdfcraft
+    expose:
+    - '7984'
+    logging:
+      driver: json-file
+      options:
+        max-size: 1m
+        max-file: '1'
+  pdfcraft-web:
+    build:
+      context: extras/artcraft
+      dockerfile: Dockerfile.web
+      args:
+        APP: pdfcraft
+        UPSTREAM_SHA: ${PDFCRAFT_SHA:-}
+      secrets:
+      - gh_token
+    image: familai-pdfcraft-web
+    profiles:
+    - pdfcraft
+    restart: unless-stopped
+    expose:
+    - '80'
+  deckcraft:
+    build:
+      context: extras/artcraft
+      dockerfile: Dockerfile.cli
+      args:
+        APP: deckcraft
+        UPSTREAM_SHA: ${DECKCRAFT_SHA:-}
+      secrets:
+      - gh_token
+    image: familai-deckcraft
+    profiles:
+    - deckcraft
+    restart: unless-stopped
+    environment:
+    - MCP_PORT=7985
+    - MCP_ARGS=
+    volumes:
+    - ./data:/data:ro
+    - ./data/deckcraft:/data/deckcraft
+    expose:
+    - '7985'
+    logging:
+      driver: json-file
+      options:
+        max-size: 1m
+        max-file: '1'
+  deckcraft-web:
+    build:
+      context: extras/artcraft
+      dockerfile: Dockerfile.web
+      args:
+        APP: deckcraft
+        UPSTREAM_SHA: ${DECKCRAFT_SHA:-}
+      secrets:
+      - gh_token
+    image: familai-deckcraft-web
+    profiles:
+    - deckcraft
+    restart: unless-stopped
+    expose:
+    - '80'
+  ideacraft:
+    build:
+      context: extras/artcraft
+      dockerfile: Dockerfile.cli
+      args:
+        APP: ideacraft
+        UPSTREAM_SHA: ${IDEACRAFT_SHA:-}
+      secrets:
+      - gh_token
+    image: familai-ideacraft
+    profiles:
+    - ideacraft
+    restart: unless-stopped
+    environment:
+    - MCP_PORT=7986
+    - MCP_ARGS=
+    volumes:
+    - ./data:/data:ro
+    - ./data/ideacraft:/data/ideacraft
+    expose:
+    - '7986'
+    logging:
+      driver: json-file
+      options:
+        max-size: 1m
+        max-file: '1'
+  ideacraft-web:
+    build:
+      context: extras/artcraft
+      dockerfile: Dockerfile.web
+      args:
+        APP: ideacraft
+        UPSTREAM_SHA: ${IDEACRAFT_SHA:-}
+      secrets:
+      - gh_token
+    image: familai-ideacraft-web
+    profiles:
+    - ideacraft
+    restart: unless-stopped
+    expose:
+    - '80'
+  mailcraft:
+    build:
+      context: extras/artcraft
+      dockerfile: Dockerfile.mailcraft
+      args:
+        UPSTREAM_SHA: ${MAILCRAFT_SHA:-}
+      secrets:
+      - gh_token
+    image: familai-mailcraft
+    profiles:
+    - mailcraft
+    restart: unless-stopped
+    environment:
+    - MAILCRAFT_TOKEN=${MAILCRAFT_TOKEN:-}
+    - MAILCRAFT_LANG=it
+    - MCP_PORT=7889
+    - MAILCRAFT_GOOGLE_CLIENT_ID=${MAILCRAFT_GOOGLE_CLIENT_ID:-}
+    - MAILCRAFT_GOOGLE_CLIENT_SECRET=${MAILCRAFT_GOOGLE_CLIENT_SECRET:-}
+    - MAILCRAFT_MICROSOFT_CLIENT_ID=${MAILCRAFT_MICROSOFT_CLIENT_ID:-}
+    - MAILCRAFT_MICROSOFT_CLIENT_SECRET=${MAILCRAFT_MICROSOFT_CLIENT_SECRET:-}
+    - MAILCRAFT_PUBLIC_URL=${MAILCRAFT_PUBLIC_URL:-}
+    volumes:
+    - ./private/mailcraft:/mail
+    - ./data:/data:ro
+    - ./data/mailcraft:/data/mailcraft
+    expose:
+    - '7878'
+    - '7889'
+    logging:
+      driver: json-file
+      options:
+        max-size: 1m
+        max-file: '1'
+  coturn:
+    image: coturn/coturn:4.6
+    profiles:
+    - turn
+    restart: unless-stopped
+    network_mode: host
+    environment:
+    - TURN_SECRET=${TURN_SECRET:-}
+    - TURN_REALM=${TURN_REALM:-emily}
+    - TURN_EXTERNAL_IP=${TURN_EXTERNAL_IP:-}
+    - TURN_ALLOW_PRIVATE=${TURN_ALLOW_PRIVATE:-}
+    entrypoint:
+    - /bin/sh
+    - -c
+    command:
+    - PRIV="--denied-peer-ip=10.0.0.0-10.255.255.255 --denied-peer-ip=100.64.0.0-100.127.255.255 --denied-peer-ip=172.16.0.0-172.31.255.255
+      --denied-peer-ip=192.168.0.0-192.168.255.255"; [ "$$TURN_ALLOW_PRIVATE" = 1 ] && PRIV=""; exec turnserver -n --listening-port=3478
+      --min-port=49160 --max-port=49200 --fingerprint --use-auth-secret --static-auth-secret="$$TURN_SECRET" --realm="$$TURN_REALM"
+      $${TURN_EXTERNAL_IP:+--external-ip=$$TURN_EXTERNAL_IP} --no-cli --no-tls --no-dtls --no-multicast-peers --no-tcp-relay
+      --denied-peer-ip=0.0.0.0-0.255.255.255 --denied-peer-ip=127.0.0.0-127.255.255.255 --denied-peer-ip=169.254.0.0-169.254.255.255
+      $$PRIV --log-file=stdout
+    logging:
+      driver: json-file
+      options:
+        max-size: 2m
+        max-file: '2'
+networks:
+  default: null
+  sandbox_net:
+    internal: true
+volumes:
+  searxng_cache: null
+  ollama_models: null
+  caddy_data: null
+  caddy_config: null
+secrets:
+  gh_token:
+    file: ./private/github-token

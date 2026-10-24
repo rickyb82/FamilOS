@@ -1,0 +1,16 @@
+.env
+data/
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+frontend/dist/
+backups/
+.familai-mode
+_to_delete/
+.deploy
+private/
+.pytest_cache/
+backend/emily-test-*/
+
+backend/pytest-of-*/

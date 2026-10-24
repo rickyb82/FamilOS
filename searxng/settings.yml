@@ -1,0 +1,38 @@
+# SearXNG per FamilAI: metamotore (Google, Bing, DuckDuckGo, Wikipedia...) con API JSON, solo sulla rete interna del compose.
+use_default_settings: true
+
+general:
+  instance_name: "FamilAI Search"
+  debug: false
+
+server:
+  secret_key: "cambiami-viene-sovrascritto-da-SEARXNG_SECRET"   # sovrascritto dalla variabile d'ambiente SEARXNG_SECRET
+  limiter: false          # niente rate-limit: lo usa solo il backend
+  image_proxy: false
+  bind_address: "0.0.0.0"
+  port: 8080
+
+search:
+  safe_search: 0          # il backend passa safesearch=2 per i bambini
+  autocomplete: ""
+  default_lang: "it-IT"
+  formats:
+    - html
+    - json
+
+ui:
+  static_use_hash: true
+
+engines:
+  - name: google
+    disabled: false
+  - name: bing
+    disabled: false
+  - name: duckduckgo
+    disabled: false
+  - name: wikipedia
+    disabled: false
+  - name: brave
+    disabled: false
+  - name: qwant
+    disabled: true

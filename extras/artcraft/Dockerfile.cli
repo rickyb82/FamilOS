@@ -1,0 +1,36 @@
+# App "ArtCraft" (WordCraft, GridCraft, PdfCraft…): CLI headless con server MCP, compilata dal sorgente Rust.
+# Il server MCP parla su stdio; socat lo espone su una porta della rete Docker dove il backend FamilAI lo raggiunge
+# (una sessione nuova per ogni connessione). I file passano dalla cartella condivisa /data.
+# Prima build: 15-40 minuti e qualche GB di cache; le successive sono rapide (cache di cargo e target).
+# Un'app senza server MCP puo' girare in MODE=http (cli-server.py espone la CLI) finche' non lo acquisisce.
+ARG APP=wordcraft
+ARG REPO=https://github.com/rickyb82/${APP}
+ARG REF=main
+# commit upstream (solo per invalidare la cache di build quando il repository e' cambiato: ./familai.sh <app> upgrade)
+ARG UPSTREAM_SHA=
+
+FROM rust:1-bookworm AS build
+ARG APP
+ARG REPO
+ARG REF
+ARG UPSTREAM_SHA
+RUN apt-get update && apt-get install -y --no-install-recommends git pkg-config cmake clang libclang-dev perl \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN --mount=type=secret,id=gh_token set -e; t="$(tr -d ' \r\n' 2>/dev/null < /run/secrets/gh_token || true)"; if [ -n "$t" ]; then export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$t" | base64 | tr -d '\n')"; fi; \
+    echo "upstream: ${UPSTREAM_SHA:-latest}" && git clone --depth 1 --branch "$REF" "$REPO" . && git rev-parse HEAD
+RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry \
+    --mount=type=cache,target=/src/target,id=target-cli-${APP} \
+    cargo build --release -p ${APP}-cli && cp target/release/${APP}-cli /usr/local/bin/${APP}-cli
+
+FROM debian:bookworm-slim
+ARG APP
+RUN apt-get update && apt-get install -y --no-install-recommends socat ca-certificates fontconfig python3 \
+    fonts-dejavu fonts-liberation2 fonts-noto-core fonts-crosextra-carlito fonts-crosextra-caladea \
+    && rm -rf /var/lib/apt/lists/* && fc-cache -f
+COPY --from=build /usr/local/bin/${APP}-* /usr/local/bin/
+COPY serve-mcp.sh /usr/local/bin/serve-mcp
+COPY cli-server.py /usr/local/bin/cli-server.py
+RUN chmod +x /usr/local/bin/serve-mcp && mkdir -p /data/${APP}
+ENV APP=${APP} WORDCRAFT_NO_PREFS=1 GRIDCRAFT_NO_PREFS=1 PDFCRAFT_NO_PREFS=1 MODE=mcp MCP_PORT=7982 MCP_ARGS="" HTTP_PORT=7986
+CMD ["serve-mcp"]

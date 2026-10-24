@@ -1,0 +1,39 @@
+# MailCraft (https://github.com/rickyb82/mailcraft): posta elettronica IMAP/SMTP per ogni utente di FamilAI.
+# Un solo container: `mailcraft-cli serve` multi-utente (API + web app WebAssembly, una cartella per utente sotto /mail/users;
+# /data e' la cartella file di FamilAI, montata per gli allegati) e, su un'altra porta, il server MCP per utente (mailcraft-cli mcp --server … --token <token utente>) esposto via socat:
+# il backend manda il token dell'utente come prima riga, poi parla MCP (vedi mailcraft-mcp-user.sh).
+# Prima build: 20-40 minuti (compila Rust e WebAssembly); le successive sono rapide grazie alla cache.
+ARG REPO=https://github.com/rickyb82/mailcraft
+ARG REF=main
+# commit upstream (solo per invalidare la cache di build quando il repository e' cambiato: ./familai.sh mailcraft upgrade)
+ARG UPSTREAM_SHA=
+
+FROM rust:1-bookworm AS build
+ARG REPO
+ARG REF
+ARG UPSTREAM_SHA
+RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+RUN set -eux; arch="$(uname -m)"; case "$arch" in x86_64) t=x86_64-unknown-linux-gnu;; aarch64|arm64) t=aarch64-unknown-linux-gnu;; *) echo "arch $arch non supportata"; exit 1;; esac; \
+    curl -fsSL "https://github.com/trunk-rs/trunk/releases/latest/download/trunk-${t}.tar.gz" | tar xz -C /usr/local/bin trunk; trunk --version
+WORKDIR /src
+RUN --mount=type=secret,id=gh_token set -e; t="$(tr -d ' \r\n' 2>/dev/null < /run/secrets/gh_token || true)"; if [ -n "$t" ]; then export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$t" | base64 | tr -d '\n')"; fi; \
+    echo "upstream: ${UPSTREAM_SHA:-latest}" && git clone --depth 1 --branch "$REF" "$REPO" . && git rev-parse HEAD
+# il rust-toolchain.toml del repository puo' chiedere un'altra versione: rustup la scarica, qui le aggiungiamo il target wasm
+RUN rustup target add wasm32-unknown-unknown
+RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry \
+    --mount=type=cache,target=/src/target,id=target-mailcraft \
+    cargo build --release -p mailcraft-cli && cp target/release/mailcraft-cli /usr/local/bin/mailcraft-cli \
+    && cd apps/mailcraft-web && trunk build --release && ls -la /src/dist/web
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends socat ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=build /usr/local/bin/mailcraft-cli /usr/local/bin/mailcraft-cli
+COPY --from=build /src/dist/web /app/web
+COPY mailcraft-start.sh /usr/local/bin/mailcraft-start
+COPY mailcraft-mcp-user.sh /usr/local/bin/mailcraft-mcp-user
+RUN chmod +x /usr/local/bin/mailcraft-start /usr/local/bin/mailcraft-mcp-user && mkdir -p /mail/users /data/mailcraft
+VOLUME ["/mail"]
+EXPOSE 7878 7889
+ENV MAILCRAFT_TOKEN="" MAILCRAFT_LANG=it MCP_PORT=7889
+CMD ["mailcraft-start"]

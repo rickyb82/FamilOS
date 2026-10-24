@@ -1,0 +1,19 @@
+{
+  "_comment": "Server MCP disponibili al framework. type: 'stdio' (comando locale nel container backend) o 'http' (Streamable HTTP). 'min_role' limita chi puo' usarli: child | adult | admin.",
+  "servers": {
+    "filesystem-esempio": {
+      "enabled": false,
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/data/shared"],
+      "min_role": "adult"
+    },
+    "remoto-esempio": {
+      "enabled": false,
+      "type": "http",
+      "url": "http://192.168.1.50:8080/mcp",
+      "headers": {},
+      "min_role": "admin"
+    }
+  }
+}

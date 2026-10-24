@@ -1,0 +1,7 @@
+# Let’s Encrypt; staging is selected by ACME_CA in the deployment configuration.
+tls {
+    issuer acme {
+        dir {$ACME_CA:https://acme-v02.api.letsencrypt.org/directory}
+        email {$ACME_EMAIL}
+    }
+}

@@ -1,0 +1,9 @@
+data/
+.env
+**/node_modules
+**/dist
+**/__pycache__
+frontend/
+sandbox/
+backups/
+.git/

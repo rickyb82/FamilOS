@@ -1,0 +1,37 @@
+# App "ArtCraft" nel browser (WebAssembly): l'editor completo servito da FamilAI su /<app>/.
+# trunk compila apps/<app>-web per wasm32 (lunga come la CLI la prima volta). Prima della build viene applicata
+# familai-web-patch.py: ?open=<url> apre un file del server, ?save=<url> fa salvare sul server invece di scaricare,
+# ?lang=it avvia l'interfaccia in italiano (per GridCraft la traduzione italiana viene aggiunta se manca nel sorgente).
+ARG APP=wordcraft
+ARG REPO=https://github.com/rickyb82/${APP}
+ARG REF=main
+# commit upstream (solo per invalidare la cache di build quando il repository e' cambiato: ./familai.sh <app> upgrade)
+ARG UPSTREAM_SHA=
+
+FROM rust:1-bookworm AS build
+ARG APP
+ARG REPO
+ARG REF
+ARG UPSTREAM_SHA
+RUN apt-get update && apt-get install -y --no-install-recommends git python3 curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN rustup target add wasm32-unknown-unknown
+# trunk: binario precompilato (x86_64 o arm64)
+RUN set -eux; arch="$(uname -m)"; case "$arch" in x86_64) t=x86_64-unknown-linux-gnu;; aarch64|arm64) t=aarch64-unknown-linux-gnu;; *) echo "arch $arch non supportata"; exit 1;; esac; \
+    curl -fsSL "https://github.com/trunk-rs/trunk/releases/latest/download/trunk-${t}.tar.gz" | tar xz -C /usr/local/bin trunk; trunk --version
+WORKDIR /src
+RUN --mount=type=secret,id=gh_token set -e; t="$(tr -d ' \r\n' 2>/dev/null < /run/secrets/gh_token || true)"; if [ -n "$t" ]; then export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$t" | base64 | tr -d '\n')"; fi; \
+    echo "upstream: ${UPSTREAM_SHA:-latest}" && git clone --depth 1 --branch "$REF" "$REPO" . && git rev-parse HEAD
+COPY familai-web-patch.py gridcraft-it.rs deckcraft-it.json /
+RUN python3 /familai-web-patch.py /src ${APP}
+WORKDIR /src/apps/${APP}-web
+# un rust-toolchain.toml nel repository puo' chiedere un'altra versione: rustup la scarica, qui le aggiungiamo il target wasm
+RUN rustup target add wasm32-unknown-unknown
+RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry \
+    --mount=type=cache,target=/src/target,id=target-web-${APP} \
+    trunk build --release && ls -la /src/dist/web
+
+FROM nginx:alpine
+COPY --from=build /src/dist/web /usr/share/nginx/html
+RUN printf 'server {\n  listen 80;\n  root /usr/share/nginx/html;\n  index index.html;\n  include /etc/nginx/mime.types;\n  gzip on; gzip_types application/wasm application/javascript text/css;\n  location / { try_files $uri $uri/ /index.html; add_header Cache-Control "public, max-age=86400"; }\n  location = /index.html { add_header Cache-Control "no-cache"; }\n}\n' > /etc/nginx/conf.d/default.conf
+EXPOSE 80

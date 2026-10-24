@@ -1,0 +1,17 @@
+# Portainer CE: pannello web per gestire Docker (container, immagini, volumi, stack compose) sulla macchina.
+# Avvio/stop: ./familai.sh portainer up | down | logs      Interfaccia: https://<ip-macchina>:9443
+# Al primo accesso (entro 5 minuti dall'avvio) crea l'utente amministratore. Il certificato e' autofirmato: il browser
+# avvisa una volta; e' pensato per l'uso in rete locale, non va esposto su internet senza una protezione davanti.
+services:
+  portainer:
+    image: portainer/portainer-ce:lts
+    container_name: portainer
+    restart: unless-stopped
+    ports:
+      - "9443:9443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+
+volumes:
+  portainer_data:

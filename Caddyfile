@@ -1,0 +1,58 @@
+{
+    http_port {$HTTP_PORT:80}
+    https_port {$HTTPS_PORT:443}
+    default_sni {$TLS_DEFAULT_SNI:localhost}
+}
+{$PUBLIC_HOST} {$EXTRA_HOSTS} {
+    import /etc/caddy/tls/{$TLS_MODE:acme}.caddy
+    header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "camera=(self), microphone=(self), display-capture=(self), geolocation=(), publickey-credentials-get=(self)"
+        -Server
+    }
+    handle /api/* {
+        reverse_proxy backend:8000 {
+            flush_interval -1
+            header_up X-Real-IP {remote_host}
+        }
+    }
+    handle /files/* {
+        reverse_proxy backend:8000
+    }
+    handle /.well-known/* {
+        reverse_proxy backend:8000
+    }
+    handle_path /wordcraft/* {
+        encode zstd gzip
+        reverse_proxy wordcraft-web:80
+    }
+    handle_path /gridcraft/* {
+        encode zstd gzip
+        reverse_proxy gridcraft-web:80
+    }
+    handle_path /pdfcraft/* {
+        encode zstd gzip
+        reverse_proxy pdfcraft-web:80
+    }
+    handle_path /deckcraft/* {
+        encode zstd gzip
+        reverse_proxy deckcraft-web:80
+    }
+    handle_path /ideacraft/* {
+        encode zstd gzip
+        reverse_proxy ideacraft-web:80
+    }
+    handle_path /mailcraft/* {
+        encode zstd gzip
+        reverse_proxy mailcraft:7878 {
+            header_up X-Forwarded-Prefix /mailcraft
+        }
+    }
+    handle {
+        encode zstd gzip
+        reverse_proxy frontend:80
+    }
+}

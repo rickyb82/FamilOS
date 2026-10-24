@@ -1,0 +1,28 @@
+.folder-dialog-backdrop { position:absolute; inset:0; z-index:100; background:#24202c20; backdrop-filter:blur(3px); display:flex; align-items:center; justify-content:center; padding:20px; }
+.folder-dialog { width:360px; max-width:100%; border:1px solid #ffffffb3; border-radius:14px; overflow:hidden; color:#39343f; background:linear-gradient(160deg,#f9f8fc,#eeebf2); box-shadow:0 25px 65px #2820313d,0 0 0 1px #00000012; animation:folder-dialog-in .16s ease-out; }
+.folder-dialog-titlebar { height:35px; display:flex; align-items:center; position:relative; padding:0 13px; border-bottom:1px solid #ded9e380; background:#eeebf280; }
+.folder-dialog-titlebar>span { position:absolute; left:50%; transform:translateX(-50%); font-size:11px; font-weight:600; color:#8e8497; }
+.folder-dialog-close { width:13px; height:13px; display:grid; place-items:center; padding:0; border-radius:50%; border:1px solid #d6918c; background:#eeaba6; color:#9e5a54; font-size:12px; line-height:10px; }
+.folder-dialog-content { padding:21px 25px 4px; }
+.folder-dialog-icon { width:66px; height:55px; display:block; margin:0 auto 15px; filter:drop-shadow(0 3px 3px #27699d15); }
+.folder-dialog h2 { margin:0 0 9px; font-size:17px; font-weight:650; text-align:center; letter-spacing:-.35px; }
+.folder-dialog-content>p:not(.folder-dialog-error) { margin:0 auto 23px; max-width:270px; font-size:12px; text-align:center; line-height:1.55; color:#8d8396; }
+.folder-dialog-content strong { color:#73667f; font-weight:550; }
+.folder-dialog label { font-size:11px; font-weight:550; color:#83758e; margin-bottom:7px; }
+.folder-dialog input { display:block; width:100%; border:1px solid #c9c1d3; box-shadow:0 0 0 3px #a99bbb33; outline:0; background:#fff; color:#49404f; border-radius:6px; padding:8px 10px; font-size:13px; }
+.folder-dialog input:focus { border-color:#a495b7; box-shadow:0 0 0 3px #a99bbb55; }
+.folder-dialog input::selection { background:#d6c7e6; }
+.folder-dialog .folder-dialog-error { font-size:11px; color:#b34c56; margin:10px 0 0; line-height:1.5; }
+.folder-dialog-actions { display:flex; justify-content:flex-end; gap:8px; padding:20px 25px 23px; }
+.folder-dialog-actions button { border:1px solid #d5cedd; border-radius:6px; padding:6px 15px; font-size:12px; min-width:85px; background:linear-gradient(#fff,#f6f3f8); box-shadow:0 1px 2px #493c5a0a; color:#72627f; }
+.folder-dialog-actions button.folder-dialog-create { background:linear-gradient(#a89abd,#9381ac); border-color:#9381ac; color:white; }
+.folder-dialog-actions button:disabled { opacity:.5; cursor:default; }
+.finder-background-menu { position:fixed; z-index:200; width:215px; background:#f5f2f9ed; color:#655870; backdrop-filter:blur(22px); border:1px solid #fff; padding:5px; border-radius:9px; box-shadow:0 9px 30px #392d4e30; }
+.finder-background-menu button { display:flex; align-items:center; gap:10px; width:100%; text-align:left; border:0; background:transparent; border-radius:5px; padding:8px 10px; font-size:12px; color:inherit; }
+.finder-background-menu button:hover,.finder-background-menu button:focus { background:#a191b8; color:#fff; outline:0; }
+.finder-background-menu .folder-menu-divider { border-top:1px solid #d4cadd80; margin:4px 7px; }
+.finder-background-menu kbd { margin-left:auto; font-size:10px; color:#a295ad; }
+.finder-background-menu button:hover kbd { color:#fff; }
+@keyframes folder-dialog-in { from { opacity:0; transform:translateY(-7px) scale(.98); } to { opacity:1; transform:none; } }
+html[data-theme="dark"] { .folder-dialog { color:#e8e1ef; background:linear-gradient(160deg,#39313f,#2c2633); border-color:#ffffff35; }.folder-dialog-titlebar { background:#ffffff08; border-color:#ffffff10; }.folder-dialog input { background:#241f2c; color:#e8dfef; border-color:#756281; }.folder-dialog-content strong { color:#c8b7d5; }.folder-dialog-actions button { background:#4a3e55; border-color:#64516f; color:#ded0e8; }.finder-background-menu { background:#302738ed; color:#d9cbe3; border-color:#ffffff22; } }
+@media (prefers-reduced-motion:reduce) { .folder-dialog { animation:none; } }

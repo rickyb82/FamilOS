@@ -1,0 +1,19 @@
+# Override per l'anteprima locale (Mac/PC): usa insieme al compose principale.
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+# oppure semplicemente:  ./familai.sh dev
+services:
+  caddy:
+    ports: !override
+      - "8080:8080"
+    volumes:
+      - ./Caddyfile.dev:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+  backend:
+    environment:
+      - PUBLIC_HOST=localhost
+      - WEBAUTHN_RP_ID=localhost
+      - WEBAUTHN_ORIGIN=http://localhost:8080
+      - COOKIE_SECURE=false
+      - ENABLE_MOCK_PROVIDER=false
+      - LOG_LEVEL=debug

@@ -1,0 +1,32 @@
+.system-panel { max-width:1200px; margin:0 auto; }
+.system-panel-heading { display:flex; gap:14px; align-items:center; margin:0 0 24px; }
+.system-panel-heading>img { width:56px; height:56px; border-radius:15px; object-fit:contain; }
+.system-panel-heading p { font-size:10px; letter-spacing:1.6px; font-weight:700; color:#827993; margin:0 0 5px; }
+.system-panel-heading h1 { font-size:28px; letter-spacing:-.9px; margin:0 0 3px; }
+.panel-shell { display:grid; grid-template-columns:195px minmax(0,1fr); gap:24px; align-items:start; }
+.panel-menu { min-width:0; position:sticky; top:0; }
+.panel-menu nav { display:flex; flex-direction:column; gap:17px; }
+.panel-menu section h3 { font-size:10px; letter-spacing:1px; text-transform:uppercase; color:#92899f; padding:0 11px; margin:0 0 6px; }
+.panel-menu button { display:flex; align-items:center; gap:10px; width:100%; padding:10px 11px; border:0; background:transparent; color:inherit; text-align:left; border-radius:10px; box-shadow:none; font-size:12px; font-weight:550; margin:2px 0; }
+.panel-menu button>span { display:grid; place-items:center; width:25px; height:25px; border-radius:7px; background:#e9e5ef; color:#6d6089; font-size:15px; flex:none; }
+.panel-menu button:hover { background:#efecf4; }
+.panel-menu button.selected { background:#e8e2f2; color:#584277; }
+.panel-menu button.selected>span { background:#816c9e; color:white; }
+.panel-content { min-width:0; }
+.panel-content>.card { margin-top:0; border-radius:17px; box-shadow:0 3px 15px #4a3a6510; }
+.panel-content h2 { font-size:21px; letter-spacing:-.4px; }
+.panel-content .table { display:block; overflow-x:auto; max-width:100%; }
+.panel-content .stack { min-width:0; }
+.panel-content input:not([type=checkbox]),.panel-content select { max-width:100%; }
+.panel-menu-mobile { display:none; }
+.installation-deployment { background:#f4f1f8; border:1px solid #e9e2f1; border-radius:12px; padding:15px; font-size:12px; line-height:1.6; overflow-wrap:anywhere; }
+.installation-deployment h3 { font-size:14px; margin-top:0; }
+.installation-deployment ol { padding-left:20px; }
+.installation-deployment code { white-space:normal; }
+@media(max-width:760px) { .panel-shell { grid-template-columns:1fr; gap:16px; }.panel-menu { position:static; }.panel-menu nav { display:none; }.panel-menu-mobile { display:flex; flex-direction:column; gap:5px; font-size:11px; color:#827993; }.panel-menu-mobile select { width:100%; font-size:14px; color:inherit; border-radius:11px; padding:11px; background:#f1edf6; }.system-panel-heading { margin-bottom:17px; }.system-panel-heading h1 { font-size:24px; }.system-panel-heading>img { width:46px; height:46px; }.panel-content>.card { padding:16px; } }
+html[data-theme="dark"] { .panel-menu button>span { background:#332e3d; color:#b1a0cb; }.panel-menu button.selected { background:#3a304a; color:#e1d3f7; }.panel-menu button:hover { background:#302b38; }.installation-deployment { background:#282330; border-color:#3b3348; }.panel-menu-mobile select { background:#302937; } }
+
+.panel-content [hidden] { display:none !important; }
+.panel-install-link { margin-top:20px; font-size:11px; white-space:normal; }
+
+.panel-content>.card>h2,.panel-content>.card>h3,.panel-content>.card>p { margin-top:0; margin-bottom:0; }
