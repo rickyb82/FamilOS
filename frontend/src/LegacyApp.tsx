@@ -10,7 +10,7 @@ import Shell from './components/Shell'
 import Chat from './pages/Chat'
 import Projects from './pages/Projects'
 
-/** Authentication and the protected child interface. Adults use the desktop shell. */
+/** Authentication and enrollment. Authenticated adults and children share the desktop. */
 export default function LegacyApp() {
   const { me } = useAuth()
   const location = useLocation()

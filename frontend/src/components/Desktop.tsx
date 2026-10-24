@@ -90,7 +90,7 @@ export default function Desktop() {
     const path = initialPath()
     if (!booted.current) {
       booted.current = true
-      if (path !== '/app' && path !== '/login' && path !== '/') open(path)
+      if (path !== '/app' && path !== '/login' && path !== '/kids' && path !== '/') open(path)
       wireNative(open)
     }
     const pop = () => open(initialPath())
@@ -175,7 +175,7 @@ export default function Desktop() {
       <span className="os-household">{me!.family_name || 'La nostra casa'}</span>
       <div className="os-status"><span className={`os-online ${online ? '' : 'offline'}`} title={online ? 'Connesso' : 'Connessione assente'} />
         <time>{now.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}</time>
-        <WindowRouter path="/app" navigate={open}><Approvals /><Notifications /></WindowRouter>
+        <WindowRouter path="/app" navigate={open}>{me!.user.role !== 'child' && <Approvals />}<Notifications /></WindowRouter>
         <button className="os-lock-button" onClick={() => lockSession()} aria-label="Blocca schermo" title="Blocca schermo">▣</button>
         <button className="os-avatar" onClick={() => open('/settings')} title={`Profilo di ${me!.user.display_name}`}>{me!.user.avatar || firstName[0]}</button>
         <button className="os-logout" onClick={() => { if (!state.current.some(w => appForPath(w.path).id === 'editor') || confirm('Uscire? Salva prima i documenti aperti.')) logout() }} title="Esci">↪</button>

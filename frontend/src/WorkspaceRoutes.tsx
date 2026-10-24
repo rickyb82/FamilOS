@@ -30,9 +30,9 @@ export function WorkspaceRoutes() {
         <Route path="/productivity/:appId" element={<Productivity />} />
         <Route path="/projects" element={<Projects />} />
         <Route path="/projects/:id" element={<Projects />} />
-        {me.user.role !== 'child' && <Route path="/settings" element={<Settings />} />}
-        {me.user.role !== 'child' && <Route path="/documents" element={<Documents />} />}
-        {me.user.role !== 'child' && <Route path="/editor" element={<EditorRoute />} />}
+        <Route path="/settings" element={<Settings />} />
+        <Route path="/documents" element={<Documents />} />
+        <Route path="/editor" element={<EditorRoute />} />
         {me.user.role !== 'child' && <Route path="/mail" element={<Mail />} />}
         {me.user.role !== 'child' && <Route path="/messages" element={<Messages />} />}
         {me.user.role === 'admin' && <Route path="/admin/*" element={<Admin />} />}

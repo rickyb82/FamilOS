@@ -2,13 +2,13 @@ import { useEffect, useState } from 'react'
 import { get, patch, type User } from '../lib/api'
 import { useAuth } from '../lib/auth'
 
-interface AppInfo { id: string; label: string; app: string; glyph: string; desc: string; admin?: string; active: boolean; opt_in?: boolean }
+interface AppInfo { id: string; label: string; app: string; glyph: string; desc: string; admin?: string; active: boolean; opt_in?: boolean; child_allowed?: boolean }
 type Row = { apps: string[] | null; admin_apps: string[] }
 
 /**
  * Software per utente in un colpo d'occhio: righe = membri, colonne = app. Ogni casella abilita l'app (pagina, menu, tool
  * in chat); 🛠 la rende anche amministrabile da quell'utente. "Tutti" = anche le app attivate in futuro.
- * Il amministratore ha sempre tutto; i bambini nessun software.
+ * Il amministratore ha sempre tutto; i bambini possono usare le app educative consentite.
  */
 export default function AdminApps() {
   const { refresh } = useAuth()
@@ -28,8 +28,8 @@ export default function AdminApps() {
   }
   useEffect(() => { load() }, [])
 
-  const editable = members.filter((u) => u.role === 'adult')
-  const fixed = members.filter((u) => u.role !== 'adult')
+  const editable = members.filter((u) => u.role !== 'admin')
+  const fixed = members.filter((u) => u.role === 'admin')
   // "tutti i software" non comprende quelli da abilitare a parte (opt_in: l'Intranet, riservata ai super amministratori)
   const ids = catalog.filter((a) => !a.opt_in).map((a) => a.id)
   const optIn = new Set(catalog.filter((a) => a.opt_in).map((a) => a.id))
@@ -37,6 +37,7 @@ export default function AdminApps() {
   const same = (a: Row, b: Row) => JSON.stringify([a.apps && [...a.apps].sort(), [...a.admin_apps].sort()]) === JSON.stringify([b.apps && [...b.apps].sort(), [...b.admin_apps].sort()])
   const changed = editable.filter((u) => draft[u.id] && !same(draft[u.id], orig(u)))
 
+  const eligible = (u: User, app: string) => u.role !== 'child' || !!catalog.find(a => a.id === app)?.child_allowed
   const uses = (r: Row, app: string) => (r.apps === null ? !optIn.has(app) : r.apps.includes(app))
   const setRow = (uid: string, r: Row) => { setMsg(''); setDraft((d) => ({ ...d, [uid]: r })) }
   function toggleUse(uid: string, app: string) {
@@ -58,6 +59,7 @@ export default function AdminApps() {
     setDraft((d) => {
       const n = { ...d }
       for (const u of editable) {
+        if (!eligible(u, app)) continue
         const r = n[u.id]
         if (on && uses(r, app)) continue
         if (!on && !uses(r, app)) continue
@@ -83,6 +85,7 @@ export default function AdminApps() {
   if (!catalog.length) return err ? <div className="error">{err}</div> : <div className="muted">Carico…</div>
   return (
     <div className="stack">
+      <p className="muted">I bambini hanno lo stesso desktop, con le app educative selezionate qui. Posta esterna, amministrazione e regole di sicurezza restano riservate agli adulti.</p>
       <p className="muted">Scegli quali software può usare ogni utente: abilitare un'app mostra la pagina nel menu, l'icona nella cartella APP e i suoi tool in chat. Con 🛠 l'utente ne diventa anche <b>amministratore</b> (le impostazioni riservate di quell'app). <b>Tutti</b> include anche i software attivati in futuro. I titoli delle colonne abilitano o tolgono l'app a tutti.</p>
       {msg && <div className="ok">{msg}</div>}
       {err && <div className="error">{err}</div>}
@@ -92,7 +95,7 @@ export default function AdminApps() {
             <tr>
               <th>Utente</th><th>Tutti</th>
               {catalog.map((a) => {
-                const all = editable.length > 0 && editable.every((u) => draft[u.id] && uses(draft[u.id], a.id))
+                const all = editable.length > 0 && editable.filter(u => eligible(u, a.id)).every((u) => draft[u.id] && uses(draft[u.id], a.id))
                 return (
                   <th key={a.id} style={{ textAlign: 'center' }} title={`${a.app}: ${a.desc}${a.active ? '' : ' — non attivo su questo server'}`}>
                     <button className="ghost" style={{ padding: '2px 6px' }} onClick={() => column(a.id, !all)} disabled={!editable.length}>
@@ -114,11 +117,11 @@ export default function AdminApps() {
                   <td>{u.avatar} {u.display_name}{!u.is_active && <small className="muted"> · disattivato</small>}{dirty && <small className="muted"> · da salvare</small>}</td>
                   <td><input type="checkbox" checked={r.apps === null} onChange={() => toggleAll(u.id)} title="Tutti i software, anche quelli futuri" /></td>
                   {catalog.map((a) => {
-                    const on = uses(r, a.id)
+                    const on = eligible(u, a.id) && uses(r, a.id)
                     return (
                       <td key={a.id} style={{ textAlign: 'center', whiteSpace: 'nowrap' }}>
-                        <input type="checkbox" style={{ width: 'auto', margin: 0, verticalAlign: 'middle' }} checked={on} onChange={() => toggleUse(u.id, a.id)} title={`Usa ${a.label}`} />
-                        {a.admin && (
+                        <input type="checkbox" style={{ width: 'auto', margin: 0, verticalAlign: 'middle' }} checked={on} disabled={!eligible(u, a.id)} onChange={() => toggleUse(u.id, a.id)} title={`Usa ${a.label}`} />
+                        {a.admin && u.role !== 'child' && (
                           <label className="row" title={`Amministra ${a.label}: ${a.admin}`} style={{ display: 'inline-flex', gap: 2, marginLeft: 8, opacity: on ? 1 : 0.35 }}>
                             <input type="checkbox" style={{ width: 'auto', margin: 0 }} disabled={!on} checked={on && r.admin_apps.includes(a.id)} onChange={() => toggleAdmin(u.id, a.id)} />🛠
                           </label>
@@ -132,7 +135,7 @@ export default function AdminApps() {
             {fixed.map((u) => (
               <tr key={u.id} className="muted">
                 <td>{u.avatar} {u.display_name}</td>
-                <td colSpan={catalog.length + 1}><small>{u.role === 'admin' ? '👑 Amministratore: usa e amministra tutti i software' : 'Bambino/a: nessun software'}</small></td>
+                <td colSpan={catalog.length + 1}><small>{u.role === 'admin' ? '👑 Amministratore: usa e amministra tutti i software' : 'Bambino/a: app educative secondo i permessi'}</small></td>
               </tr>
             ))}
           </tbody>

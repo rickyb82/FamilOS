@@ -194,8 +194,9 @@ class BlankPdf(BaseModel):
 @router.post("/files/blank-pdf", response_model=FileOut)
 async def blank_pdf(body: BlankPdf, ctx: AuthContext = Depends(require_auth), db: AsyncSession = Depends(get_db)):
     """PDF vuoto (A4) da aprire subito in PdfCraft: e' il "nuovo PDF" della cartella APP."""
-    if ctx.user.role == Role.child:
-        raise HTTPException(403, "Gli editor sono riservati agli adulti")
+    from ..services.apps import app_enabled
+    if ctx.user.role == Role.child and not app_enabled(ctx.user, "pdfcraft"):
+        raise HTTPException(403, "App non abilitata per questo account")
     from pypdf import PdfWriter
     w = PdfWriter()
     for _ in range(max(1, min(int(body.pages or 1), 20))):
@@ -230,8 +231,6 @@ async def wordcraft_save(request: Request, background: BackgroundTasks, file_id:
     l'estensione e' diversa (es. esportazione in PDF) nasce un nuovo file accanto all'originale."""
     from urllib.parse import unquote
 
-    if ctx.user.role == Role.child:
-        raise HTTPException(403, "Editor riservato agli adulti")
     if not re.fullmatch(r"[0-9a-f]{32}", file_id or ""):
         raise HTTPException(400, "file_id non valido")
     name = re.sub(r"[^\w.\- ]", "_", unquote(request.headers.get("X-Filename", "") or "documento.docx"))[:200]
@@ -256,6 +255,12 @@ async def wordcraft_save(request: Request, background: BackgroundTasks, file_id:
         # documento nuovo: il nome scelto nella pagina Editor (l'estensione resta quella del contenuto salvato)
         stem = Path(re.sub(r"[^\w.\- ]", "_", filename)).stem.strip() or Path(name).stem
         name = f"{stem}{ext}"[:200]
+    if ctx.user.role == Role.child:
+        from ..services.apps import user_apps
+        formats = {"wordcraft": WORDCRAFT_EXT, "gridcraft": GRIDCRAFT_EXT,
+                   "deckcraft": DECKCRAFT_EXT, "ideacraft": IDEACRAFT_EXT, "pdfcraft": {".pdf", ".png", ".jpg", ".jpeg"}}
+        if not any(ext in formats.get(app, set()) for app in user_apps(ctx.user)):
+            raise HTTPException(403, "App non abilitata per questo formato")
     if ext not in EDITOR_EXT:
         raise HTTPException(400, f"Formato non consentito ({ext})")
     data = await request.body()

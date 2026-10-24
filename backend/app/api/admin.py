@@ -1074,8 +1074,8 @@ async def apps_catalog(ctx: AuthContext = Depends(require_admin)):
               "mailcraft": bool(settings.mailcraft_url and settings.mailcraft_token),
               "messaggi": True,   # nativo: la pagina spiega come collegare l'account
               "archivio": True}
-    from ..services.apps import available_app_ids
-    return [{**a, "active": active.get(a["id"], False)} for a in APPS if a["id"] in available_app_ids()]
+    from ..services.apps import available_app_ids, CHILD_APP_IDS
+    return [{**a, "child_allowed": a["id"] in CHILD_APP_IDS, "active": active.get(a["id"], False)} for a in APPS if a["id"] in available_app_ids()]
 
 
 # ---- modelli per utente (griglia Organizzazione › Modelli) ----

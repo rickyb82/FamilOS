@@ -329,7 +329,7 @@ async def me(ctx: AuthContext = Depends(require_pre_mfa), db: AsyncSession = Dep
     adult = ctx.user.role != Role.child
     from ..services.apps import admin_apps as _admin_apps, user_apps as _user_apps
     apps = _user_apps(ctx.user)   # software abilitati per questo utente (super admin: tutti)
-    on = lambda app: adult and app in apps  # noqa: E731
+    on = lambda app: app in apps  # noqa: E731
     features = {f"{app}_web": bool(getattr(settings, f"{app}_web")) and on(app) for app in ("wordcraft", "gridcraft", "pdfcraft", "deckcraft", "ideacraft")}
     features.update({f"{app}_mcp": mcp_manager.is_connected(app) and on(app) for app in ("wordcraft", "gridcraft", "pdfcraft", "deckcraft", "ideacraft", "mailcraft")})
     features.update({"mailcraft_web": bool(settings.mailcraft_url and settings.mailcraft_token) and on("mailcraft"),

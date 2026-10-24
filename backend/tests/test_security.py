@@ -121,7 +121,7 @@ async def test_non_admin_cannot_call_any_admin_route(seeded,actor,method,path):
 
 @pytest.mark.parametrize("app_id", ["wordcraft","gridcraft","pdfcraft","deckcraft","ideacraft","mailcraft"])
 async def test_craft_gate_enforces_role_session_and_lock(seeded, app_id):
-    for actor,expected in [(None,401),("kid",403),("bob",403),("anna",204)]:
+    for actor,expected in [(None,401),("kid",403 if app_id == "mailcraft" else 204),("bob",403),("anna",204)]:
         async with make_client(await session_cookie(actor) if actor else None) as client:
             assert (await client.get(f"/api/auth/apps/{app_id}")).status_code==expected
             if actor=="anna":

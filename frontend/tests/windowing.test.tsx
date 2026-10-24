@@ -36,6 +36,13 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('window lifecycle', () => {
+  it('lands on the desktop after the child PIN login instead of opening a kids window', async () => {
+    window.history.replaceState(null, '', '/kids')
+    render(<Desktop />)
+    await act(async () => {})
+    expect(window.location.pathname).toBe('/app')
+    expect(screen.queryAllByRole('region', { name: /finestra$/ })).toHaveLength(0)
+  })
   it('preserves a draft through app switches, Home and minimization', async () => {
     render(<Desktop />)
     await act(async () => {})

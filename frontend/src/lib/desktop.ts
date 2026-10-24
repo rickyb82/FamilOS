@@ -29,7 +29,7 @@ export const DESKTOP_APPS: AppEntry[] = [
 ]
 
 export function desktopApps(me: Me): AppEntry[] {
-  const core = DESKTOP_APPS.filter(a => (!a.admin || me.user.role === 'admin') && (!a.feature || !!(me.features as any)?.[a.feature]))
+  const core = DESKTOP_APPS.filter(a => (!a.admin || me.user.role === 'admin') && (a.id !== 'parental' || me.user.role !== 'child') && (!a.feature || !!(me.features as any)?.[a.feature]))
   const productivity = PRODUCTIVITY_APPS.filter(a => me.user.role === 'admin' || me.features?.apps?.includes(a.appId!))
   return [...core.slice(0, 4), ...productivity, ...core.slice(4)]
 }

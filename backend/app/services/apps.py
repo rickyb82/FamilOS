@@ -51,6 +51,8 @@ APPS: list[dict] = [{'id': 'wordcraft',
   'glyph': '🏢',
   'desc': "le cartelle di reparto (lettura secondo i reparti dell'utente)",
   'admin': 'carica, sposta ed elimina i documenti nelle cartelle di reparto'}]
+CHILD_APP_IDS = {"wordcraft", "gridcraft", "pdfcraft", "deckcraft", "ideacraft"}
+
 APP_IDS = [a["id"] for a in APPS]
 PRODUCTIVITY_IDS = {"wordcraft", "gridcraft", "pdfcraft", "deckcraft", "ideacraft", "mailcraft", "messaggi", "archivio"}
 
@@ -80,9 +82,10 @@ def is_superadmin(user: User) -> bool:
 
 def user_apps(user: User) -> set[str]:
     """I software che l'utente puo' usare. None nel DB = tutti (utenti esistenti prima della migrazione)."""
-    if user.role == Role.child:
-        return set()
     available = available_app_ids()
+    if user.role == Role.child:
+        permitted = available & CHILD_APP_IDS
+        return permitted if user.apps is None else permitted & set(user.apps)
     if user.role == Role.admin:
         return available
     if user.apps is None:
