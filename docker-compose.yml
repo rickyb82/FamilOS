@@ -46,10 +46,33 @@ services:
     networks:
     - default
     - sandbox_net
+    - browser_net
     depends_on:
     - sandbox
     extra_hosts:
     - host.docker.internal:host-gateway
+  browser:
+    build: ./extras/browser
+    profiles: [browser]
+    restart: unless-stopped
+    init: true
+    read_only: true
+    user: '10001:10001'
+    environment:
+    - BROWSER_WORKER_TOKEN=${BROWSER_WORKER_TOKEN:-}
+    - BROWSER_BROKER_URL=http://backend:8000/api/browser/gateway
+    networks: [browser_net]
+    tmpfs:
+    - /tmp:size=512m,uid=10001,gid=10001,mode=1777
+    shm_size: 512m
+    security_opt:
+    - no-new-privileges:true
+    - seccomp=./extras/browser/seccomp_profile.json
+    cap_drop: [ALL]
+    pids_limit: 512
+    mem_limit: 2g
+    cpus: 2.0
+    expose: ['8080']
   sandbox:
     build: ./sandbox
     restart: unless-stopped
@@ -411,6 +434,8 @@ services:
         max-size: 2m
         max-file: '2'
 networks:
+  browser_net:
+    internal: true
   default: null
   sandbox_net:
     internal: true

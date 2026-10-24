@@ -10,9 +10,10 @@ _lock=asyncio.Lock()
 
 class BrowserConfig(BaseModel):
     sites:list[str]=Field(max_length=80)
+    asset_hosts:list[str]=Field(default_factory=list,max_length=150)
     pihole_enabled:bool=False
     dns_server:str="auto"
-    @field_validator("sites")
+    @field_validator("sites", "asset_hosts")
     @classmethod
     def sites_valid(cls,values):
         return list(dict.fromkeys(safe_browser.normalize_url("https://"+value.strip().lower()).split("/")[2] for value in values if value.strip()))
@@ -36,13 +37,12 @@ async def sites(ctx=Depends(require_auth)):
 async def read_page(body:ReadPage,ctx=Depends(require_auth)):
     limiter.check(ctx.user.id)
     if ctx.user.role == Role.child:
-        from ..policy.permissions import effective_policy,check_time_window
-        check_time_window(effective_policy(ctx.user))
+        raise HTTPException(403,"Usa il browser grafico: le autorizzazioni dei siti sono gestite dagli amministratori.")
     config=safe_browser.config()
-    sites=config["sites"] if ctx.user.role==Role.child else None
+    sites=None
     try:
         page=await safe_browser.fetch(body.url,sites,config)
-        return await safe_browser.check_page(page,ctx.user.age_group.value) if ctx.user.role==Role.child else page
+        return page
     except HTTPException:raise
     except Exception:raise HTTPException(502,"Non riesco ad aprire questa pagina. Riprova o chiedi a un genitore.")
 

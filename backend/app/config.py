@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     cookie_secure: bool = True
     security_login_alerts: bool = True
     updater_socket: str = "/run/familos-updater/control.sock"
+    browser_worker_url: str = "http://browser:8080"
+    browser_worker_token: str = ""
     allow_code_execution: bool = False  # shared sandbox lacks per-job isolation; opt-in only
 
     # Esposizione / WebAuthn

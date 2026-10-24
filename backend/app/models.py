@@ -595,6 +595,37 @@ class SyncPairingCode(Base):
     used: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class BrowserSiteApproval(Base):
+    """Persistent exact-domain decisions, scoped to a family and age band."""
+    __tablename__ = "browser_site_approvals"
+    __table_args__ = (UniqueConstraint("family_id", "domain", "age_group"),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    family_id: Mapped[str] = mapped_column(ForeignKey("families.id", ondelete="CASCADE"), index=True)
+    domain: Mapped[str] = mapped_column(String(253))
+    age_group: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16), default="review")
+    source: Mapped[str] = mapped_column(String(16), default="ai")
+    revision: Mapped[str] = mapped_column(String(32), default=new_id)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=now)
+
+    last_checked_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    last_error: Mapped[str] = mapped_column(String(200), default="")
+
+
+class BrowserReviewSchedule(Base):
+    __tablename__ = "browser_review_schedules"
+    family_id: Mapped[str] = mapped_column(ForeignKey("families.id", ondelete="CASCADE"), primary_key=True)
+    weekday: Mapped[int] = mapped_column(Integer, default=6)
+    hour: Mapped[int] = mapped_column(Integer, default=3)
+    minute: Mapped[int] = mapped_column(Integer, default=0)
+    timezone: Mapped[str] = mapped_column(String(64), default="Europe/Rome")
+    model: Mapped[str] = mapped_column(String(200), default="")
+    last_slot: Mapped[str] = mapped_column(String(16), default="")
+    last_started_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    last_finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    last_error: Mapped[str] = mapped_column(String(200), default="")
+
+
 class SyncTombstone(Base):
     """Lapide di un file o di una cartella eliminati: cosi' un client che torna dopo giorni sa cosa togliere."""
     __tablename__ = "sync_tombstones"
