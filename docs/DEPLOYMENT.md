@@ -44,6 +44,12 @@ Aprire http://127.0.0.1:5173. Bootstrap dall'ambiente o backend/.env. Vite inolt
 
 ## Limiti
 
+Prima dell'esposizione pubblica leggere [la verifica di sicurezza](SECURITY-REVIEW-2026-10-24.md).
+Le nuove installazioni richiedono MFA agli adulti (`MFA_OPTIONAL=0`), anche dopo Google; gli override già presenti nel pannello restano validi.
+`ALLOW_CODE_EXECUTION=false` disabilita la sandbox condivisa, che non isola le singole esecuzioni tra utenti. Mantenere questo valore in produzione.
+`SECURITY_LOGIN_ALERTS=true` abilita gli avvisi agli amministratori attivi per login riusciti e respinti: configurare Email di sistema e provare la consegna reale sulla VM. Gli avvisi ripetuti sono limitati; il registro resta disponibile.
+Usare un solo worker backend e non pubblicare direttamente le porte di backend o app Craft, protette attraverso Caddy.
+
 Layout del desktop salvato nel browser, non sincronizzato tra dispositivi. I bambini usano l'interfaccia protetta precedente.
 La PWA è installabile ma non sincronizza documenti offline. Backend e revisioni richiedono un singolo worker.
 I costi sono stime modificabili: verificare il listino rispetto al modello e all'account OpenAI.

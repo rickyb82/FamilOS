@@ -95,6 +95,7 @@ class User(Base):
     recovery_codes: Mapped[list] = mapped_column(JSON, default=list)  # hash dei codici
     totp_secret: Mapped[str | None] = mapped_column(String(300), nullable=True)          # app authenticator (cifrato)
     totp_pending: Mapped[str | None] = mapped_column(String(300), nullable=True)         # in attesa di conferma
+    totp_last_counter: Mapped[int] = mapped_column(BigInteger, default=-1)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=now)
     failed_logins: Mapped[int] = mapped_column(Integer, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
@@ -165,6 +166,22 @@ class TrustedDevice(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=now)
     last_seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class SecurityNotice(Base):
+    __tablename__ = "security_notices"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    family_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    success: Mapped[bool] = mapped_column(Boolean)
+    event: Mapped[str] = mapped_column(String(60))
+    account: Mapped[str] = mapped_column(String(200))
+    ip: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=now)
+    next_attempt_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=now)
+    sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    delivered_to: Mapped[list] = mapped_column(JSON, default=list)
 
 
 class Project(Base):

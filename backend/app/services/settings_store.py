@@ -56,6 +56,7 @@ MANAGED_KEYS: dict[str, tuple[str, bool]] = {'passkeys': ('Passkey abilitate (0 
  'embedding_provider': ('Provider embedding (RAG)', False),
  'embedding_model': ('Modello embedding', False),
  'smtp_host': ('Server SMTP', False),
+ 'security_login_alerts': ('Avvisi email agli amministratori per accessi riusciti e respinti', False),
  'smtp_port': ('Porta SMTP', False),
  'smtp_user': ('Utente SMTP', False),
  'smtp_password': ('Password SMTP', True),
@@ -112,6 +113,8 @@ async def apply(db: AsyncSession) -> None:
     overrides = await load_overrides(db)
     for k in MANAGED_KEYS:
         val = overrides.get(k) or _env_defaults[k]
+        if isinstance(_env_defaults[k], bool):
+            val = str(val).lower() in ("1", "true", "yes")
         # campi numerici del Settings: i valori dal pannello arrivano come stringa
         if isinstance(_env_defaults[k], int) and not isinstance(_env_defaults[k], bool):
             try:
@@ -155,7 +158,7 @@ async def describe(db: AsyncSession) -> dict[str, dict]:
         eff = db_v or env_v
         out[k] = {"label": label, "secret": secret, "configured": bool(eff),
                   "source": "admin" if db_v else ("env" if env_v else "none"),
-                  "value": mask(eff) if secret else eff}
+                  "value": mask(eff) if secret else (str(eff).lower() if isinstance(eff, bool) else eff)}
     return out
 
 

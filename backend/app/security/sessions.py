@@ -27,6 +27,12 @@ class RateLimiter:
 
     def check(self, key: str) -> None:
         now = time.monotonic()
+        # Bound memory even when requests use many distinct identifiers.
+        if len(self.hits) >= 10000:
+            for old in [k for k, v in self.hits.items() if not v or v[-1] < now - self.window_s]:
+                del self.hits[old]
+            if key not in self.hits and len(self.hits) >= 10000:
+                raise HTTPException(429, "Troppi tentativi, riprova tra qualche minuto")
         q = self.hits[key]
         while q and q[0] < now - self.window_s:
             q.popleft()
@@ -40,7 +46,9 @@ pin_limiter = RateLimiter(max_hits=8, window_s=300)
 
 
 def client_ip(request: Request) -> str:
-    return request.headers.get("x-real-ip") or (request.client.host if request.client else "")
+    # ASGI's peer is resolved by the server's trusted-proxy configuration.
+    # Never accept an arbitrary client-supplied X-Real-IP for rate limiting.
+    return request.client.host if request.client else ""
 
 
 # ---------- cookie helpers ----------
@@ -62,10 +70,11 @@ async def create_session(
     hours = settings.session_hours_child if user.role == Role.child else settings.session_hours_adult
     if auth_method == "passkey" and user.role != Role.child:
         hours = max(1, settings.session_days_passkey) * 24
+    lifetime = timedelta(hours=hours) if mfa_verified else timedelta(minutes=10)
     sess = Session(
         user_id=user.id,
         auth_method=auth_method,
-        expires_at=datetime.now(timezone.utc) + timedelta(hours=hours),
+        expires_at=datetime.now(timezone.utc) + lifetime,
         mfa_verified=mfa_verified,
         user_agent=request.headers.get("user-agent", "")[:300],
         ip=client_ip(request),
@@ -74,7 +83,7 @@ async def create_session(
     db.add(sess)
     await db.commit()
     # con la passkey la scadenza vera e' quella del server, che si rinnova a ogni uso: il cookie dura quanto il browser concede
-    _set_cookie(response, SESSION_COOKIE, sess.id, 400 * 24 * 3600 if auth_method == "passkey" else hours * 3600)
+    _set_cookie(response, SESSION_COOKIE, sess.id, 400 * 24 * 3600 if auth_method == "passkey" else int(lifetime.total_seconds()))
     return sess
 
 
@@ -119,6 +128,10 @@ async def _load_session(request: Request, db: AsyncSession) -> AuthContext | Non
     user = await db.get(User, sess.user_id)
     if not user or not user.is_active:
         return None
+    if sess.auth_method == "pin":
+        dev = await db.get(TrustedDevice, sess.device_id) if sess.device_id else None
+        if user.role != Role.child or not dev or dev.revoked or dev.family_id != user.family_id:
+            return None
     if sess.auth_method == "passkey" and user.role != Role.child:
         # come un'app: chi entra con Face ID / impronta resta dentro finche' usa Emily (scade dopo N giorni di inattivita')
         full = timedelta(days=max(1, settings.session_days_passkey))
@@ -134,9 +147,21 @@ async def optional_auth(request: Request, db: AsyncSession = Depends(get_db)) ->
     return await _load_session(request, db)
 
 
+def check_origin(request: Request) -> None:
+    origin = request.headers.get("origin")
+    allowed = {settings.webauthn_origin.rstrip("/")}
+    if not settings.cookie_secure:
+        allowed.update({str(request.base_url).rstrip("/"), "http://localhost:5173", "http://127.0.0.1:5173"})
+    if origin is not None and origin.rstrip("/") not in allowed:
+        raise HTTPException(403, "Origine della richiesta non consentita")
+    if request.headers.get("sec-fetch-site") == "cross-site":
+        raise HTTPException(403, "Richiesta cross-site non consentita")
+
+
 def _csrf_check(request: Request) -> None:
     # Difesa in profondità oltre a SameSite=Strict: le richieste mutanti devono avere l'header custom.
     if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        check_origin(request)
         if request.headers.get("x-requested-with") != "FamilAI":
             raise HTTPException(status.HTTP_403_FORBIDDEN, "CSRF check fallito")
 
@@ -151,7 +176,7 @@ async def require_auth(request: Request, db: AsyncSession = Depends(get_db)) -> 
         raise HTTPException(423,"Schermo bloccato")
     if ctx.user.role != Role.child and not ctx.session.mfa_verified:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Verifica a due fattori richiesta", headers={"X-MFA": "required"})
-    if ctx.user.role != Role.child and settings.require_mfa_for_adults and ctx.session.auth_method != "google":
+    if ctx.user.role != Role.child and settings.require_mfa_for_adults:
         from ..config import mfa_optional_on
         if not (mfa_optional_on() and (ctx.user.mfa_choice or "") == "skip") and not await user_has_second_factor(db, ctx.user):
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Attiva un secondo fattore (passkey o app authenticator) prima di continuare",
@@ -192,14 +217,34 @@ async def require_admin(ctx: AuthContext = Depends(require_auth)) -> AuthContext
 
 
 def passkey_enrollment_needed(ctx: "AuthContext", has_second_factor: bool) -> bool:
-    """Gli adulti devono avere un secondo fattore (passkey o app authenticator), salvo sessioni aperte con Google
-    (che ha la propria 2FA)."""
+    """A Google login does not attest that Google's own second factor was used."""
     if ctx.user.role == Role.child or not settings.require_mfa_for_adults:
         return False
     from ..config import mfa_optional_on
     if mfa_optional_on() and (ctx.user.mfa_choice or "") == "skip":
         return False   # ha scelto di non usare il 2FA (puo' attivarlo dalle impostazioni)
-    return not has_second_factor and ctx.session.auth_method != "google"
+    return not has_second_factor
+
+
+async def revoke_user_access(db: AsyncSession, user_id: str, keep_session: str | None = None) -> None:
+    from sqlalchemy import delete, update
+    from ..models import SyncDevice, SyncPairingCode
+    query = delete(Session).where(Session.user_id == user_id)
+    if keep_session:
+        query = query.where(Session.id != keep_session)
+    await db.execute(query)
+    await db.execute(update(SyncDevice).where(SyncDevice.user_id == user_id).values(revoked=True))
+    await db.execute(delete(SyncPairingCode).where(SyncPairingCode.user_id == user_id))
+
+
+async def complete_mfa(db: AsyncSession, response: Response, ctx: AuthContext, request: Request) -> None:
+    """Do not upgrade a potentially copied pre-MFA session identifier in place."""
+    if ctx.session.mfa_verified:
+        return
+    method = ctx.session.auth_method
+    await db.delete(ctx.session)
+    await db.flush()
+    ctx.session = await create_session(db, response, ctx.user, request, True, method)
 
 
 async def user_has_passkey(db: AsyncSession, user: User) -> bool:

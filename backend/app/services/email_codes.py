@@ -42,11 +42,15 @@ async def verify(db: AsyncSession, user: User, purposes: tuple[str, ...], code: 
             t.used = True
             continue
         if hmac.compare_digest(t.code_hash, target):
-            t.used = True
-            ok = True
+            result = await db.execute(update(EmailToken).where(
+                EmailToken.id == t.id, EmailToken.used.is_(False),
+                EmailToken.attempts < MAX_ATTEMPTS, EmailToken.expires_at > now
+            ).values(used=True).execution_options(synchronize_session=False))
+            ok = ok or result.rowcount == 1
         else:
-            t.attempts += 1
-            if t.attempts >= MAX_ATTEMPTS:
-                t.used = True
+            await db.execute(update(EmailToken).where(EmailToken.id == t.id, EmailToken.used.is_(False))
+                             .values(attempts=EmailToken.attempts+1).execution_options(synchronize_session=False))
+            await db.execute(update(EmailToken).where(EmailToken.id == t.id, EmailToken.attempts >= MAX_ATTEMPTS)
+                             .values(used=True).execution_options(synchronize_session=False))
     await db.commit()
     return ok

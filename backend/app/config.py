@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     secret_key: str = "dev-secret-change-me"
     log_level: str = "info"
     cookie_secure: bool = True
+    security_login_alerts: bool = True
+    allow_code_execution: bool = False  # shared sandbox lacks per-job isolation; opt-in only
 
     # Esposizione / WebAuthn
     public_host: str = "localhost"
@@ -85,7 +87,7 @@ class Settings(BaseSettings):
     ideacraft_host: str = ""          # host:porta del container IdeaCraft (es. ideacraft:7986): mappe mentali via CLI/HTTP
     ideacraft_web: bool = False       # editor IdeaCraft nel browser servito su /ideacraft/ (container ideacraft-web)
     org_mode: str = "0"               # FamilOS starts in family mode; legacy ORG_MODE is ignored.
-    mfa_optional: str = "1"          # "1" = al primo accesso l'utente sceglie se attivare il 2FA; "0" = obbligatorio per gli adulti
+    mfa_optional: str = "0"          # "1" = facoltativo; "0" = obbligatorio per gli adulti
     user_models_json: str = ""       # JSON ["provider/modello", …]: i modelli che gli utenti (non admin) possono scegliere; vuoto = solo i default
     user_default_model: str = ""     # "provider/modello" proposto agli utenti nelle nuove chat (deve stare nell'elenco sopra)
     default_quota_gb: str = "50"     # quota di spazio per utente (file + versioni) quando non impostata sul singolo membro; 0 = illimitata

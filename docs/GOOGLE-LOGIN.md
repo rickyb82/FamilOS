@@ -1,6 +1,7 @@
 # Login Google per chi installa FamilOS
 
 Il login usa Google OpenID Connect con Authorization Code + PKCE e i soli scope openid, email e profile.
+Il ritorno da Google è legato al browser che ha iniziato l'accesso. Google non sostituisce il secondo fattore di FamilOS: se già configurato viene richiesto; con la configurazione predefinita una prima registrazione è obbligatoria per gli adulti.
 Non limita gli account al dominio Gmail: può usare anche un account Google con indirizzo esterno o Workspace, se consentito dalle policy dell'amministratore Workspace.
 
 ## Configurazione

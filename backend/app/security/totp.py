@@ -36,6 +36,27 @@ def verify(secret: str, code: str, window: int = 1, now: float | None = None) ->
     return any(hmac.compare_digest(_code(secret, counter + d), code) for d in range(-window, window + 1))
 
 
+async def consume(db, user, code: str) -> bool:
+    """Atomically accept a TOTP only once across browser and Sync sessions."""
+    from sqlalchemy import update, or_
+    from ..models import User
+    from ..services.settings_store import decrypt
+    if not user.totp_secret or len(code) != DIGITS or not code.isascii() or not code.isdigit():
+        return False
+    secret = decrypt(user.totp_secret)
+    counter = int(time.time() // PERIOD)
+    match = next((counter+d for d in range(-1,2)
+                  if hmac.compare_digest(_code(secret,counter+d),code)), None)
+    if match is None:
+        return False
+    result = await db.execute(update(User).where(
+        User.id == user.id, User.totp_secret == user.totp_secret,
+        or_(User.totp_last_counter < match, User.totp_last_counter.is_(None))
+    ).values(totp_last_counter=match).execution_options(synchronize_session=False))
+    await db.commit()
+    return result.rowcount == 1
+
+
 def provisioning_uri(secret: str, account: str, issuer: str = "FamilAI") -> str:
     label = quote(f"{issuer}:{account}", safe="")
     return f"otpauth://totp/{label}?secret={secret}&issuer={quote(issuer)}&algorithm=SHA1&digits={DIGITS}&period={PERIOD}"

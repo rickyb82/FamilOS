@@ -27,6 +27,7 @@ async def test_ai_paths_enforce_same_acl_as_download(anna, bob, monkeypatch):
     assert (await bob.get(file["url"])).status_code == 404
     from app.tools import code_exec, rag_search
     monkeypatch.setattr(code_exec.settings, "sandbox_url", "http://unused")
+    monkeypatch.setattr(code_exec.settings, "allow_code_execution", True)
     search = AsyncMock()
     monkeypatch.setattr(rag_search.rag, "search", search)
     async with SessionLocal() as db:

@@ -26,6 +26,7 @@ async def unlock_password(body:UnlockSecret,request:Request,ctx=Depends(require_
     hashed=ctx.user.pin_hash if ctx.user.role==Role.child else ctx.user.password_hash
     if locked(ctx.user) or not hashed or not verify_secret(hashed,body.secret):
         await register_failure(db,ctx.user)
+        await audit(db,"screen_unlock_failed",request,ctx.user)
         raise HTTPException(401,"Password o PIN non validi.")
     ctx.session.screen_locked=False;ctx.user.failed_logins=0
     await db.commit()
@@ -47,6 +48,7 @@ async def unlock_verify(body:PasskeyVerify,request:Request,ctx=Depends(require_p
     try:
         await webauthn_svc.authentication_verify(db,ctx.user,"unlock:"+ctx.session.id,body.credential,require_uv=True)
     except Exception:
+        await audit(db,"screen_unlock_failed",request,ctx.user)
         raise HTTPException(401,"Passkey non verificata. Riprova.")
     ctx.session.screen_locked=False;await db.commit()
     await audit(db,"screen_unlocked_passkey",request,ctx.user)

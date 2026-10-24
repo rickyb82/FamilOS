@@ -3,17 +3,26 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..db import get_db
+from ..db import get_db, SessionLocal
 from ..models import Notification
 from ..security.sessions import AuthContext, require_auth
 from ..services import events
 
 router = APIRouter(tags=["events"])
+
+
+async def stream_authorized(request: Request) -> bool:
+    async with SessionLocal() as db:
+        try:
+            await require_auth(request, db)
+            return True
+        except HTTPException:
+            return False
 
 
 @router.get("/events")
@@ -30,8 +39,12 @@ async def stream(request: Request, ctx: AuthContext = Depends(require_auth)):
                     break
                 try:
                     ev = await asyncio.wait_for(q.get(), timeout=25)
+                    if not await stream_authorized(request):
+                        break
                     yield events.sse(ev)
                 except asyncio.TimeoutError:
+                    if not await stream_authorized(request):
+                        break
                     yield ": ping\n\n"
         finally:
             events.unsubscribe(ctx.user.id, q)

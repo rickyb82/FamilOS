@@ -96,7 +96,7 @@ function Members() {
         <span><b>📱 Solo app authenticator</b><br /><small className="muted">Disattiva le passkey: i nuovi utenti attivano il secondo fattore con l'app (codice a 6 cifre), utile su un server locale dove le passkey sono legate all'indirizzo. Chi ha già una passkey continua a poterla usare.</small></span>
       </label>
       <label className="row card" style={{ gap: 10, alignItems: 'flex-start' }}>
-        <input type="checkbox" checked={me?.features?.mfa_optional !== false} onChange={(e) => run2(() => put('/admin/providers', { values: { mfa_optional: e.target.checked ? '' : '0' } }))} />
+        <input type="checkbox" checked={me?.features?.mfa_optional !== false} onChange={(e) => run2(() => put('/admin/providers', { values: { mfa_optional: e.target.checked ? '1' : '0' } }))} />
         <span><b>🔐 Secondo fattore a scelta dell'utente</b><br /><small className="muted">Al primo accesso ognuno decide se attivare il 2FA (app authenticator) o entrare senza; può attivarlo dopo dalle impostazioni. Spento = obbligatorio per tutti gli adulti.</small></span>
       </label>
       <table className="table">

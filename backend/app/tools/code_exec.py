@@ -31,6 +31,8 @@ settings = get_settings()
     usage_kind="tool",
 )
 async def run_code(args: dict, ctx: ToolContext) -> ToolResult:
+    if not settings.allow_code_execution:
+        return ToolResult("Esecuzione codice disabilitata: richiede isolamento separato per ogni esecuzione.", is_error=True)
     if not settings.sandbox_url:
         return ToolResult("Esecuzione codice non configurata (SANDBOX_URL mancante)", is_error=True)
     files = []

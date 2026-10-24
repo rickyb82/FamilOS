@@ -19,6 +19,7 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - run: npm audit --audit-level=high
   backend:
     runs-on: ubuntu-latest
     defaults:
@@ -33,3 +34,5 @@ jobs:
           cache-dependency-path: backend/requirements*.txt
       - run: pip install -r requirements.txt -r requirements-dev.txt
       - run: python -m pytest -q
+      - run: pip-audit
+      - run: bandit -r app ../sandbox -lll

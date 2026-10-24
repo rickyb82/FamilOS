@@ -23,6 +23,8 @@ async def bootstrap_admin() -> None:
     async with SessionLocal() as db:
         if (await db.execute(select(User.id).limit(1))).scalar_one_or_none():
             return
+        if settings.cookie_secure and (len(settings.admin_password) < 12 or settings.admin_password == "change-me-before-production"):
+            raise RuntimeError("Imposta ADMIN_PASSWORD personale di almeno 12 caratteri prima dell'avvio")
         fam = Family(name=settings.family_name)
         db.add(fam)
         await db.flush()
@@ -35,6 +37,8 @@ async def bootstrap_admin() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if settings.cookie_secure and (len(settings.secret_key) < 32 or settings.secret_key == "change-me-before-production"):
+        raise RuntimeError("Imposta SECRET_KEY casuale (almeno 32 caratteri) prima dell'avvio HTTPS")
     from .services import backup as _backup
     try:
         _backup.apply_pending()   # ripristino richiesto dal pannello: va fatto prima di aprire il DB
@@ -55,8 +59,16 @@ async def lifespan(app: FastAPI):
     from .api.installation import apply_runtime
     apply_runtime()
     await mcp_manager.start()
-    yield
-    await mcp_manager.stop()
+    from .services.security_alerts import worker
+    from contextlib import suppress
+    alerts = asyncio.create_task(worker())
+    try:
+        yield
+    finally:
+        alerts.cancel()
+        with suppress(asyncio.CancelledError):
+            await alerts
+        await mcp_manager.stop()
 
 
 from pathlib import Path as _P
@@ -72,9 +84,18 @@ from .services import activity as _activity  # noqa: E402
 
 app.middleware("http")(_activity.middleware)   # registro attivita' (Organizzazione › Log)
 
+
+@app.middleware("http")
+async def private_response_cache(request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith(("/api/auth/", "/api/admin/", "/api/mail/")):
+        response.headers["Cache-Control"] = "no-store, private"
+    return response
+
 for r in (auth.router, google_auth.router, chat.router, projects.router, shares.router, admin.router, artifacts.router, tts.router, approvals.router, mail.router, folders.router, push.router, native_app.router, messaging.router, events.router, sync.router):
     app.include_router(r, prefix="/api")
-from .api import branding, installation, education, browser, parental, lockscreen
+from .api import branding, installation, education, browser, parental, lockscreen, app_access
+app.include_router(app_access.router, prefix="/api")
 app.include_router(branding.router, prefix="/api")
 app.include_router(education.router, prefix="/api")
 app.include_router(browser.router, prefix="/api")

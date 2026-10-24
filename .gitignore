@@ -14,3 +14,4 @@ private/
 backend/emily-test-*/
 
 backend/pytest-of-*/
+.security-audit/

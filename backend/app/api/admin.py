@@ -172,6 +172,10 @@ async def update_member(uid: str, body: UpdateMemberRequest, request: Request,
     if not u or u.family_id != ctx.user.family_id:
         raise HTTPException(404)
     data = body.model_dump(exclude_none=True)
+    # Existing sessions must not inherit newly granted roles or a changed identity.
+    if any(k in data for k in ("role", "email", "password", "pin", "is_active")):
+        from ..security.sessions import revoke_user_access
+        await revoke_user_access(db, u.id)
     if "password" in data:
         u.password_hash = hash_secret(data.pop("password"))
         await db.execute(delete(Session).where(Session.user_id == u.id))
@@ -402,9 +406,12 @@ async def audit_csv(user_id: str | None = None, app: str | None = None, event: s
     buf = io.StringIO()
     w = csv.writer(buf, delimiter=";")
     w.writerow(["quando_utc", "utente", "app", "evento", "esito", "oggetto", "dettaglio", "ip"])
+    def safe_cell(value):
+        text = str(value or "")
+        return "'" + text if text.lstrip().startswith(("=", "+", "-", "@")) else text
     for e in events:
-        w.writerow([e["at"], e["user_name"] or e["user_id"] or "", e["app"], e["event"], "ok" if e["ok"] else "fallito",
-                    e["target"], e["detail"], e["ip"]])
+        w.writerow([safe_cell(value) for value in [e["at"], e["user_name"] or e["user_id"] or "", e["app"], e["event"], "ok" if e["ok"] else "fallito",
+                    e["target"], e["detail"], e["ip"]]])
     await audit(db, "audit_exported", request, ctx.user, f"{len(events)} righe")
     name = f"log-{datetime.now(timezone.utc):%Y%m%d-%H%M}.csv"
     return Response(content="\ufeff" + buf.getvalue(), media_type="text/csv; charset=utf-8",
@@ -730,7 +737,7 @@ def gmail_redirect_uri() -> str:
 
 
 @router.get("/email/google/start")
-async def gmail_oauth_start(ctx: AuthContext = Depends(require_admin)):
+async def gmail_oauth_start(response: Response, ctx: AuthContext = Depends(require_admin)):
     """Avvia il consenso Google per inviare email dall'account di famiglia (scope gmail.send)."""
     if not (settings.google_client_id and settings.google_client_secret):
         raise HTTPException(400, "Configura prima Client ID e secret nella scheda 'Accesso con Google'")
@@ -738,7 +745,9 @@ async def gmail_oauth_start(ctx: AuthContext = Depends(require_admin)):
     for k in [k for k, (_, exp) in _gmail_pending.items() if exp < now]:
         _gmail_pending.pop(k, None)
     state = _secrets.token_urlsafe(32)
-    _gmail_pending[state] = (ctx.user.id, now + 600)
+    _gmail_pending[state] = (ctx.session.id, now + 600)
+    response.set_cookie("familos_gmail_state", state, max_age=600, httponly=True,
+                        secure=settings.cookie_secure, samesite="lax", path="/api/admin/email/google/callback")
     params = {"client_id": settings.google_client_id, "redirect_uri": gmail_redirect_uri(), "response_type": "code",
               "scope": "https://www.googleapis.com/auth/gmail.send openid email",
               "access_type": "offline", "prompt": "consent select_account", "state": state}
@@ -750,14 +759,26 @@ async def gmail_oauth_callback(request: Request, code: str = "", state: str = ""
                                db: AsyncSession = Depends(get_db)):
     """Callback di Google: salva il refresh token (cifrato) e l'indirizzo collegato."""
     def back(status_: str) -> _Redirect:
-        return _Redirect(f"/admin?tab=providers&gmail={status_}", status_code=302)
+        response = _Redirect(f"/admin?tab=providers&gmail={status_}", status_code=302)
+        response.delete_cookie("familos_gmail_state", path="/api/admin/email/google/callback")
+        return response
+
+    binding = request.cookies.get("familos_gmail_state", "")
+    if not binding or not state or not _secrets.compare_digest(binding, state):
+        return back("scaduto")
 
     if error:
         return back("annullato")
     item = _gmail_pending.pop(state, None)
     if not item or item[1] < _time.time():
         return back("scaduto")
-    admin_id = item[0]
+    sess = await db.get(Session, item[0])
+    owner = await db.get(User, sess.user_id) if sess else None
+    if (not sess or sess.screen_locked or not sess.mfa_verified
+            or sess.expires_at.replace(tzinfo=timezone.utc) <= datetime.now(timezone.utc)
+            or not owner or not owner.is_active or owner.role != Role.admin):
+        return back("scaduto")
+    admin_id = owner.id
     try:
         async with _httpx.AsyncClient(timeout=20) as c:
             tok = await c.post("https://oauth2.googleapis.com/token", data={

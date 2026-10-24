@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
@@ -41,11 +41,14 @@ from ..security.sessions import (
     user_has_totp,
     user_has_second_factor,
     passkey_enrollment_needed,
+    _csrf_check,
+    complete_mfa,
+    revoke_user_access,
 )
 from ..providers.registry import available_providers
 
 settings = get_settings()
-router = APIRouter(prefix="/auth", tags=["auth"])
+router = APIRouter(prefix="/auth", tags=["auth"], dependencies=[Depends(_csrf_check)])
 
 
 async def audit(db: AsyncSession, event: str, request: Request, user: User | None = None, detail: str = "") -> None:
@@ -54,17 +57,26 @@ async def audit(db: AsyncSession, event: str, request: Request, user: User | Non
                     ok=event_ok(event), event=event, detail=detail[:500], ip=client_ip(request)))
     await db.commit()
 
+    from ..services import security_alerts
+    try:
+        await security_alerts.enqueue(db, event, user, client_ip(request), detail)
+    except Exception:
+        import logging
+        await db.rollback()
+        logging.getLogger(__name__).exception("Impossibile accodare avviso sicurezza")
+
 
 def locked(user: User) -> bool:
     return bool(user.locked_until and user.locked_until.replace(tzinfo=timezone.utc) > datetime.now(timezone.utc))
 
 
 async def register_failure(db: AsyncSession, user: User) -> None:
-    user.failed_logins += 1
-    if user.failed_logins >= 5:
-        user.locked_until = datetime.now(timezone.utc) + timedelta(minutes=15)
-        user.failed_logins = 0
+    await db.execute(update(User).where(User.id == user.id).values(
+        locked_until=case((User.failed_logins >= 4, datetime.now(timezone.utc)+timedelta(minutes=15)), else_=User.locked_until),
+        failed_logins=case((User.failed_logins >= 4, 0), else_=User.failed_logins+1)
+    ).execution_options(synchronize_session=False))
     await db.commit()
+    await db.refresh(user)
 
 
 async def user_out(db: AsyncSession, user: User) -> UserOut:
@@ -152,29 +164,34 @@ async def webauthn_auth_options(ctx: AuthContext = Depends(require_pre_mfa), db:
 
 
 @router.post("/webauthn/authenticate/verify")
-async def webauthn_auth_verify(body: WebAuthnVerifyRequest, request: Request,
+async def webauthn_auth_verify(body: WebAuthnVerifyRequest, request: Request, response: Response,
                                ctx: AuthContext = Depends(require_pre_mfa), db: AsyncSession = Depends(get_db)):
     try:
         await webauthn_svc.authentication_verify(db, ctx.user, ctx.session.id, body.credential)
     except Exception as e:
         await audit(db, "mfa_failed", request, ctx.user, str(e))
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"Verifica passkey fallita: {e}")
-    ctx.session.mfa_verified = True
+    await complete_mfa(db, response, ctx, request)
     await db.commit()
     await audit(db, "mfa_passkey_ok", request, ctx.user)
     return {"status": "ok"}
 
 
 @router.post("/recovery")
-async def recovery_login(body: RecoveryLoginRequest, request: Request,
+async def recovery_login(body: RecoveryLoginRequest, request: Request, response: Response,
                          ctx: AuthContext = Depends(require_pre_mfa), db: AsyncSession = Depends(get_db)):
     login_limiter.check("rec:" + client_ip(request))
     remaining = consume_recovery_code(ctx.user.recovery_codes or [], body.code)
     if remaining is None:
         await audit(db, "recovery_failed", request, ctx.user)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Codice di recupero non valido")
-    ctx.user.recovery_codes = remaining
-    ctx.session.mfa_verified = True
+    result = await db.execute(update(User).where(User.id == ctx.user.id,
+        User.recovery_codes == ctx.user.recovery_codes).values(recovery_codes=remaining)
+        .execution_options(synchronize_session=False))
+    if result.rowcount != 1:
+        await db.rollback()
+        raise HTTPException(401, "Codice di recupero già utilizzato")
+    await complete_mfa(db, response, ctx, request)
     await db.commit()
     await audit(db, "recovery_ok", request, ctx.user, f"rimasti {len(remaining)}")
     return {"status": "ok", "remaining_codes": len(remaining)}
@@ -192,6 +209,7 @@ async def webauthn_reg_options(ctx: AuthContext = Depends(require_adult_for_enro
 @router.post("/webauthn/register/verify")
 async def webauthn_reg_verify(body: WebAuthnVerifyRequest, request: Request,
                               ctx: AuthContext = Depends(require_adult_for_enrollment), db: AsyncSession = Depends(get_db)):
+    completing_login = passkey_enrollment_needed(ctx, await user_has_second_factor(db, ctx.user))
     try:
         cred = await webauthn_svc.registration_verify(db, ctx.user, ctx.session.id, body.credential, body.name)
     except Exception as e:
@@ -203,6 +221,8 @@ async def webauthn_reg_verify(body: WebAuthnVerifyRequest, request: Request,
         ctx.user.recovery_codes = hashed
     await db.commit()
     await audit(db, "passkey_registered", request, ctx.user, cred.name)
+    if completing_login:
+        await audit(db, "login_enrollment_completed", request, ctx.user)
     return {"status": "ok", "credential_id": cred.id, "recovery_codes": codes}
 
 
@@ -240,7 +260,7 @@ async def change_password(body: ChangePasswordRequest, request: Request, ctx: Au
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Password attuale errata")
     ctx.user.password_hash = hash_secret(body.new_password)
     # invalida le altre sessioni
-    await db.execute(delete(Session).where(Session.user_id == ctx.user.id, Session.id != ctx.session.id))
+    await revoke_user_access(db, ctx.user.id, keep_session=ctx.session.id)
     await db.commit()
     await audit(db, "password_changed", request, ctx.user)
     return {"status": "ok"}
@@ -275,9 +295,11 @@ async def pin_login(body: PinLoginRequest, request: Request, response: Response,
     pin_limiter.check(client_ip(request))
     dev = await get_trusted_device(request, db)
     if not dev:
+        await audit(db, "pin_refused", request)
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Questo dispositivo non è autorizzato: chiedi a un genitore di approvarlo")
     user = await db.get(User, body.user_id)
     if not user or user.family_id != dev.family_id or user.role != Role.child or not user.is_active or locked(user):
+        await audit(db, "pin_refused", request, user if user and user.family_id == dev.family_id else None)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "PIN errato")
     if not verify_secret(user.pin_hash, body.pin):
         await register_failure(db, user)
@@ -380,12 +402,12 @@ class ForgotRequest(_BM):
 
 class ResetRequest(_BM):
     email: EmailStr
-    code: str
-    new_password: str
+    code: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=10, max_length=200)
 
 
 class CodeRequest(_BM):
-    code: str
+    code: str = Field(min_length=1, max_length=128)
 
 
 from typing import Literal
@@ -450,12 +472,12 @@ async def reset_password(body: ResetRequest, request: Request, db: AsyncSession 
     if len(body.new_password) < 10:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "La password deve avere almeno 10 caratteri")
     user = (await db.execute(select(User).where(User.email == body.email.lower()))).scalar_one_or_none()
-    if not user or not await email_codes.verify(db, user, ("reset", "invite"), body.code):
+    if not user or not user.is_active or user.role == Role.child or not await email_codes.verify(db, user, ("reset", "invite"), body.code):
         await audit(db, "reset_failed", request, user)
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Codice non valido o scaduto")
     user.password_hash = hash_secret(body.new_password)
     user.failed_logins, user.locked_until = 0, None
-    await db.execute(delete(Session).where(Session.user_id == user.id))
+    await revoke_user_access(db, user.id)
     await db.commit()
     await audit(db, "password_reset", request, user)
     return {"status": "ok"}
@@ -476,12 +498,15 @@ async def mfa_email_send(request: Request, ctx: AuthContext = Depends(require_pr
 
 
 @router.post("/mfa/email/verify")
-async def mfa_email_verify(body: CodeRequest, request: Request, ctx: AuthContext = Depends(require_pre_mfa),
+async def mfa_email_verify(body: CodeRequest, request: Request, response: Response, ctx: AuthContext = Depends(require_pre_mfa),
                            db: AsyncSession = Depends(get_db)):
+    if not (mailer.email_enabled() and str(settings.email_mfa_fallback).lower() in ("1", "true", "yes")):
+        raise HTTPException(403, "Codice via email non abilitato")
+    login_limiter.check("mfa-verify:" + ctx.user.id)
     if not await email_codes.verify(db, ctx.user, ("mfa",), body.code):
         await audit(db, "mfa_email_failed", request, ctx.user)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Codice non valido o scaduto")
-    ctx.session.mfa_verified = True
+    await complete_mfa(db, response, ctx, request)
     await db.commit()
     await audit(db, "mfa_email_ok", request, ctx.user)
     return {"status": "ok"}
@@ -514,34 +539,40 @@ async def totp_confirm(body: CodeRequest, request: Request, ctx: AuthContext = D
                        db: AsyncSession = Depends(get_db)):
     """Conferma il segreto con il primo codice generato dall'app: da qui in poi e' un secondo fattore valido."""
     from ..services.settings_store import decrypt
+    completing_login = passkey_enrollment_needed(ctx, await user_has_second_factor(db, ctx.user))
+    login_limiter.check("totp-confirm:" + ctx.user.id)
     if not ctx.user.totp_pending:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nessuna configurazione in corso: ricomincia")
     if not totp_svc.verify(decrypt(ctx.user.totp_pending), body.code):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Codice non valido: controlla l'ora del telefono e riprova")
     ctx.user.totp_secret = ctx.user.totp_pending
     ctx.user.totp_pending = None
+    ctx.user.totp_last_counter = -1
     ctx.session.mfa_verified = True
     codes: list[str] = []
     if not ctx.user.recovery_codes:
         codes, hashed = generate_recovery_codes()
         ctx.user.recovery_codes = hashed
     await db.commit()
+    await totp_svc.consume(db, ctx.user, body.code)
     await audit(db, "totp_enabled", request, ctx.user)
+    if completing_login:
+        await audit(db, "login_enrollment_completed", request, ctx.user)
     return {"status": "ok", "recovery_codes": codes}
 
 
 @router.post("/totp/verify")
-async def totp_verify(body: CodeRequest, request: Request, ctx: AuthContext = Depends(require_pre_mfa),
+async def totp_verify(body: CodeRequest, request: Request, response: Response, ctx: AuthContext = Depends(require_pre_mfa),
                       db: AsyncSession = Depends(get_db)):
     """Secondo fattore al login: codice a 6 cifre dell'app authenticator."""
     from ..services.settings_store import decrypt
     if not ctx.user.totp_secret:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "App authenticator non configurata")
     login_limiter.check("totp:" + ctx.user.id)
-    if not totp_svc.verify(decrypt(ctx.user.totp_secret), body.code):
+    if not await totp_svc.consume(db, ctx.user, body.code):
         await audit(db, "mfa_totp_failed", request, ctx.user)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Codice non valido")
-    ctx.session.mfa_verified = True
+    await complete_mfa(db, response, ctx, request)
     await db.commit()
     await audit(db, "mfa_totp_ok", request, ctx.user)
     return {"status": "ok"}

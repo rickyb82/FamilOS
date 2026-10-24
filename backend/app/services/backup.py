@@ -156,7 +156,7 @@ def _open(data: bytes, password: str) -> bytes:
         raise ValueError("Password del backup errata o file danneggiato")
 
 
-def stage(data: bytes, password: str) -> dict:
+def _stage(data: bytes, password: str) -> dict:
     """Decifra e scompatta in data/pending_restore; il ripristino vero avviene al riavvio. Restituisce il manifest."""
     plain = _open(data, password)
     pend = _pending_dir()
@@ -171,7 +171,9 @@ def stage(data: bytes, password: str) -> dict:
             # sicurezza: niente percorsi assoluti o con '..'
             if m.name.startswith("/") or ".." in Path(m.name).parts:
                 raise ValueError(f"Percorso non valido nell'archivio: {m.name}")
-        tar.extractall(pend)
+            if not (m.isfile() or m.isdir()):
+                raise ValueError("Il backup contiene link o file speciali non consentiti")
+        tar.extractall(pend, filter="data")
     manifest = json.loads((pend / "manifest.json").read_text())
     if int(manifest.get("format", 0)) > FORMAT_VERSION:
         shutil.rmtree(pend)
@@ -183,6 +185,15 @@ def stage(data: bytes, password: str) -> dict:
     finally:
         con.close()
     return manifest
+
+
+def stage(data: bytes, password: str) -> dict:
+    try:
+        return _stage(data, password)
+    except Exception:
+        # An invalid manifest/database must never become a restore on next boot.
+        cancel_pending()
+        raise
 
 
 def cancel_pending() -> None:

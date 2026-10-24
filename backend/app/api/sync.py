@@ -176,13 +176,17 @@ async def login(body: LoginIn, request: Request, db: AsyncSession = Depends(get_
             raise _coded(401, "totp_required", "Inserisci il codice dell'app authenticator")
         login_limiter.check("totp:" + user.id)
         from ..services.settings_store import decrypt
-        if not totp_svc.verify(decrypt(user.totp_secret), code):
+        if not await totp_svc.consume(db, user, code):
             await audit(db, "mfa_totp_failed", request, user, "craft sync")
             raise _coded(401, "totp_invalid", "Codice non valido")
         await audit(db, "mfa_totp_ok", request, user, "craft sync")
     elif await user_has_passkey(db, user):
         raise _coded(403, "passkey_only",
                      "Questo account usa solo la passkey: collega il computer con il codice di Impostazioni › Craft Sync")
+    else:
+        from ..config import mfa_optional_on
+        if settings.require_mfa_for_adults and not (mfa_optional_on() and user.mfa_choice == "skip"):
+            raise _coded(403, "mfa_enrollment_required", "Attiva prima un secondo fattore dal browser")
     user.failed_logins = 0
     dev, token = await sync.create_device(db, user, body.name, body.platform, body.app_version, ip)
     await audit(db, "sync_device_login", request, user, detail=f"{dev.name} ({dev.platform or '?'})")
@@ -219,7 +223,8 @@ async def stream(request: Request, dctx: DeviceContext = Depends(require_device)
     async def still_allowed() -> bool:
         async with SessionLocal() as s:
             d = await s.get(SyncDevice, device_id)
-            return bool(d and not d.revoked)
+            u = await s.get(User, d.user_id) if d else None
+            return bool(d and not d.revoked and u and u.is_active and u.role != Role.child)
 
     async def gen():
         try:
@@ -229,6 +234,8 @@ async def stream(request: Request, dctx: DeviceContext = Depends(require_device)
                     break
                 try:
                     ev = await asyncio.wait_for(q.get(), timeout=25)
+                    if not await still_allowed():
+                        break
                     if ev.get("kind") in ("sync", "files"):
                         yield events.sse(ev)
                 except asyncio.TimeoutError:

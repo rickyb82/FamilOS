@@ -174,6 +174,8 @@ TOOL_ALIASES = {"search_documents": "read_document",  # stesso permesso dei docu
 
 
 def tool_allowed(policy: dict, tool_name: str) -> bool:
+    if tool_name == "run_code" and not settings.allow_code_execution:
+        return False
     # software non abilitato per l'utente: i suoi tool non esistono (apps nel policy = quelli consentiti; assente = tutti)
     from ..services.apps import app_of_tool
     app = app_of_tool(tool_name)

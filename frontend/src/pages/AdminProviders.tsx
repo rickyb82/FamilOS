@@ -11,9 +11,10 @@ const GROUPS: { title: string; keys: string[] }[] = [
   { title: 'Documenti e memoria', keys: ['embedding_provider', 'embedding_model', 'memory_enabled', 'memory_auto_approve', 'memory_model', 'default_quota_gb'] },
   { title: 'Immagini e voce OpenAI', keys: ['image_model', 'tts_provider', 'tts_model_openai', 'tts_voice_openai', 'tts_style'] },
   { title: 'Ricerca web', keys: ['web_search_provider', 'searxng_url', 'web_search_summarize'] },
-  { title: 'Email di sistema', keys: ['smtp_host', 'smtp_port', 'smtp_user', 'smtp_password', 'smtp_from', 'smtp_from_name', 'smtp_security', 'mail_transport'] },
+  { title: 'Email di sistema', keys: ['smtp_host', 'smtp_port', 'smtp_user', 'smtp_password', 'smtp_from', 'smtp_from_name', 'smtp_security', 'mail_transport', 'security_login_alerts'] },
 ]
 const OPTIONS: Record<string, string[]> = {
+  security_login_alerts: ['true', 'false'],
   openai_cache_mode: ['auto', 'stable'],
   embedding_provider: ['auto', 'ollama', 'openai', 'none'], tts_provider: ['auto', 'openai', 'none'],
   web_search_provider: ['auto', 'searxng', 'openai', 'duckduckgo'], web_search_summarize: ['auto', 'none'],
@@ -47,6 +48,7 @@ export default function AdminProviders() {
   if (!status) return <p role="status">{error || 'Caricamento provider…'}</p>
   return <div className="stack">
     <p className="muted">FamilOS usa OpenAI nel cloud oppure un modello locale su Ollama. Le chiavi restano cifrate sul server e non vengono inviate al browser.</p>
+    <p className="muted small">Gli avvisi di sicurezza usano le Email di sistema e raggiungono gli amministratori attivi. Configura SMTP prima di pubblicare il sistema. I tentativi ripetuti sono raggruppati per 5 minuti, con un massimo di 20 avvisi per esito ogni ora; tutti i tentativi registrati restano nel registro accessi.</p>
     {status.mock_active && <p className="muted small">La preview usa anche un simulatore di sviluppo. Non è un provider di produzione.</p>}
     {error && <div className="error" role="alert">{error}</div>}
     {message && <div className="ok" role="status">{message}</div>}

@@ -19,26 +19,44 @@
         reverse_proxy backend:8000
     }
     handle_path /wordcraft/* {
+        forward_auth backend:8000 {
+            uri /api/auth/apps/wordcraft
+        }
         encode zstd gzip
         reverse_proxy wordcraft-web:80
     }
     handle_path /gridcraft/* {
+        forward_auth backend:8000 {
+            uri /api/auth/apps/gridcraft
+        }
         encode zstd gzip
         reverse_proxy gridcraft-web:80
     }
     handle_path /pdfcraft/* {
+        forward_auth backend:8000 {
+            uri /api/auth/apps/pdfcraft
+        }
         encode zstd gzip
         reverse_proxy pdfcraft-web:80
     }
     handle_path /deckcraft/* {
+        forward_auth backend:8000 {
+            uri /api/auth/apps/deckcraft
+        }
         encode zstd gzip
         reverse_proxy deckcraft-web:80
     }
     handle_path /ideacraft/* {
+        forward_auth backend:8000 {
+            uri /api/auth/apps/ideacraft
+        }
         encode zstd gzip
         reverse_proxy ideacraft-web:80
     }
     handle_path /mailcraft/* {
+        forward_auth backend:8000 {
+            uri /api/auth/apps/mailcraft
+        }
         encode zstd gzip
         reverse_proxy mailcraft:7878 {
             header_up X-Forwarded-Prefix /mailcraft
