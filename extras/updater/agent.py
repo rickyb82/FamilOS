@@ -136,6 +136,9 @@ class Updater:
             if target == "core":
                 installed = (self.root / "VERSION").read_text().strip()
             newer = not installed or version(tag) > version(installed)
+            # Re-enable an app at its existing release without permitting a downgrade.
+            if target != "core" and installed and self.state["installed"].get(target, {}).get("enabled") is False:
+                newer = version(tag) >= version(installed)
             offer = {"id": secrets.token_hex(16), "release_id": release["id"], "tag": tag, "sha": sha,
                      "channel": channel, "target": target, "created": time.time(), "newer": newer,
                      "experimental": bool(release.get("prerelease") or "-" in tag),

@@ -99,6 +99,14 @@ def test_valid_offer(updater, monkeypatch):
     assert updater.validate_offer(body) == offer
 
 
+@pytest.mark.parametrize("tag,available", [("v1.1.0", True), ("v1.0.0", False)])
+def test_disabled_app_can_reenable_same_release_but_not_downgrade(updater, monkeypatch, tag, available):
+    updater.state["installed"]["gridcraft"] = {"tag": "v1.1.0", "enabled": False}
+    monkeypatch.setattr(updater, "github", lambda target, path: [release(tag)] if path.startswith("releases?") else {"sha": "b" * 40})
+    updater.check("gridcraft", "stable")
+    assert updater.state["offers"]["gridcraft"]["newer"] is available
+
+
 @pytest.mark.parametrize("body", [
     {"action": "shell", "target": "core"},
     {"action": "check", "target": "../app", "channel": "stable"},
