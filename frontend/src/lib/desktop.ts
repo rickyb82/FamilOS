@@ -1,3 +1,4 @@
+import type { WindowMode } from "./windowLayout"
 import { createContext, useContext } from 'react'
 import type { Me } from './api'
 import { APP_ICON, APP_LABEL, editorFor, type ArtApp } from './artcraft'
@@ -54,7 +55,7 @@ export function windowAppId(path: string): string {
 }
 
 export type DesktopWindow = { id: string; path: string; x: number; y: number; width: number; height: number;
-  minimized: boolean; mode: 'float' | 'full' | 'left' | 'right' }
+  minimized: boolean; mode: WindowMode }
 
 export function restoreWindows(key: string): DesktopWindow[] {
   try {
@@ -64,7 +65,7 @@ export function restoreWindows(key: string): DesktopWindow[] {
       && w.path.startsWith('/') && !w.path.startsWith('//')
       && !(w.path.startsWith('/editor?') && new URLSearchParams(w.path.split('?')[1]).get('new') === '1')
       && [w.x, w.y, w.width, w.height].every(Number.isFinite)
-      && ['float', 'full', 'left', 'right'].includes(w.mode) && typeof w.minimized === 'boolean')
+      && ['float', 'full', 'left', 'right', 'top-left', 'top-right', 'bottom-left', 'bottom-right'].includes(w.mode) && typeof w.minimized === 'boolean')
       .slice(-12)
   } catch { return [] }
 }

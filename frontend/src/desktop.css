@@ -236,3 +236,12 @@ html[data-desktop-style] .os-search-button>span { color:var(--os-ink); }
 html[data-desktop-style] .os-home-heading>.os-eyebrow,html[data-desktop-style] .os-home-heading .os-eyebrow { color:#fff; }
 html[data-desktop-style] .os-widget p,html[data-desktop-style] .os-welcome>p:not(.os-eyebrow) { color:var(--os-muted); }
 html[data-theme="dark"] .desktop-theme-card { background:#282a39; color:#f4f1fc; }
+.os-arrange-menu { position:relative; }
+.os-arrange-menu>button,.os-screen-button { background:transparent;border:0;padding:6px; }
+.os-arrange-menu>div { position:absolute;top:35px;left:0;min-width:190px;padding:8px;display:grid;gap:4px;background:var(--desktop-glass);backdrop-filter:blur(25px);border:1px solid #ffffff80;border-radius:14px;box-shadow:0 10px 35px #0003; }
+.os-arrange-menu>div button { text-align:left;background:transparent;border:0; }
+.os-snap-preview { position:absolute;pointer-events:none;z-index:1000;background:#89baff55;border:2px solid #dceaff;border-radius:18px;box-shadow:inset 0 0 35px #fff4; }
+.os-window-title { display:flex;align-items:center;gap:8px; }
+.os-window-title .os-icon { width:23px;height:23px;border-radius:6px; }
+.os-window-layout select { max-width:145px;font-size:11px;padding:4px; }
+@media(max-width:720px){.os-arrange-menu {display:none;}.os-topbar {gap:8px;}.os-status {gap:6px;}}

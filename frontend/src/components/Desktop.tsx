@@ -1,3 +1,4 @@
+import { zoneStyle, snapZone, zones } from "../lib/windowLayout"
 import AppIcon from "./AppIcon"
 import { lockSession } from './LockScreen'
 import DesktopCalls from './DesktopCalls'
@@ -44,31 +45,54 @@ export default function Desktop() {
   const board = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const booted = useRef(false)
+  const osFullscreen = useRef(false)
+  const [osFull,setOsFull] = useState(false)
+  const [layoutMenu,setLayoutMenu] = useState(false)
+  const [snap,setSnap] = useState<DesktopWindow['mode']|null>(null)
+  const maximizedFrom=useRef(new Map<string,DesktopWindow['mode']>())
+  async function toggleOSFullscreen(){
+    if(document.fullscreenElement){osFullscreen.current=false;setOsFull(false);await document.exitFullscreen().catch(()=>{});return}
+    try{await document.documentElement.requestFullscreen();osFullscreen.current=true;setOsFull(true)}catch{setFullscreenError('Il browser non consente lo schermo intero. Usa il comando schermo intero del browser.')}
+  }
+  const [fullscreenError,setFullscreenError]=useState('')
+  function maximize(w:DesktopWindow){
+    if(fullscreen.current?.id===w.id)return
+    const mode=w.mode==='full'?(maximizedFrom.current.get(w.id)||'float'):'full'
+    if(w.mode!=='full')maximizedFrom.current.set(w.id,w.mode)
+    arrange(w.id,mode)
+  }
+  function tile(count:2|4){
+    if(fullscreen.current)leaveFullscreen()
+    const visible=state.current.filter(w=>!w.minimized).slice(-count)
+    setWindows(ws=>ws.map(w=>{const i=visible.findIndex(v=>v.id===w.id);return i<0?w:{...w,mode:count===2?(i===0?'left':'right'):zones[i]}}))
+    if(visible.length){setShowHome(false);setActive(visible[visible.length-1].id)}
+    setLayoutMenu(false)
+  }
   const fullscreen = useRef<{id:string; previous:DesktopWindow['mode']} | null>(null)
   const [fullId, setFullId] = useState<string | null>(null)
   function leaveFullscreen() {
     const saved = fullscreen.current
     fullscreen.current = null; setFullId(null)
     if (saved) setWindows(ws=>ws.map(w=>w.id===saved.id?{...w,mode:saved.previous}:w))
-    if (document.fullscreenElement) document.exitFullscreen().catch(()=>{})
+    if (document.fullscreenElement && !osFullscreen.current) document.exitFullscreen().catch(()=>{})
   }
   function toggleFullscreen(w:DesktopWindow) {
     if (fullscreen.current?.id===w.id) {leaveFullscreen();return}
     const previous=fullscreen.current
     if(previous)setWindows(ws=>ws.map(x=>x.id===previous.id?{...x,mode:previous.previous}:x))
-    fullscreen.current={id:w.id,previous:w.mode==='full'?'float':w.mode};setFullId(w.id)
+    fullscreen.current={id:w.id,previous:w.mode};setFullId(w.id)
     setWindows(ws=>ws.map(x=>x.id===w.id?{...x,mode:'full',minimized:false}:x));setActive(w.id);setShowHome(false)
     // Request from the click gesture; CSS fills the viewport if the browser declines.
     document.documentElement.requestFullscreen?.().catch(()=>{})
   }
   useEffect(()=>{
-    const changed=()=>{if (!document.fullscreenElement && fullscreen.current) leaveFullscreen()}
+    const changed=()=>{if (!document.fullscreenElement){osFullscreen.current=false;setOsFull(false);if(fullscreen.current)leaveFullscreen()}}
     const escaped=(e:KeyboardEvent)=>{if(e.key==='Escape' && !document.fullscreenElement && fullscreen.current) leaveFullscreen()}
-    const locked=()=>leaveFullscreen()
+    const locked=()=>{osFullscreen.current=false;setOsFull(false);leaveFullscreen()}
     document.addEventListener('fullscreenchange',changed);window.addEventListener('keydown',escaped);window.addEventListener('familos:locked',locked)
     return ()=>{document.removeEventListener('fullscreenchange',changed);window.removeEventListener('keydown',escaped);window.removeEventListener('familos:locked',locked);if(document.fullscreenElement)document.exitFullscreen().catch(()=>{})}
   },[])
-  useEffect(()=>{if(me?.session_locked)leaveFullscreen()},[me?.session_locked])
+  useEffect(()=>{if(me?.session_locked){osFullscreen.current=false;setOsFull(false);leaveFullscreen()}},[me?.session_locked])
   const [installed, setInstalled] = useState<AppEntry[]>([])
   useEffect(() => {
     let alive = true
@@ -161,7 +185,7 @@ export default function Desktop() {
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setSearchOpen(s => !s) }
-      if (e.key === 'Escape') { setSearchOpen(false); setSwitcher(false); setLauncherOpen(false) }
+      if (e.key === 'Escape') { setLayoutMenu(false); setSearchOpen(false); setSwitcher(false); setLauncherOpen(false) }
     }
     const leaving = (e: BeforeUnloadEvent) => {
       if (state.current.some(w => appForPath(w.path).id === 'editor')) { e.preventDefault(); e.returnValue = '' }
@@ -179,20 +203,22 @@ export default function Desktop() {
   }
   function arrange(id: string, mode: DesktopWindow['mode']) { if(fullscreen.current?.id===id)leaveFullscreen(); setWindows(ws => ws.map(w => w.id === id ? { ...w, mode } : w)) }
   function drag(e: PointerEvent<HTMLElement>, w: DesktopWindow, resize = false) {
-    if (e.button !== 0 || (!resize && (e.target as HTMLElement).closest('button'))) return
+    if (e.button !== 0 || (!resize && (e.target as HTMLElement).closest('button,select,input'))) return
     if (viewport.width <= 720 || w.mode !== 'float') return
     e.preventDefault(); e.currentTarget.setPointerCapture(e.pointerId)
     const startX = e.clientX, startY = e.clientY
     const surface = board.current!
     surface.classList.add('os-dragging')
     const target = e.currentTarget
+    let pending:DesktopWindow['mode']|null=null
     const move = (ev: globalThis.PointerEvent) => {
       const dx = ev.clientX - startX, dy = ev.clientY - startY
+      if(!resize){const rect=surface.getBoundingClientRect();pending=snapZone(ev.clientX-rect.left,ev.clientY-rect.top,rect.width,rect.height);setSnap(pending)}
       setWindows(ws => ws.map(x => x.id !== w.id ? x : resize
         ? { ...x, width: Math.max(360, Math.min(w.width + dx, surface.clientWidth - w.x)), height: Math.max(260, Math.min(w.height + dy, surface.clientHeight - w.y)) }
         : { ...x, x: Math.max(0, Math.min(w.x + dx, surface.clientWidth - Math.min(w.width, surface.clientWidth))), y: Math.max(0, Math.min(w.y + dy, surface.clientHeight - 100)) }))
     }
-    const end = () => { surface.classList.remove('os-dragging'); target.removeEventListener('pointermove', move); target.removeEventListener('pointerup', end); target.removeEventListener('pointercancel', end) }
+    const end = (ev:globalThis.PointerEvent) => { if(pending&&ev.type!=='pointercancel')arrange(w.id,pending);setSnap(null);surface.classList.remove('os-dragging'); target.removeEventListener('pointermove', move); target.removeEventListener('pointerup', end); target.removeEventListener('pointercancel', end) }
     target.addEventListener('pointermove', move); target.addEventListener('pointerup', end); target.addEventListener('pointercancel', end)
   }
 
@@ -212,8 +238,9 @@ export default function Desktop() {
     {me?.features?.messaggi && <DesktopCalls userId={me.user.id} open={open} />}
     <header className="os-topbar">
       <button className="os-wordmark" onClick={() => setShowHome(true)} aria-label={`Home ${brand.name}`}><img src={brand.logo_url} alt="" /> {brand.name}</button>
+      <div className="os-arrange-menu"><button aria-expanded={layoutMenu} onClick={()=>setLayoutMenu(!layoutMenu)}>Disponi</button>{layoutMenu&&<div role="group" aria-label="Disponi finestre"><button onClick={()=>tile(2)}>◫ Due zone</button><button onClick={()=>tile(4)}>⊞ Quattro zone</button><button onClick={()=>{setWindows(ws=>ws.map(w=>({...w,mode:'float'})));setLayoutMenu(false)}}>▢ Finestre libere</button></div>}</div>
       <span className="os-household">{me!.family_name || 'La nostra casa'}</span>
-      <div className="os-status"><span className={`os-online ${online ? '' : 'offline'}`} title={online ? 'Connesso' : 'Connessione assente'} />
+      <div className="os-status"><button className="os-screen-button" onClick={toggleOSFullscreen} aria-label={osFull?"Esci da schermo intero OS":"OS a schermo intero"} title={osFull?"Esci da schermo intero OS":"OS a schermo intero"}>⛶</button><span className={`os-online ${online ? '' : 'offline'}`} title={online ? 'Connesso' : 'Connessione assente'} />
         <time>{now.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}</time>
         <WindowRouter path="/app" navigate={open}>{me!.user.role !== 'child' && <Approvals />}<Notifications /></WindowRouter>
         <button className="os-lock-button" onClick={() => lockSession()} aria-label="Blocca schermo" title="Blocca schermo">▣</button>
@@ -221,6 +248,7 @@ export default function Desktop() {
         <button className="os-logout" onClick={() => { if (!state.current.some(w => appForPath(w.path).id === 'editor') || confirm('Uscire? Salva prima i documenti aperti.')) logout() }} title="Esci">↪</button>
       </div>
     </header>
+    {fullscreenError&&<div role="alert">{fullscreenError}<button onClick={()=>setFullscreenError('')}>Chiudi</button></div>}
     {!online && <div className="os-offline" role="status">Sei offline. Le app aperte restano visibili; lettura e salvataggi richiedono la connessione.</div>}
     <div className="os-board" ref={board}>
       <main className="os-home" style={{ visibility: showHome ? undefined : 'hidden' }} aria-hidden={!showHome}>
@@ -241,24 +269,24 @@ export default function Desktop() {
         </div>
         <footer className="os-home-footer"><span>La tua famiglia. Il vostro spazio.</span><button onClick={() => setGuide(true)}>Come funziona ↗</button></footer>
       </main>
+      {snap&&<div className="os-snap-preview" style={zoneStyle(snap)} aria-hidden="true"/>}
       {windows.map((w, i) => {
         const app = appForPath(w.path)
         const hidden = w.minimized || showHome || viewport.width <= 720 && active !== w.id
         const full = w.mode === 'full' || viewport.width <= 720
-        const half = w.mode === 'left' || w.mode === 'right'
+        const tiled = w.mode !== 'float'
         const availableHeight = Math.max(260, viewport.height - (online ? 156 : 190))
         const top = Math.max(0, Math.min(w.y, availableHeight - 260))
-        const style = full ? { left: 8, top: 8, width: 'calc(100% - 16px)', height: 'calc(100% - 16px)' }
-          : half ? { left: w.mode === 'left' ? 8 : '50%', top: 8, width: 'calc(50% - 12px)', height: 'calc(100% - 16px)' }
+        const style = full ? zoneStyle('full') : tiled ? zoneStyle(w.mode)
           : { left: Math.max(0, Math.min(w.x, viewport.width - Math.min(w.width, viewport.width - 24) - 16)), top, width: Math.min(w.width, viewport.width - 24), height: Math.min(w.height, availableHeight - top - 8) }
         return <section key={w.id} className={`os-window ${active === w.id ? 'active' : ''} ${fullId===w.id?'os-window-fullscreen':''}`} style={{ ...style, zIndex: i + 1, display: hidden ? 'none' : undefined }} aria-label={`${app.title}, finestra`} onPointerDownCapture={() => { if (active !== w.id) focus(w.id) }}>
-          <header className="os-window-bar" onPointerDown={e => drag(e, w)} onDoubleClick={() => toggleFullscreen(w)}>
+          <header className="os-window-bar" onPointerDown={e => drag(e, w)} onDoubleClick={e => {if(!(e.target as HTMLElement).closest('button,select,input'))maximize(w)}}>
             <div className="os-window-controls"><button title="Chiudi finestra" aria-label={`Chiudi ${app.title}`} onClick={() => close(w)}>×</button><button title="Riduci nel dock" aria-label={`Riduci ${app.title}`} onClick={() => { if(fullscreen.current?.id===w.id)leaveFullscreen(); setWindows(ws => ws.map(x => x.id === w.id ? { ...x, minimized: true } : x)); if (active === w.id) setShowHome(true) }}>−</button><button title={fullId===w.id?"Torna in finestra":"Schermo intero"} aria-label={fullId===w.id?"Torna in finestra":"Schermo intero"} onClick={() => toggleFullscreen(w)}>↗</button></div>
-            <span className="os-window-title">{app.icon} {app.id === 'editor' ? new URLSearchParams(w.path.split('?')[1]).get('name') || 'Documento' : app.title}</span>
-            <div className="os-window-layout"><button title="Affianca a sinistra" aria-label="Affianca a sinistra" onClick={() => arrange(w.id, 'left')}>▏</button><button title="Affianca a destra" aria-label="Affianca a destra" onClick={() => arrange(w.id, 'right')}>▕</button><button title="Finestra libera" aria-label="Finestra libera" onClick={() => arrange(w.id, 'float')}>▢</button></div>
+            <span className="os-window-title"><AppIcon app={app}/> {app.id === 'editor' ? new URLSearchParams(w.path.split('?')[1]).get('name') || 'Documento' : app.title}</span>
+            <div className="os-window-layout"><select aria-label="Posizione finestra" value={w.mode} onChange={e=>arrange(w.id,e.target.value as DesktopWindow['mode'])}><option value="float">Libera</option><option value="full">Ingrandita nell’OS</option><option value="left">Metà sinistra</option><option value="right">Metà destra</option><option value="top-left">Alto sinistra</option><option value="top-right">Alto destra</option><option value="bottom-left">Basso sinistra</option><option value="bottom-right">Basso destra</option></select><button title="Affianca a sinistra" aria-label="Affianca a sinistra" onClick={() => arrange(w.id, 'left')}>▏</button><button title="Affianca a destra" aria-label="Affianca a destra" onClick={() => arrange(w.id, 'right')}>▕</button><button title="Finestra libera" aria-label="Finestra libera" onClick={() => arrange(w.id, 'float')}>▢</button></div>
           </header>
           <div className="os-window-body"><WindowCommands.Provider value={{ close: () => close(w) }}><WindowActivity.Provider value={!hidden && active === w.id}><WindowRouter path={w.path} navigate={path => navigateWindow(w.id, path)}><WorkspaceRoutes /></WindowRouter></WindowActivity.Provider></WindowCommands.Provider></div>
-          {!full && !half && <button className="os-resize" aria-label={`Ridimensiona ${app.title}`} title="Trascina per ridimensionare" onPointerDown={e => drag(e, w, true)} onKeyDown={e => { const delta = e.shiftKey ? 80 : 20; if (['ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown'].includes(e.key)) { e.preventDefault(); setWindows(ws => ws.map(x => x.id !== w.id ? x : { ...x, width: Math.max(360, x.width + (e.key === 'ArrowRight' ? delta : e.key === 'ArrowLeft' ? -delta : 0)), height: Math.max(260, x.height + (e.key === 'ArrowDown' ? delta : e.key === 'ArrowUp' ? -delta : 0)) })) } }}>◢</button>}
+          {!full && !tiled && <button className="os-resize" aria-label={`Ridimensiona ${app.title}`} title="Trascina per ridimensionare" onPointerDown={e => drag(e, w, true)} onKeyDown={e => { const delta = e.shiftKey ? 80 : 20; if (['ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown'].includes(e.key)) { e.preventDefault(); setWindows(ws => ws.map(x => x.id !== w.id ? x : { ...x, width: Math.max(360, x.width + (e.key === 'ArrowRight' ? delta : e.key === 'ArrowLeft' ? -delta : 0)), height: Math.max(260, x.height + (e.key === 'ArrowDown' ? delta : e.key === 'ArrowUp' ? -delta : 0)) })) } }}>◢</button>}
         </section>
       })}
     </div>
