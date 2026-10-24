@@ -2,6 +2,7 @@
 """Backup consistente e cifrato dello stack. Eseguire sul nodo, non nel container."""
 import datetime
 import fcntl
+import getpass
 import json
 import os
 from pathlib import Path
@@ -36,6 +37,26 @@ def archive_filter(info):
         if target.is_absolute() or '..' in target.parts:
             raise RuntimeError('Symlink non portabile: ' + info.name)
     return info
+
+
+
+def encrypt_interactive(archive, destination):
+    # Read from the SSH terminal, never pass a password in argv or the environment.
+    if not sys.stdin.isatty():
+        raise RuntimeError('Backup interattivo: usare SSH con -t oppure la chiave protetta dell’agente')
+    password = getpass.getpass('Password del backup GPG: ')
+    if not password:
+        raise RuntimeError('Password vuota: backup annullato')
+    if password != getpass.getpass('Ripeti la password del backup GPG: '):
+        raise RuntimeError('Le password non coincidono: backup annullato')
+    if '\n' in password or '\r' in password:
+        raise RuntimeError('Password non valida')
+    try:
+        subprocess.run(['gpg', '--batch', '--pinentry-mode', 'loopback', '--passphrase-fd', '0',
+                        '--symmetric', '--cipher-algo', 'AES256', '--output', str(destination), str(archive)],
+                       cwd=ROOT, check=True, text=True, input=password+'\n')
+    finally:
+        password = ''
 
 
 def main():
@@ -131,7 +152,10 @@ def main():
                     if not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or st.st_mode & 0o077 or not keypath.read_bytes().strip():
                         raise RuntimeError('Chiave backup non protetta o vuota')
                     options = ['--batch','--pinentry-mode','loopback','--passphrase-file',str(keypath)]
-                run(['gpg', *options, '--symmetric', '--cipher-algo', 'AES256', '--output', str(partial), str(archive)])
+                if key:
+                    run(['gpg', *options, '--symmetric', '--cipher-algo', 'AES256', '--output', str(partial), str(archive)])
+                else:
+                    encrypt_interactive(archive, partial)
                 partial.rename(destination)
             finally:
                 partial.unlink(missing_ok=True)
