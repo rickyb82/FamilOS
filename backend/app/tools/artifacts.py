@@ -7,10 +7,12 @@ from ..config import get_settings
 from sqlalchemy import select
 
 from ..models import Artifact
+from ..services.game_projects import PROJECT_SCHEMA, encode_project, validate_project
+import json
 from .registry import ToolContext, ToolResult, register
 
 settings = get_settings()
-KINDS = ["html", "svg", "markdown", "code", "mermaid"]
+KINDS = ["html", "svg", "markdown", "code", "mermaid", "game"]
 
 
 def artifact_out(a: Artifact) -> dict:
@@ -22,7 +24,7 @@ def artifact_out(a: Artifact) -> dict:
 @register(
     "create_artifact",
     "Usa solo per un nuovo contenuto distinto; per correggere o estendere un artifact esistente usa update_artifact sullo stesso id. Crea un artifact: un contenuto autonomo e sostanzioso che l'utente vede in un pannello dedicato accanto alla chat, "
-    "con anteprima live. Usalo per: pagine web/giochi/app HTML+CSS+JS (kind=html, tutto in un unico file, librerie solo "
+    "con anteprima live. Per videogiochi usa kind=game e project (runtime javascript anche TypeScript, oppure python con Pyodide e Canvas via js). Progetti multi-file: entry, files, dependencies ES modules versionate, libraries=[phaser] per Phaser globale (con canvas fornito impostare type: Phaser.CANVAS oppure Phaser.WEBGL, mai AUTO). Three.js via dependencies. Asset con data URI o testo SVG e game.asset(path); canvas #game, game.root. Per Python usa from js import document e asyncio per il loop; non usare pygame nativo o librerie desktop. Non promettere immagini o suoni non inclusi. Usalo per: pagine web/giochi/app HTML+CSS+JS (kind=html, tutto in un unico file, librerie solo "
     "da cdnjs.cloudflare.com), grafica SVG (kind=svg), diagrammi Mermaid (kind=mermaid), documenti lunghi in markdown "
     "(kind=markdown), programmi completi in un linguaggio (kind=code, con language). NON usarlo per frammenti brevi o "
     "spiegazioni: quelli vanno nel messaggio. Dopo la creazione non ripetere il contenuto nel messaggio: descrivilo in 1-2 frasi.",
@@ -30,8 +32,9 @@ def artifact_out(a: Artifact) -> dict:
         "title": {"type": "string", "description": "Titolo breve"},
         "kind": {"type": "string", "enum": KINDS},
         "language": {"type": "string", "description": "Per kind=code: python, javascript, typescript, java, bash…"},
-        "content": {"type": "string", "description": "Contenuto completo"}},
-     "required": ["title", "kind", "content"]},
+        "project": PROJECT_SCHEMA,
+        "content": {"type": "string", "description": "Contenuto completo; per game usare project oppure JSON del progetto"}},
+     "required": ["title", "kind"]},
     usage_kind="tool",
 )
 async def create_artifact(args: dict, ctx: ToolContext) -> ToolResult:
@@ -40,9 +43,13 @@ async def create_artifact(args: dict, ctx: ToolContext) -> ToolResult:
         return ToolResult(f"kind non valido, usa uno tra {KINDS}", is_error=True)
     if not ctx.conversation_id:
         return ToolResult("Artifact disponibili solo dentro una conversazione", is_error=True)
+    try:
+        content = encode_project(args.get('project', args.get('content',''))) if kind == 'game' else str(args['content'])
+    except (ValueError, TypeError, KeyError) as exc:
+        return ToolResult(f"Contenuto non valido: {exc}", is_error=True)
     a = Artifact(family_id=ctx.user.family_id, owner_id=ctx.user.id, conversation_id=ctx.conversation_id,
                  project_id=ctx.project_id, title=str(args.get("title", "Artifact"))[:200], kind=kind,
-                 language=str(args.get("language", "") or "")[:40], content=str(args.get("content", "")))
+                 language=str(args.get("language", "") or "")[:40], content=content)
     ctx.db.add(a)
     await ctx.db.commit()
     return ToolResult(f"Artifact creato (id {a.id}, versione 1). L'utente lo vede già nel pannello: non ricopiarne il contenuto.",
@@ -56,6 +63,9 @@ async def create_artifact(args: dict, ctx: ToolContext) -> ToolResult:
     {"type": "object", "properties": {
         "artifact_id": {"type": "string"},
         "new_version": {"type": "boolean", "default": False},
+        "project": PROJECT_SCHEMA,
+        "files": {"type":"object","additionalProperties":{"type":"string"},"description":"Per game: solo i file da aggiungere o aggiornare, gli altri restano invariati."},
+        "delete_files": {"type":"array","items":{"type":"string"}},
         "title": {"type": "string"},
         "content": {"type": "string", "description": "Contenuto completo (alternativo a replacements)"},
         "replacements": {"type": "array", "items": {"type": "object", "properties": {
@@ -75,6 +85,15 @@ async def update_artifact(args: dict, ctx: ToolContext) -> ToolResult:
         if not old or old not in new_content:
             return ToolResult(f"Testo da sostituire non trovato: {old[:80]!r}", is_error=True)
         new_content = new_content.replace(old, str(r.get("new", "")), 1)
+    if a.kind == 'game':
+        try:
+            project = validate_project(args.get('project', new_content))
+            project['files'] = {**project['files'], **(args.get('files') or {})}
+            for path in args.get('delete_files') or []:
+                project['files'].pop(path, None)
+            new_content = encode_project(project)
+        except (ValueError, TypeError) as exc:
+            return ToolResult(f"Progetto non valido: {exc}", is_error=True)
     if args.get("new_version") is True:
         hist = list(a.history or [])
         hist.append({"version": a.version, "content": a.content, "created_at": datetime.now(timezone.utc).isoformat()})

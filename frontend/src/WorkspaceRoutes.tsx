@@ -1,3 +1,4 @@
+const Games = lazy(() => import("./pages/Games"))
 const InstalledApp = lazy(() => import("./pages/InstalledApp"))
 const SafeBrowser = lazy(() => import('./pages/SafeBrowser'))
 const ParentalControls = lazy(() => import('./pages/ParentalControls'))
@@ -25,6 +26,7 @@ export function WorkspaceRoutes() {
       <Suspense fallback={<div className="center muted">Apertura app…</div>}><Routes>
         <Route path="/" element={<Chat />} />
         <Route path="/c/:id" element={<Chat />} />
+        <Route path="/games" element={<Games />} />
         <Route path="/browser" element={<SafeBrowser />} />
         {me.user.role !== "child" && <Route path="/parental" element={<ParentalControls />} />}
         <Route path="/installed/:appId" element={<InstalledApp />} />

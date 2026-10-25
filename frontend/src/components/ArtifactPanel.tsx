@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import GameProjectPanel from './GameProjectPanel'
 import Markdown from './Markdown'
 import { get, patch } from '../lib/api'
 import { fetchSpeech } from '../lib/speech'
@@ -6,7 +7,7 @@ import { fetchSpeech } from '../lib/speech'
 export interface ArtifactData {
   id: string
   title: string
-  kind: 'html' | 'svg' | 'markdown' | 'code' | 'mermaid'
+  kind: 'html' | 'svg' | 'markdown' | 'code' | 'mermaid' | 'game'
   language: string
   version: number
   content: string
@@ -70,8 +71,9 @@ function previewDoc(a: ArtifactData): string {
   return ''
 }
 
-export default function ArtifactPanel({ artifact, all = [], canEdit, onClose, onChange, onSelect, onDelete }: {
+export default function ArtifactPanel({ artifact, all = [], canEdit, onClose, onChange, onSelect, onDelete, onAsk }: {
   artifact: ArtifactData; all?: ArtifactData[]; canEdit: boolean; onClose: () => void; onChange: (a: ArtifactData) => void
+  onAsk?: (text: string) => void
   onSelect?: (a: ArtifactData) => void; onDelete?: (a: ArtifactData) => void | Promise<void>
 }) {
   const [tab, setTab] = useState<'preview' | 'code'>(CAN_PREVIEW.has(artifact.kind) ? 'preview' : 'code')
@@ -129,6 +131,8 @@ export default function ArtifactPanel({ artifact, all = [], canEdit, onClose, on
     a.click()
     URL.revokeObjectURL(u)
   }
+
+  if (artifact.kind === 'game') return <aside className="artifact-panel"><header className="artifact-header"><b>{shown.title} · v{shown.version}</b>{versions.length > 1 && <select aria-label="Versione gioco" value={shown.version} onChange={e=>showVersion(Number(e.target.value))}>{versions.map(v=><option key={v} value={v}>v{v}</option>)}</select>}{all.length > 1 && onSelect && <select aria-label="Scegli artifact" value={artifact.id} onChange={e=>{const found=all.find(a=>a.id===e.target.value);if(found)onSelect(found)}}>{all.map(a=><option key={a.id} value={a.id}>{a.title}</option>)}</select>}<button onClick={onClose}>Chiudi</button></header><GameProjectPanel key={`${shown.id}-${shown.version}`} artifact={shown} canEdit={canEdit && shown.version === artifact.version} onChange={onChange} onAsk={onAsk}/></aside>
 
   return (
     <aside className="artifact-panel">

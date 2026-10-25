@@ -332,6 +332,7 @@ export default function Chat() {
           <div className="composer-box">
             <input ref={fileInput} type="file" multiple hidden onChange={(e) => upload(e.target.files)} />
             <input ref={cameraInput} type="file" accept="image/*" capture="environment" hidden onChange={(e) => upload(e.target.files)} />
+            <button type="button" className="ghost small" disabled={busy} onClick={() => setText(current => current || 'Crea un mini videogioco giocabile come artifact di tipo game, con più file e le librerie grafiche adatte. La mia idea è: ')}>🎮 Crea un gioco</button>
             <textarea
               ref={composerRef}
               autoFocus
@@ -385,7 +386,7 @@ export default function Chat() {
       {share && conv && <ShareDialog type="conversation" id={conv.id} onClose={() => setShare(false)} />}
     </div>
     {openArtifact && (
-      <ArtifactPanel artifact={openArtifact} all={artifacts} canEdit={canWrite} onClose={() => setOpenArtifact(null)} onChange={(a) => upsertArtifact(a)} onSelect={(a) => setOpenArtifact(a)}
+      <ArtifactPanel onAsk={prompt => setText(current => current ? current + "\n\n" + prompt : prompt)} artifact={openArtifact} all={artifacts} canEdit={canWrite} onClose={() => setOpenArtifact(null)} onChange={(a) => upsertArtifact(a)} onSelect={(a) => setOpenArtifact(a)}
         onDelete={async (a) => { await del(`/artifacts/${a.id}`); removeArtifact(a.id) }} />
     )}
     </div>

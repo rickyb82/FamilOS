@@ -639,3 +639,18 @@ class SyncTombstone(Base):
     org: Mapped[bool] = mapped_column(Boolean, default=False)           # stava nell'archivio dell'organizzazione
     dept: Mapped[str] = mapped_column(String(40), default="")           # reparto della cartella ("" = per tutti)
     deleted_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=now)
+
+
+class SavedGame(Base):
+    """Independent personal game snapshot, retained when the source chat is deleted."""
+    __tablename__ = 'saved_games'
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    family_id: Mapped[str] = mapped_column(ForeignKey('families.id'), index=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey('users.id'), index=True)
+    source_artifact_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    sharing: Mapped[str] = mapped_column(String(20), default='private')
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    title: Mapped[str] = mapped_column(String(200))
+    runtime: Mapped[str] = mapped_column(String(20))
+    content: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=now, onupdate=now)

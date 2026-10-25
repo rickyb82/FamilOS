@@ -12,6 +12,8 @@ WORKDIR /app
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/app ./app
+COPY frontend/src/games/runtime.js ./app/services/game_runtime.js
+COPY docs/games ./app/game_templates
 COPY VERSION ./
 
 EXPOSE 8000

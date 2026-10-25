@@ -63,6 +63,12 @@ async def update_artifact(aid: str, body: ArtifactUpdate, ctx: AuthContext = Dep
     if not a:
         raise HTTPException(404)
     await require_access(db, "conversation", a.conversation_id, ctx.user, write=True)
+    if a.kind == 'game' and body.content is not None:
+        from ..services.game_projects import encode_project
+        try:
+            body.content = encode_project(body.content)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(400, str(exc))
     if body.new_version:
         hist = list(a.history or [])
         hist.append({"version": a.version, "content": a.content, "created_at": datetime.now(timezone.utc).isoformat()})
@@ -115,3 +121,28 @@ async def raw(aid: str, ctx: AuthContext = Depends(require_auth), db: AsyncSessi
         "Content-Disposition": _content_disposition(a.title, ext),
         "X-Content-Type-Options": "nosniff",
     })
+
+
+@router.get("/{aid}/project.zip")
+async def export_project(aid: str, version: int | None = None, ctx: AuthContext = Depends(require_auth), db: AsyncSession = Depends(get_db)):
+    import io, json, zipfile, base64
+    from ..services.game_projects import validate_project
+    a = await db.get(Artifact, aid)
+    if not a: raise HTTPException(404)
+    await require_access(db, "conversation", a.conversation_id, ctx.user)
+    if a.kind != 'game': raise HTTPException(400, "Non è un progetto gioco")
+    content = a.content
+    if version is not None and version != a.version:
+        previous = next((h for h in (a.history or []) if h['version'] == version), None)
+        if not previous: raise HTTPException(404, 'Versione non trovata')
+        content = previous['content']
+    project = validate_project(content)
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as archive:
+        for path, value in project['files'].items():
+            archive.writestr('src/'+path, base64.b64decode(value.split(',',1)[1]) if value.startswith('data:') else value.encode())
+        archive.writestr('familos-game.json', json.dumps(project, ensure_ascii=False, indent=2))
+        from ..services.game_projects import standalone_html
+        archive.writestr('index.html', standalone_html(project))
+        archive.writestr('README.txt', 'Aprire index.html in un browser moderno con connessione Internet per giocare. Progetto FamilOS. Importare familos-game.json nel pannello gioco. I sorgenti e le risorse sono in src/. Dipendenze e runtime sono dichiarati nel manifest. Richiede Internet per caricare le librerie. Non è un eseguibile desktop.')
+    return Response(output.getvalue(), media_type='application/zip', headers={'Content-Disposition':'attachment; filename="familos-game.zip"'})

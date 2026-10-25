@@ -266,6 +266,7 @@ export default function Desktop() {
         <div className="os-home-heading"><div><p className="os-eyebrow">IL TUO SPAZIO, INSIEME</p><h1>Ciao, {firstName}<span>.</span></h1><p className="os-date">{today}</p></div>
           <button className="os-search-button" onClick={() => setSearchOpen(true)}>⌕ <span>Cerca in {brand.name}</span><kbd>⌘ K</kbd></button></div>
         <div className="os-widgets">
+          <section className="os-widget"><button className="ghost" onClick={()=>open('/games')}><AppIcon app={appForPath('/games')} /><h2>Giochi</h2><p>I tuoi mondi e le stanze della famiglia</p></button></section>
           <section className="os-welcome"><div className="os-welcome-symbol">✳</div><p className="os-eyebrow">UN AIUTO QUOTIDIANO</p><h2>Facciamo spazio<br /> alle tue idee.</h2><p>Organizza i documenti, riprendi un progetto o chiedi una mano a Emily.</p><button onClick={() => open('/')}>Parla con Emily <span>↗</span></button></section>
           <section className="os-widget os-recents"><div className="os-widget-heading"><h2>I tuoi file</h2><button onClick={() => open('/documents')}>Apri File ↗</button></div>
             {recentError && <p className="os-empty" role="status">{recentError}</p>}

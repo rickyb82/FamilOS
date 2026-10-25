@@ -11,6 +11,7 @@ export default function AppIcon({app}:{app:AppEntry}) {
  if(id==='chat')glyph=<path d="m32 13 5 13 14 6-14 5-5 14-5-14-14-5 14-6Z"/>
  if(id==='files'||id==='projects')glyph=<><path d="M9 22v-7h19l6 7h21v29H9Z" fill="#ffe7a2" stroke="#ffe7a2"/><path d="M9 26h46l-3 25H12Z" fill="#fff3c4" stroke="#fff8dc"/><path d="M13 28h38" stroke="#fff"/></>
  if(id==='messages')glyph=<path d="M52 30c0 11-9 18-20 18h-6l-11 5 3-10c-4-3-6-7-6-13 0-11 9-18 20-18s20 7 20 18Z" fill="white" stroke="white"/>
+ if(id==='games')glyph=<><path d="M18 23h28c7 0 12 23 6 26-4 2-9-7-12-7H24c-3 0-8 9-12 7-6-3-1-26 6-26Z"/><path d="M22 29v10m-5-5h10" stroke={bottom}/><circle cx="42" cy="31" r="2" fill={bottom}/><circle cx="47" cy="37" r="2" fill={bottom}/></>
  if(id==='browser')glyph=<><circle cx="32" cy="32" r="23" fill="#f4fbff" stroke="#dcf5ff"/><circle cx="32" cy="32" r="19" fill="#2b9fee" stroke="#92dbff"/><path d="m43 19-8 17-7-7Z" fill="#ff565d" stroke="#ff565d"/><path d="m21 45 7-16 7 7Z" fill="white" stroke="white"/></>
  if(id==='settings'||id==='installation')glyph=<><path d="m27 13 10 0 2 6 6 3 6 0 4 9-5 5-1 6 1 5-9 6-5-4-7 0-5 3-8-7 2-6-1-6-4-4 4-9 6 0Z" transform="translate(0 -2) scale(.95)"/><circle cx="32" cy="31" r="8" fill={bottom}/></>
  if(id==='apps')glyph=<>{[19,33,47].flatMap(x=>[19,33,47].map(y=><rect key={`${x}-${y}`} x={x-5} y={y-5} width="9" height="9" rx="2"/>))}</>

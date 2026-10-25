@@ -885,3 +885,5 @@ html[data-theme="dark"] { .login-primary { background: #fff; color: #111; } .log
 .msg-page > .call-embedded { position: absolute; inset: 0; z-index: 20; }
 .msg-page > .call-embedded.mini { inset: auto 12px 12px auto; width: min(320px, calc(100% - 24px)); height: min(240px, calc(100% - 24px)); }
 .call-embedded .call-grid { grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); }
+
+.game-studio {display:flex;flex-direction:column;gap:10px;overflow:auto;padding:12px;flex:1;min-height:0}.game-studio .row {flex-wrap:wrap}.game-studio textarea {width:100%;box-sizing:border-box}.game-studio nav button {flex:1}

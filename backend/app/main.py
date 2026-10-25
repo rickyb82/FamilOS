@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 
-from .api import admin, approvals, artifacts, auth, chat, events, files, messaging, push, wellknown, native_app, folders, google_auth, projects, shares, tts, mail, sync
+from .api import game_rooms, games, admin, approvals, artifacts, auth, chat, events, files, messaging, push, wellknown, native_app, folders, google_auth, projects, shares, tts, mail, sync
 from .config import get_settings
 from .db import SessionLocal, init_db
 from .models import AgeGroup, Family, Role, User
@@ -106,7 +106,7 @@ async def private_response_cache(request, call_next):
         response.headers["Cache-Control"] = "no-store, private"
     return response
 
-for r in (auth.router, google_auth.router, chat.router, projects.router, shares.router, admin.router, artifacts.router, tts.router, approvals.router, mail.router, folders.router, push.router, native_app.router, messaging.router, events.router, sync.router):
+for r in (game_rooms.router, games.router, auth.router, google_auth.router, chat.router, projects.router, shares.router, admin.router, artifacts.router, tts.router, approvals.router, mail.router, folders.router, push.router, native_app.router, messaging.router, events.router, sync.router):
     app.include_router(r, prefix="/api")
 from .api import branding, installation, education, browser, parental, lockscreen, app_access, updates
 from .api import remote_browser

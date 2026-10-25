@@ -1,0 +1,12 @@
+{
+  "runtime": "javascript",
+  "entry": "main.ts",
+  "libraries": [
+    "phaser"
+  ],
+  "files": {
+    "main.ts": "import {palette} from './palette';\nnew Phaser.Game({type:Phaser.CANVAS,canvas:game.canvas,parent:game.root,width:800,height:600,backgroundColor:palette.background,scale:{mode:Phaser.Scale.FIT,autoCenter:Phaser.Scale.CENTER_BOTH},scene:{create(){\n this.input.keyboard.removeAllListeners();\n let score=0, remaining=30;\n this.add.text(32,24,'Acchiappa la stella',{fontSize:'30px',color:'#ffffff'});\n this.add.text(32,68,'Tocca la stella o premi Spazio. Hai 30 secondi!',{fontSize:'18px'});\n const hud=this.add.text(32,110,'Punti: 0 · Tempo: 30',{fontSize:'22px'});\n const star=this.add.star(400,300,5,24,52,0xffd166).setInteractive({useHandCursor:true});\n const collect=()=>{if(remaining<=0)return;score++;star.setPosition(Phaser.Math.Between(70,730),Phaser.Math.Between(200,510));hud.setText(`Punti: ${score} · Tempo: ${remaining}`)};star.on('pointerdown',collect);this.input.keyboard.on('keydown-SPACE',collect);\n this.time.addEvent({delay:1000,repeat:29,callback:()=>{remaining--;hud.setText(`Punti: ${score} · Tempo: ${remaining}`);if(!remaining){star.disableInteractive();this.add.text(200,530,'Fine! Tocca qui per rigiocare',{fontSize:'24px'}).setInteractive({useHandCursor:true}).on('pointerdown',()=>this.scene.restart());this.input.keyboard.once('keydown-R',()=>this.scene.restart())}}});\n}}});",
+    "palette.ts": "export const palette = {background: '#20223e'};"
+  },
+  "dependencies": {}
+}
