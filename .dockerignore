@@ -3,7 +3,12 @@ data/
 **/node_modules
 **/dist
 **/__pycache__
-frontend/
+frontend/*
+!frontend/src/
+frontend/src/*
+!frontend/src/games/
+frontend/src/games/*
+!frontend/src/games/runtime.js
 sandbox/
 backups/
 .git/
