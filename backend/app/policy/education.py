@@ -74,8 +74,9 @@ def apply_to_policy(user, policy: dict) -> dict:
     policy.update(education_mode=mode_for(user),homework_mode="allow" if mode_for(user)=="standard" else "tutor",safe_search=True,moderation=True,parent_can_view=True,
                   cloud_allowed=cloud_allowed(user),
                   time_windows=[{"days":list(range(7)),"start":profile["start"],"end":profile["end"]}])
-    limit = int(policy.get("daily_message_limit") or profile["daily_message_limit"])
-    policy["daily_message_limit"] = min(limit,profile["daily_message_limit"])
+    # Explicit administrator settings override the age default, including 0 (unlimited).
+    limit = (user.policy or {}).get("daily_message_limit")
+    policy["daily_message_limit"] = profile["daily_message_limit"] if limit is None else int(limit)
     policy["daily_image_limit"] = profile["daily_image_limit"] if profile["allow_images"] and policy["cloud_allowed"] else 0
     allowed = {"read_document","artifacts"}
     if profile["allow_web"]:
