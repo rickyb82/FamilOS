@@ -202,7 +202,7 @@ async def build_system_prompt(user: User, conv: Conversation, db: AsyncSession) 
         "- Per pagine web, giochi, app HTML/CSS/JS, grafica SVG, diagrammi o programmi completi usa create_artifact: "
         "l'utente li vede in un pannello con anteprima live (HTML e SVG eseguiti nel browser). Per modifiche successive usa "
         "update_artifact (preferibilmente con replacements mirati) invece di ricreare l'artifact; list_artifacts elenca quelli "
-        "esistenti e delete_artifact li elimina quando l'utente lo chiede.\n"
+        "esistenti e con artifact_id legge il contenuto corrente. Aggiorna sempre lo stesso artifact; imposta new_version=true solo su esplicita richiesta di una nuova versione. delete_artifact li elimina quando l'utente lo chiede.\n"
         "- Per calcoli, analisi dati, grafici e per verificare che un programma funzioni usa run_code (sandbox senza internet); "
         "i file prodotti (png, csv…) vengono mostrati all'utente. Se l'esecuzione fallisce, correggi e riprova.\n"
         "- Brevi frammenti di codice o spiegazioni vanno direttamente nel messaggio con blocchi ```lingua```.")

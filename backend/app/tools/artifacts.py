@@ -21,7 +21,7 @@ def artifact_out(a: Artifact) -> dict:
 
 @register(
     "create_artifact",
-    "Crea un artifact: un contenuto autonomo e sostanzioso che l'utente vede in un pannello dedicato accanto alla chat, "
+    "Usa solo per un nuovo contenuto distinto; per correggere o estendere un artifact esistente usa update_artifact sullo stesso id. Crea un artifact: un contenuto autonomo e sostanzioso che l'utente vede in un pannello dedicato accanto alla chat, "
     "con anteprima live. Usalo per: pagine web/giochi/app HTML+CSS+JS (kind=html, tutto in un unico file, librerie solo "
     "da cdnjs.cloudflare.com), grafica SVG (kind=svg), diagrammi Mermaid (kind=mermaid), documenti lunghi in markdown "
     "(kind=markdown), programmi completi in un linguaggio (kind=code, con language). NON usarlo per frammenti brevi o "
@@ -51,10 +51,11 @@ async def create_artifact(args: dict, ctx: ToolContext) -> ToolResult:
 
 @register(
     "update_artifact",
-    "Aggiorna un artifact esistente (nuova versione). Passa il contenuto COMPLETO aggiornato, oppure una lista di "
+    "Modifica lo stesso artifact senza creare una nuova versione. Usa new_version=true SOLO se l’utente chiede esplicitamente una nuova versione. Passa il contenuto COMPLETO aggiornato, oppure una lista di "
     "sostituzioni testuali esatte (old -> new) per modifiche mirate senza riscrivere tutto.",
     {"type": "object", "properties": {
         "artifact_id": {"type": "string"},
+        "new_version": {"type": "boolean", "default": False},
         "title": {"type": "string"},
         "content": {"type": "string", "description": "Contenuto completo (alternativo a replacements)"},
         "replacements": {"type": "array", "items": {"type": "object", "properties": {
@@ -74,11 +75,12 @@ async def update_artifact(args: dict, ctx: ToolContext) -> ToolResult:
         if not old or old not in new_content:
             return ToolResult(f"Testo da sostituire non trovato: {old[:80]!r}", is_error=True)
         new_content = new_content.replace(old, str(r.get("new", "")), 1)
-    hist = list(a.history or [])
-    hist.append({"version": a.version, "content": a.content, "created_at": datetime.now(timezone.utc).isoformat()})
-    a.history = hist[-settings.artifact_max_history:]
+    if args.get("new_version") is True:
+        hist = list(a.history or [])
+        hist.append({"version": a.version, "content": a.content, "created_at": datetime.now(timezone.utc).isoformat()})
+        a.history = hist[-settings.artifact_max_history:]
+        a.version += 1
     a.content = new_content
-    a.version += 1
     if args.get("title"):
         a.title = str(args["title"])[:200]
     await ctx.db.commit()
@@ -88,8 +90,8 @@ async def update_artifact(args: dict, ctx: ToolContext) -> ToolResult:
 @register(
     "list_artifacts",
     "Elenca gli artifact di questa conversazione (id, titolo, tipo, versione). Usalo prima di aggiornarne o eliminarne "
-    "uno se non conosci l'id, o quando l'utente chiede cosa e' stato creato.",
-    {"type": "object", "properties": {}},
+    "uno se non conosci l'id. Con artifact_id restituisce anche il contenuto corrente per modificarlo senza ricominciare.",
+    {"type": "object", "properties": {"artifact_id": {"type": "string"}}},
     usage_kind="tool",
 )
 async def list_artifacts(args: dict, ctx: ToolContext) -> ToolResult:
@@ -97,6 +99,11 @@ async def list_artifacts(args: dict, ctx: ToolContext) -> ToolResult:
         return ToolResult("Nessuna conversazione", is_error=True)
     rows = (await ctx.db.execute(select(Artifact).where(Artifact.conversation_id == ctx.conversation_id)
                                  .order_by(Artifact.created_at))).scalars().all()
+    if args.get("artifact_id"):
+        selected = next((a for a in rows if a.id == args["artifact_id"]), None)
+        if not selected:
+            return ToolResult("Artifact non trovato in questa conversazione", is_error=True)
+        return ToolResult(f"{selected.id}: {selected.title} (v{selected.version})\n{selected.content}")
     if not rows:
         return ToolResult("Nessun artifact in questa conversazione.")
     return ToolResult("\n".join(f"- {a.id}: \"{a.title}\" ({a.kind}{', ' + a.language if a.language else ''}, v{a.version}, "

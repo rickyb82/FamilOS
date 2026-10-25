@@ -20,6 +20,7 @@ router = APIRouter(prefix="/artifacts", tags=["artifacts"])
 
 
 class ArtifactUpdate(BaseModel):
+    new_version: bool = False
     title: str | None = None
     content: str | None = None
 
@@ -57,17 +58,18 @@ async def get_version(aid: str, version: int, ctx: AuthContext = Depends(require
 
 @router.patch("/{aid}")
 async def update_artifact(aid: str, body: ArtifactUpdate, ctx: AuthContext = Depends(require_auth), db: AsyncSession = Depends(get_db)):
-    """Modifica manuale dall'editor: crea una nuova versione."""
+    """Modifica corrente; nuova versione solo su richiesta esplicita."""
     a = await db.get(Artifact, aid)
     if not a:
         raise HTTPException(404)
     await require_access(db, "conversation", a.conversation_id, ctx.user, write=True)
-    if body.content is not None and body.content != a.content:
+    if body.new_version:
         hist = list(a.history or [])
         hist.append({"version": a.version, "content": a.content, "created_at": datetime.now(timezone.utc).isoformat()})
         a.history = hist[-settings.artifact_max_history:]
-        a.content = body.content
         a.version += 1
+    if body.content is not None:
+        a.content = body.content
     if body.title:
         a.title = body.title[:200]
     await db.commit()

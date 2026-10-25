@@ -87,7 +87,7 @@ export default function ArtifactPanel({ artifact, all = [], canEdit, onClose, on
     setEditing(false)
     if (!CAN_PREVIEW.has(artifact.kind)) setTab('code')
     get(`/artifacts/${artifact.id}`).then((a) => setVersions([...(a.history || []).map((h: any) => h.version), a.version]))
-  }, [artifact.id, artifact.version])
+  }, [artifact.id, artifact.version, artifact.content, artifact.title])
 
   const doc = useMemo(() => previewDoc(shown), [shown, reloadKey])
   const frame = useRef<HTMLIFrameElement>(null)
@@ -110,8 +110,8 @@ export default function ArtifactPanel({ artifact, all = [], canEdit, onClose, on
     return () => window.removeEventListener('message', onMsg)
   }, [])
 
-  async function save() {
-    const a = await patch<ArtifactData>(`/artifacts/${artifact.id}`, { content: draft })
+  async function save(newVersion = false) {
+    const a = await patch<ArtifactData>(`/artifacts/${artifact.id}`, { content: draft, new_version: newVersion })
     onChange(a)
     setEditing(false)
   }
@@ -190,7 +190,7 @@ export default function ArtifactPanel({ artifact, all = [], canEdit, onClose, on
         <footer className="artifact-footer row">
           {editing ? (
             <>
-              <button onClick={save}>Salva come nuova versione</button>
+              <button onClick={() => save()}>Salva modifiche</button><button onClick={() => save(true)}>Salva come nuova versione</button>
               <button className="ghost" onClick={() => { setEditing(false); setDraft(artifact.content) }}>Annulla</button>
             </>
           ) : (
