@@ -42,7 +42,12 @@
       await py.runPythonAsync(project.files[project.entry],{filename:'/game/'+project.entry});
     } else {
       status.textContent='Preparazione progetto…';
-      if ((project.libraries || []).includes('phaser')) await script('https://cdn.jsdelivr.net/npm/phaser@3.90.0/dist/phaser.min.js');
+      // Older/generated manifests may omit the global library despite using Phaser.
+      const usesPhaser = (project.libraries || []).includes('phaser') || Object.entries(project.files).some(([path,code]) => /\.(?:[cm]?js|jsx|ts|tsx)$/.test(path) && /\bPhaser\b/.test(code));
+      if (usesPhaser) {
+        await script('https://cdn.jsdelivr.net/npm/phaser@3.90.0/dist/phaser.min.js');
+        if (!window.Phaser) throw new Error('Phaser non disponibile dopo il caricamento: controlla accesso a cdn.jsdelivr.net');
+      }
       await script('https://cdn.jsdelivr.net/npm/esbuild-wasm@0.25.0/lib/browser.min.js');
       await esbuild.initialize({wasmURL:'https://cdn.jsdelivr.net/npm/esbuild-wasm@0.25.0/esbuild.wasm',worker:false});
       const normalize = path => {
