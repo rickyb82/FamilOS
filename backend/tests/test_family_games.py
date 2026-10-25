@@ -68,3 +68,21 @@ async def test_builtin_game_is_private_and_contains_multiplayer_sdk(kid):
     assert project['runtime']=='javascript'
     assert 'game.multiplayer' in project['files'][project['entry']]
     assert (await kid.post('/api/games/templates/unknown')).status_code==404
+
+@pytest.mark.asyncio
+async def test_child_can_create_game_without_web_or_server_execution(kid):
+    from app.policy.permissions import effective_policy, tool_allowed
+    from app.tools.artifacts import create_artifact
+    from app.tools.registry import ToolContext
+    async with SessionLocal() as db:
+        child=(await db.execute(select(User).where(User.username=='kid'))).scalar_one()
+        policy=effective_policy(child)
+        policy['allowed_tools']=['artifacts']
+        assert tool_allowed(policy,'create_artifact')
+        assert not tool_allowed(policy,'web_search')
+        assert not tool_allowed(policy,'run_code')
+        conv=Conversation(owner_id=child.id,family_id=child.family_id)
+        db.add(conv);await db.flush()
+        result=await create_artifact({'kind':'game','title':'Gioco personale','project':PROJECT},ToolContext(user=child,policy=policy,db=db,conversation_id=conv.id))
+        assert not result.is_error
+        assert result.artifacts[0]['kind']=='game'

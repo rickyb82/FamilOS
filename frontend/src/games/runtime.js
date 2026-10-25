@@ -78,5 +78,13 @@
       await import(URL.createObjectURL(new Blob([js.text],{type:'text/javascript'})));
     }
     report('ready','Gioco avviato');
-  } catch(e) { status.hidden=false;status.textContent='Avvio non riuscito: '+e.message;report('error',e.stack || e.message); }
+  } catch(e) {
+    const details=Array.isArray(e.errors) ? e.errors.map(error => {
+      const loc=error.location;
+      return (loc ? `${loc.file}:${loc.line}:${loc.column} · ` : '') + error.text;
+    }).join('\n') : '';
+    status.hidden=false;
+    status.textContent='Avvio non riuscito: '+(details || e.message);
+    report('error',details || e.stack || e.message);
+  }
 })();
