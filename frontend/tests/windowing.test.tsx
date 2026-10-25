@@ -36,6 +36,21 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('window lifecycle', () => {
+  it.each(['Chiudi', 'Riduci'])('%s affects only the selected window and focuses the remaining one', async action => {
+    render(<Desktop />)
+    await act(async () => {})
+    fireEvent.click(app('Emily'))
+    const draft = within(region('Emily')).getByLabelText('Bozza della finestra') as HTMLInputElement
+    fireEvent.change(draft, { target: { value: 'Non perdere la bozza' } })
+    fireEvent.click(app('File'))
+    fireEvent.click(within(region('File')).getByRole('button', { name: `${action} File` }))
+    expect(region('Emily').classList.contains('active')).toBe(true)
+    expect(draft.value).toBe('Non perdere la bozza')
+    expect(screen.queryByRole('region', { name: 'File, finestra' })).toBeNull()
+    fireEvent.click(within(region('Emily')).getByRole('button', { name: 'Chiudi Emily' }))
+    expect(screen.queryAllByRole('region', { name: /finestra$/ })).toHaveLength(0)
+  })
+
   it('lands on the desktop after the child PIN login instead of opening a kids window', async () => {
     window.history.replaceState(null, '', '/kids')
     render(<Desktop />)

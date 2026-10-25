@@ -199,7 +199,18 @@ export default function Desktop() {
     if (appForPath(w.path).id === 'editor' && !confirm('Chiudere il documento? Verifica di avere salvato le modifiche. In caso di conflitto, esporta prima una copia.')) return
     if(fullscreen.current?.id===w.id)leaveFullscreen()
     setWindows(ws => ws.filter(x => x.id !== w.id))
-    if (active === w.id) { setActive(null); setShowHome(true) }
+    activateRemaining(w.id)
+  }
+  function activateRemaining(id: string) {
+    if (active !== id) return
+    const next = [...state.current].reverse().find(w => w.id !== id && !w.minimized)
+    setActive(next?.id ?? null)
+    setShowHome(!next)
+  }
+  function minimize(w: DesktopWindow) {
+    if (fullscreen.current?.id === w.id) leaveFullscreen()
+    setWindows(ws => ws.map(x => x.id === w.id ? { ...x, minimized: true } : x))
+    activateRemaining(w.id)
   }
   function arrange(id: string, mode: DesktopWindow['mode']) { if(fullscreen.current?.id===id)leaveFullscreen(); setWindows(ws => ws.map(w => w.id === id ? { ...w, mode } : w)) }
   function drag(e: PointerEvent<HTMLElement>, w: DesktopWindow, resize = false) {
@@ -281,7 +292,7 @@ export default function Desktop() {
           : { left: Math.max(0, Math.min(w.x, viewport.width - Math.min(w.width, viewport.width - 24) - 16)), top, width: Math.min(w.width, viewport.width - 24), height: Math.min(w.height, availableHeight - top - 8) }
         return <section key={w.id} className={`os-window ${active === w.id ? 'active' : ''} ${fullId===w.id?'os-window-fullscreen':''}`} style={{ ...style, zIndex: i + 1, display: hidden ? 'none' : undefined }} aria-label={`${app.title}, finestra`} onPointerDownCapture={() => { if (active !== w.id) focus(w.id) }}>
           <header className="os-window-bar" onPointerDown={e => drag(e, w)} onDoubleClick={e => {if(!(e.target as HTMLElement).closest('button,select,input'))maximize(w)}}>
-            <div className="os-window-controls"><button title="Chiudi finestra" aria-label={`Chiudi ${app.title}`} onClick={() => close(w)}>×</button><button title="Riduci nel dock" aria-label={`Riduci ${app.title}`} onClick={() => { if(fullscreen.current?.id===w.id)leaveFullscreen(); setWindows(ws => ws.map(x => x.id === w.id ? { ...x, minimized: true } : x)); if (active === w.id) setShowHome(true) }}>−</button><button title={fullId===w.id?"Torna in finestra":"Schermo intero"} aria-label={fullId===w.id?"Torna in finestra":"Schermo intero"} onClick={() => toggleFullscreen(w)}>↗</button></div>
+            <div className="os-window-controls"><button title="Chiudi finestra" aria-label={`Chiudi ${app.title}`} onClick={() => close(w)}>×</button><button title="Riduci nel dock" aria-label={`Riduci ${app.title}`} onClick={() => minimize(w)}>−</button><button title={fullId===w.id?"Torna in finestra":"Schermo intero"} aria-label={fullId===w.id?"Torna in finestra":"Schermo intero"} onClick={() => toggleFullscreen(w)}>↗</button></div>
             <span className="os-window-title"><AppIcon app={app}/> {app.id === 'editor' ? new URLSearchParams(w.path.split('?')[1]).get('name') || 'Documento' : app.title}</span>
             <div className="os-window-layout"><select aria-label="Posizione finestra" value={w.mode} onChange={e=>arrange(w.id,e.target.value as DesktopWindow['mode'])}><option value="float">Libera</option><option value="full">Ingrandita nell’OS</option><option value="left">Metà sinistra</option><option value="right">Metà destra</option><option value="top-left">Alto sinistra</option><option value="top-right">Alto destra</option><option value="bottom-left">Basso sinistra</option><option value="bottom-right">Basso destra</option></select><button title="Affianca a sinistra" aria-label="Affianca a sinistra" onClick={() => arrange(w.id, 'left')}>▏</button><button title="Affianca a destra" aria-label="Affianca a destra" onClick={() => arrange(w.id, 'right')}>▕</button><button title="Finestra libera" aria-label="Finestra libera" onClick={() => arrange(w.id, 'float')}>▢</button></div>
           </header>
