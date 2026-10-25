@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { del, get, post } from '../lib/api'
+import { useAuth } from '../lib/auth'
 import { useLiveEvents } from '../lib/events'
 
 interface Notice { id: string; kind: string; text: string; link: string; actor: string; read: boolean; created_at: string }
@@ -9,6 +10,32 @@ interface Notice { id: string; kind: string; text: string; link: string; actor: 
 /** 🔔 Campanella: notifiche (condivisioni ricevute…) con contatore, elenco a tendina e avviso a comparsa in tempo reale. */
 export default function Notifications() {
   const nav = useNavigate()
+  const { me } = useAuth()
+  const admin = me?.user.role === 'admin'
+  const [update, setUpdate] = useState<any>(null)
+  const [updateError, setUpdateError] = useState('')
+  const [checking, setChecking] = useState(false)
+  const available = admin && update?.offers?.core?.newer
+  async function checkUpdates() {
+    setChecking(true); setUpdateError('')
+    try {
+      const current = await get('/admin/updates')
+      setUpdate(current)
+      if (!current.connected) throw new Error(current.message || 'Agente aggiornamenti non disponibile')
+      if (['running', 'interrupted', 'recovery_required'].includes(current.job?.status)) return
+      await post('/admin/updates/check', { target: 'core', channel: current.channel })
+      setUpdate(await get('/admin/updates'))
+    } catch (e: any) { setUpdateError(e.message) }
+    finally { setChecking(false) }
+  }
+  useEffect(() => {
+    if (!admin) return
+    let alive = true
+    const refresh = () => get('/admin/updates').then(s => { if (alive) setUpdate(s) }).catch(() => {})
+    refresh()
+    const timer = setInterval(refresh, 5000)
+    return () => { alive = false; clearInterval(timer) }
+  }, [admin])
   const [items, setItems] = useState<Notice[]>([])
   const [unread, setUnread] = useState(0)
   const [open, setOpen] = useState(false)
@@ -81,7 +108,7 @@ export default function Notifications() {
   const icon = (k: string) => k.startsWith('share_file') ? '📄' : k.startsWith('share_conversation') ? '💬' : k.startsWith('share_project') ? '📁' : k === 'starlink' ? '🛰' : k === 'radiocraft' ? '📡' : k === 'netcraft' ? '📶' : '🔔'
   return (
     <>
-      <button ref={btn} className={`icon bell ${unread ? 'has' : ''}`} onClick={toggle} title="Notifiche">🔔{unread > 0 && <span className="bell-count">{unread > 9 ? '9+' : unread}</span>}</button>
+      <button ref={btn} className={`icon bell ${unread || available ? 'has' : ''}`} onClick={toggle} title={available ? "Notifiche · Aggiornamento disponibile" : "Notifiche"}>🔔{available && <span aria-label="Aggiornamento disponibile">↻</span>}{unread > 0 && <span className="bell-count">{unread > 9 ? '9+' : unread}</span>}</button>
       {open && createPortal(
         <div className={`bell-menu ${pos.bottom != null ? 'up' : 'down'}`} style={pos} onClick={(e) => e.stopPropagation()}>
           <div className="row between"><b>Notifiche</b>
@@ -90,6 +117,14 @@ export default function Notifications() {
               {items.length > 0 && <button className="ghost small" onClick={clearAll} title="Cancella tutte le notifiche">cancella tutte</button>}
             </span>
           </div>
+          {admin && <section className="card stack" aria-label="Aggiornamenti FamilOS">
+            <b>{available ? '↻ Aggiornamento FamilOS disponibile' : 'Aggiornamenti FamilOS'}</b>
+            {available && <span>{update.offers.core.tag}</span>}
+            <button disabled={checking || update?.job?.status === 'running'} onClick={checkUpdates}>{checking || update?.job?.status === 'running' ? 'Operazione in corso…' : 'Cerca aggiornamenti'}</button>
+            {available && <button onClick={() => { setOpen(false); nav('/installation?section=updates') }}>Vedi e installa aggiornamento</button>}
+            {updateError && <p role="alert">{updateError}</p>}
+            {update?.job?.status === 'failed' && <p role="alert">{update.job.message}</p>}
+          </section>}
           {items.length === 0 && <p className="muted small">Nessuna notifica.</p>}
           <ul>
             {items.slice(0, 30).map((n) => (

@@ -5,6 +5,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import AdminUpdates from '../src/pages/AdminUpdates'
 import { get, post } from '../src/lib/api'
 
+const { logout } = vi.hoisted(() => ({ logout: vi.fn() }))
+vi.mock('../src/lib/auth', () => ({ useAuth: () => ({ logout }) }))
 vi.mock('../src/lib/api', () => ({ get: vi.fn(), post: vi.fn() }))
 afterEach(cleanup)
 beforeEach(() => vi.resetAllMocks())
@@ -40,4 +42,17 @@ it('does not offer installation when the host agent is absent', async () => {
   await screen.findByText('./familos.sh updater install')
   expect((screen.getByRole('button', { name: 'Controlla release' }) as HTMLButtonElement).disabled).toBe(true)
   expect((screen.getByLabelText('Canale aggiornamenti') as HTMLSelectElement).value).toBe('stable')
+})
+
+it.each([false, true])('requires confirmation before logout on stale authentication: %s', async approved => {
+  vi.mocked(get).mockResolvedValue({connected:true,channel:'stable',offers:{core:{id:'offer',tag:'v2',channel:'stable',newer:true,experimental:false}}})
+  vi.mocked(post).mockRejectedValue(Object.assign(new Error('Serve un accesso negli ultimi 15 minuti.'), {status:403}))
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(approved)
+  render(<AdminUpdates />)
+  const install = await screen.findByRole('button', {name:'Installa release v2'})
+  fireEvent.click(screen.getByLabelText('Confermo l’interruzione temporanea del servizio. I backup sono gestiti manualmente.'))
+  fireEvent.click(install)
+  await waitFor(() => expect(confirm).toHaveBeenCalled())
+  expect(logout).toHaveBeenCalledTimes(approved ? 1 : 0)
+  confirm.mockRestore()
 })

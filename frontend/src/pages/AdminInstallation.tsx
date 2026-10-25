@@ -1,3 +1,4 @@
+import { useSearchParams } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { api, get, put } from '../lib/api'
 import { useAuth } from '../lib/auth'
@@ -22,7 +23,9 @@ const groups = [{ label: 'Sistema', items: [
 export default function AdminInstallation() {
   const { me } = useAuth()
   const { brand } = useBranding()
-  const [section, setSection] = useState('brand')
+  const [params] = useSearchParams()
+  const [section, setSection] = useState(params.get('section') === 'updates' ? 'updates' : 'brand')
+  useEffect(() => { if (params.get('section') === 'updates') setSection('updates') }, [params])
   const [config, setConfig] = useState<Installation | null>(null)
   const [url, setUrl] = useState('')
   const [mode, setMode] = useState('acme')

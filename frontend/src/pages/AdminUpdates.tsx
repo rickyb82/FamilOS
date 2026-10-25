@@ -1,3 +1,4 @@
+import { useAuth } from '../lib/auth'
 import AppCatalog from "./AppCatalog"
 import { useEffect, useState } from 'react'
 import { get, post } from '../lib/api'
@@ -13,6 +14,7 @@ interface Status {
 const targets = [['core', 'FamilOS'], ['wordcraft', 'WordCraft'], ['gridcraft', 'GridCraft'], ['pdfcraft', 'PdfCraft'], ['deckcraft', 'DeckCraft'], ['ideacraft', 'IdeaCraft'], ['mailcraft', 'MailCraft']]
 
 export default function AdminUpdates() {
+  const { logout } = useAuth()
   const [status, setStatus] = useState<Status | null>(null)
   const [channel, setChannel] = useState<Channel>('stable')
   const [target, setTarget] = useState('core')
@@ -47,7 +49,12 @@ export default function AdminUpdates() {
       })
       setConfirmed(false); setExperimental(false)
       setStatus(await get<Status>('/admin/updates'))
-    } catch (e: any) { setError(e.message) }
+    } catch (e: any) {
+      setError(e.message)
+      if (e.status === 403 && e.message.includes('15 minuti') && window.confirm('Per installare serve un nuovo accesso. Vuoi uscire ora? Salva prima eventuali modifiche aperte. Dopo il login riapri Aggiornamenti e conferma l’installazione.')) {
+        await logout()
+      }
+    }
     finally { setBusy(false) }
   }
   return <section className="card stack">
