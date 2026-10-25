@@ -25,7 +25,11 @@
     if(e.source !== parent || e.data?.type !== 'familos:game-peers' || !Array.isArray(e.data.players)) return;
     for(const fn of peerListeners) { try { fn(e.data.players); } catch(err) { report('error',err.message); } }
   });
-  const script = url => new Promise((resolve,reject)=>{const s=document.createElement('script');s.src=url;s.onload=resolve;s.onerror=()=>reject(new Error('Libreria non raggiungibile: '+url));document.head.append(s)});
+  const script = url => new Promise((resolve,reject)=>{
+    const s=document.createElement('script');
+    const timer=setTimeout(()=>{s.remove();reject(new Error('Timeout caricamento libreria: '+url))},30000);
+    s.src=url;s.onload=()=>{clearTimeout(timer);resolve()};s.onerror=()=>{clearTimeout(timer);reject(new Error('Libreria non raggiungibile: '+url))};document.head.append(s);
+  });
   try {
     if (project.runtime === 'python') {
       status.textContent='Caricamento Python…';
@@ -43,7 +47,9 @@
     } else {
       status.textContent='Preparazione progetto…';
       // Older/generated manifests may omit the global library despite using Phaser.
-      const usesPhaser = (project.libraries || []).includes('phaser') || Object.entries(project.files).some(([path,code]) => /\.(?:[cm]?js|jsx|ts|tsx)$/.test(path) && /\bPhaser\b/.test(code));
+      const sourceText=Object.entries(project.files).filter(([path])=>/\.(?:[cm]?js|jsx|ts|tsx)$/.test(path)).map(([,code])=>code).join('\n');
+      const dependencies={three:'https://cdn.jsdelivr.net/npm/three@0.174.0/build/three.module.js',...(project.dependencies || {})};
+      const usesPhaser = (project.libraries || []).includes('phaser') || Object.entries(project.files).some(([path,code]) => /\.(?:[cm]?js|jsx|ts|tsx)$/.test(path) && /\b[Pp]haser\b/.test(code));
       if (usesPhaser) {
         await script('https://cdn.jsdelivr.net/npm/phaser@3.90.0/dist/phaser.min.js');
         if (!window.Phaser) throw new Error('Phaser non disponibile dopo il caricamento: controlla accesso a cdn.jsdelivr.net');
@@ -56,7 +62,8 @@
       const result = await esbuild.build({entryPoints:[project.entry],bundle:true,write:false,format:'esm',platform:'browser',outdir:'/out',plugins:[{
         name:'project',setup(build) {
           build.onResolve({filter:/.*/}, args => {
-            const dependency=project.dependencies?.[args.path];
+            if(args.path==='phaser') return {path:'phaser',namespace:'builtin'};
+            const dependency=dependencies[args.path];
             if (dependency) return {path:dependency,external:true};
             if (/^https:\/\//.test(args.path)) {
               const url=new URL(args.path);
@@ -64,10 +71,11 @@
               return {path:args.path,external:true};
             }
             const path=normalize(args.kind==='entry-point'?args.path:(args.path.startsWith('.')?args.resolveDir+'/'+args.path:args.path));
-            const found=[path,path+'.ts',path+'.js',path+'/index.ts',path+'/index.js'].find(x=>x in project.files);
+            const found=[path,...['.ts','.tsx','.js','.jsx','.mjs','.json','/index.ts','/index.tsx','/index.js','/index.jsx'].map(ext=>path+ext)].find(x=>x in project.files);
             if (!found) throw new Error('File o dipendenza mancante: '+args.path);
             return {path:found,namespace:'project'};
           });
+          build.onLoad({filter:/.*/,namespace:'builtin'}, () => ({contents:'module.exports = window.Phaser;',loader:'js'}));
           build.onLoad({filter:/.*/,namespace:'project'}, args => {
             const ext=args.path.split('.').pop();
             const loader={js:'js',mjs:'js',ts:'ts',jsx:'jsx',tsx:'tsx',json:'json',css:'css'}[ext] || 'dataurl';
@@ -78,7 +86,8 @@
       for (const file of result.outputFiles) if(file.path.endsWith('.css')) {const style=document.createElement('style');style.textContent=file.text;document.head.append(style)}
       const js=result.outputFiles.find(f=>f.path.endsWith('.js'));
       if(!js) throw new Error('Nessun codice eseguibile generato');
-      const map=document.createElement('script');map.type='importmap';map.textContent=JSON.stringify({imports:project.dependencies||{}});document.head.append(map);
+      const map=document.createElement('script');map.type='importmap';map.textContent=JSON.stringify({imports:dependencies});document.head.append(map);
+      if (/\bTHREE\b/.test(sourceText)) window.THREE = await import(dependencies.three);
       status.hidden=true;
       await import(URL.createObjectURL(new Blob([js.text],{type:'text/javascript'})));
     }

@@ -70,3 +70,7 @@ Le azioni ammesse sono `idle`, `run`, `jump`, `swing`; le coordinate devono esse
 ### Ragnoman Rooftops
 
 Modello procedurale stilizzato, città 3D, corsa, salto, ragnatela, caduta e riavvio; supporta gli avatar degli altri membri nelle stanze familiari. **WASD/frecce** per muoversi, **Spazio** per saltare, **E** per la ragnatela, **R** per ricominciare; disponibili anche pulsanti touch. È un prototipo cooperativo, non un gioco completo commerciale. Manifest: `docs/games/ragnoman-rooftops.json`.
+
+### Compatibilità dei progetti generati
+
+Il runtime è identico per adulti e bambini. Riconosce l'uso di Phaser anche senza `libraries` e supporta sia il globale `Phaser` sia `import Phaser from 'phaser'` e import nominati tramite il modulo incorporato. Per `three` usa una versione predefinita fissata (0.174.0), sostituibile con una dipendenza esplicita valida; supporta anche il globale `THREE`. Gli import locali senza estensione risolvono TS, TSX, JS, JSX, MJS e JSON. Le librerie sconosciute devono ancora essere dichiarate nel manifest: non vengono installate automaticamente. I caricamenti script hanno un timeout di 30 secondi e gli errori di build riportano file e riga.
