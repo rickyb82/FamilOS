@@ -144,6 +144,7 @@ class WebAuthnCredential(Base):
 class Session(Base):
     """Sessione di login (cookie opaco HttpOnly)."""
     __tablename__ = "sessions"
+    acting_child_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     screen_locked: Mapped[bool] = mapped_column(Boolean,default=False)
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: secrets.token_urlsafe(48))
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))

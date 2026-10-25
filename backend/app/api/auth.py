@@ -338,7 +338,7 @@ async def me(ctx: AuthContext = Depends(require_pre_mfa), db: AsyncSession = Dep
                      "passkeys": passkeys_on(), "mfa_optional": mfa_optional_on(),
                      "debug_llm": str(settings.debug_llm).lower() == "all" or str(settings.debug_llm).lower() == "admins" and ctx.user.role == Role.admin})
 
-    return MeOut(session_locked=ctx.session.screen_locked, user=u, family_name=fam.name if fam else "", mfa_verified=ctx.session.mfa_verified,
+    return MeOut(acting_as_child=bool(ctx.session.acting_child_id), session_locked=ctx.session.screen_locked, user=u, family_name=fam.name if fam else "", mfa_verified=ctx.session.mfa_verified,
                  mfa_required=mfa_required, providers=provs, tools=pol["allowed_tools"], features=features,
                  model_lock=model_catalog.admin_lock(ctx.user), prefs=ctx.user.prefs or {})
 
@@ -701,3 +701,30 @@ async def set_model_lock(body: ModelLock, ctx: AuthContext = Depends(require_aut
     ctx.user.policy = pol
     await db.commit()
     return {"model_lock": want}
+
+
+from ..security.sessions import require_admin
+
+class ActingChildIn(BaseModel):
+    user_id: str = Field(min_length=1, max_length=32)
+
+@router.post('/acting-child/start')
+async def acting_child_start(body: ActingChildIn, request: Request, ctx: AuthContext = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    if ctx.session.acting_child_id:
+        raise HTTPException(409, "Esci prima dalla modalità bambino")
+    child = await db.get(User, body.user_id)
+    if not child or not child.is_active or child.role != Role.child or child.family_id != ctx.user.family_id:
+        raise HTTPException(404, "Profilo bambino non disponibile")
+    ctx.session.acting_child_id = child.id
+    await db.commit()
+    await audit(db, 'acting_child_start', request, ctx.user, 'child_id='+child.id)
+    return {'ok': True}
+
+@router.post('/acting-child/stop')
+async def acting_child_stop(request: Request, ctx: AuthContext = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    child_id = ctx.session.acting_child_id
+    ctx.session.acting_child_id = None
+    await db.commit()
+    if child_id:
+        await audit(db, 'acting_child_stop', request, ctx.user, 'child_id='+child_id)
+    return {'ok': True}

@@ -107,6 +107,7 @@ export interface User {
   effective_policy: Record<string, any>
 }
 export interface Me {
+  acting_as_child?: boolean
   session_locked?: boolean
   user: User
   family_name: string

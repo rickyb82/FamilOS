@@ -138,6 +138,15 @@ async def _load_session(request: Request, db: AsyncSession) -> AuthContext | Non
         if sess.expires_at.replace(tzinfo=timezone.utc) - now < full - timedelta(days=1):
             sess.expires_at = now + full
             await db.commit()
+    if sess.acting_child_id:
+        # The original administrator session remains the authority for returning.
+        if user.role != Role.admin or not sess.mfa_verified:
+            return None
+        if not (request.method == "POST" and request.url.path == "/api/auth/acting-child/stop"):
+            child = await db.get(User, sess.acting_child_id)
+            if not child or not child.is_active or child.role != Role.child or child.family_id != user.family_id:
+                raise HTTPException(403, "Profilo bambino non più disponibile: torna amministratore")
+            user = child
     from ..services.activity import remember_actor
     remember_actor(request, user.id, user.family_id)
     return AuthContext(user, sess)

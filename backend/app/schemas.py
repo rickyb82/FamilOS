@@ -61,6 +61,7 @@ class UserOut(BaseModel):
 
 
 class MeOut(BaseModel):
+    acting_as_child: bool = False
     session_locked: bool = False
     user: UserOut
     family_name: str
