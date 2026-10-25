@@ -44,7 +44,10 @@ class OrbitaUpdater(Updater):
                 env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             for line in process.stdout:
                 log.write(line); log.flush()
-                if line.startswith('Build '):self.phase('Compilazione delle immagini…')
+                if line.startswith('ORBITA_PROGRESS '):
+                    done, message = line[len('ORBITA_PROGRESS '):].strip().split(' ',1)
+                    self.phase(message,progress=int(done),progress_kind='phases')
+                elif line.startswith('Build '):self.phase('Compilazione delle immagini…')
                 elif line.startswith('Salvataggio immagini'):self.phase('Salvataggio immagini per il backup…')
                 elif line.startswith('Fermo servizi'):self.phase('Backup: servizi temporaneamente sospesi…',maintenance=True)
                 elif line.startswith('Riavvio servizi'):self.phase('Riavvio servizi dopo il backup…')
@@ -57,7 +60,7 @@ class OrbitaUpdater(Updater):
         target = body['target']
         offer = None if body['action'] == 'disable' else self.validate_offer(body)
         support = Path(__file__).with_name('orbita_support')
-        self.phase('Preparazione aggiornamento Orbita. Il registro completo resta sulla VM.')
+        self.phase('Preparazione aggiornamento Orbita. Il registro completo resta sulla VM.',progress=0,progress_kind='phases')
         if target == 'core':
             stage = self.directory / 'jobs' / self.state['job']['id']
             stage.mkdir(parents=True, mode=0o700)
@@ -70,6 +73,7 @@ class OrbitaUpdater(Updater):
                 raise ValueError('Commit scaricato non corrispondente')
             self.run('git', '--git-dir=' + str(gitdir), 'archive', '--format=tar.gz',
                      '--output=' + str(stage / 'source.tar.gz'), offer['sha'])
+            self.phase('Sorgenti scaricati e verificati.',progress=20,progress_kind='phases')
             hashes = {}
             for path in support.iterdir():
                 if path.is_file():

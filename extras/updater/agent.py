@@ -242,7 +242,7 @@ class Updater:
                 self.check(body["target"], body["channel"])
             else:
                 self.install(body)
-            self.phase("Operazione completata.", status="complete")
+            self.phase("Operazione completata.", status="complete", progress=100)
         except Exception as error:
             # No exception text from urllib/subprocess (can include credentials/response bodies).
             message = str(error) if isinstance(error, ValueError) else "Operazione non riuscita. Consultare i log e la guida aggiornamenti sulla VM."

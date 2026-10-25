@@ -60,11 +60,13 @@ def main():
   'tmpfs':['/tmp:size=512m,uid=10001,gid=10001,mode=1777'],'shm_size':'512m',
   'security_opt':['no-new-privileges:true','seccomp=./apps/familos/extras/browser/seccomp_profile.json'],
   'cap_drop':['ALL'],'pids_limit':512,'mem_limit':'2g','cpus':2.0,'expose':['8080']}
+ print('ORBITA_PROGRESS 40 Immagini compilate.',flush=True)
  dc('config','--quiet')
  print('Backup automatico disattivato: gestione manuale dell’amministratore.',flush=True)
  # Snapshot coerente aggiuntivo per rollback automatico, protetto root:0700.
  original_moved=False;new_active=False
  try:
+  print('ORBITA_PROGRESS 60 Preparazione completata; riavvio servizi.',flush=True)
   dc('stop',*names)
   app.rename(saved/'previous-app');original_moved=True
   for name in ('data','private','.env'):
@@ -88,6 +90,7 @@ def main():
    time.sleep(2)
   assert ready,'Backend non pronto'
   dc('up','-d','--no-build','familos-frontend',browser,*[n for n in names if n not in core and n!=browser])
+  print('ORBITA_PROGRESS 80 Servizi avviati; verifica finale.',flush=True)
   for _ in range(20):
    try:
     with urllib.request.urlopen('https://familos.example.it/api/health',timeout=5) as r:assert json.load(r)['status']=='ok'

@@ -3,13 +3,14 @@ import {it,expect} from 'vitest'
 import {readFileSync} from 'node:fs'
 import {runInNewContext} from 'node:vm'
 const runtime=readFileSync(new URL('../src/games/runtime.js',import.meta.url),'utf8')
-async function loaded(files:Record<string,string>,libraries:string[]=[]) {
+async function loaded(files:Record<string,string>,libraries:string[]=[], inspect?:(scope:any)=>void) {
  const urls:string[]=[]
  const nodes:any={project:{textContent:JSON.stringify({runtime:'javascript',entry:'main.js',files,libraries})},status:{},game:{},'game-root':{}}
  const scope:any={setTimeout,clearTimeout,parent:{postMessage(){}},addEventListener(){},console:{log(){},warn(){},error(){}},TextEncoder,Map,Set,Blob,URL,esbuild:{initialize:async()=>{},build:async()=>{throw new Error('Test stops before executing game')}}}
  scope.window=scope
- scope.document={getElementById:(id:string)=>nodes[id],createElement:()=>({}),head:{append:(s:any)=>{urls.push(s.src);if(s.src.includes('phaser'))scope.Phaser={};s.onload()}}}
+ scope.document={getElementById:(id:string)=>nodes[id],createElement:()=>({}),head:{append:(s:any)=>{urls.push(s.src);if(s.src.includes('phaser'))scope.Phaser={Game:class {config:any;constructor(config:any){this.config=config}}};s.onload()}}}
  await runInNewContext(runtime,scope)
+ inspect?.(scope)
  return urls
 }
 it('loads Phaser before compiling legacy projects that omit libraries',async()=>{
@@ -45,4 +46,13 @@ it('resolves built-in engines and nested TSX/JSON imports',async()=>{
  expect(resolve({path:'./config',resolveDir:'/scenes'}).path).toBe('scenes/config.json')
  expect(()=>resolve({path:'https://untrusted.example/code.js'})).toThrow('CDN non consentito')
  expect(()=>resolve({path:'unknown-package'})).toThrow('File o dipendenza mancante')
+})
+
+it('repairs a canvas mistakenly used as Phaser parent without mutating the project',async()=>{
+ await loaded({'main.js':'new Phaser.Game(config)'},[],scope=>{
+  const config={parent:'game',type:1};const instance=new scope.Phaser.Game(config)
+  expect(instance.config.parent).toBe(scope.game.root)
+  expect(instance.config.canvas).toBe(scope.game.canvas)
+  expect(config).toEqual({parent:'game',type:1})
+ })
 })

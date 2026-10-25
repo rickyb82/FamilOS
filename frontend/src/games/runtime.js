@@ -53,6 +53,16 @@
       if (usesPhaser) {
         await script('https://cdn.jsdelivr.net/npm/phaser@3.90.0/dist/phaser.min.js');
         if (!window.Phaser) throw new Error('Phaser non disponibile dopo il caricamento: controlla accesso a cdn.jsdelivr.net');
+        const OriginalGame=window.Phaser.Game;
+        window.Phaser.Game=new Proxy(OriginalGame,{construct(Target,args){
+          const cfg=args[0];
+          if(cfg && typeof cfg==='object') {
+            const parent=typeof cfg.parent==='string'?document.getElementById(cfg.parent):cfg.parent;
+            if(parent===game.canvas) args[0]={...cfg,parent:game.root,canvas:cfg.canvas || game.canvas};
+          }
+          return Reflect.construct(Target,args);
+        }});
+
       }
       await script('https://cdn.jsdelivr.net/npm/esbuild-wasm@0.25.0/lib/browser.min.js');
       await esbuild.initialize({wasmURL:'https://cdn.jsdelivr.net/npm/esbuild-wasm@0.25.0/esbuild.wasm',worker:false});
