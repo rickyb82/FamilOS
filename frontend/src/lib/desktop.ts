@@ -21,6 +21,7 @@ export const DESKTOP_APPS: AppEntry[] = [
   { id: 'files', title: 'File', icon: '▰', color: 'blue', path: '/documents' },
   { id: 'projects', title: 'Progetti', icon: '◈', color: 'peach', path: '/projects' },
   { id: 'messages', title: 'Messaggi', icon: '☏', color: 'green', path: '/messages', feature: 'messaggi' },
+  { id: 'history', title: 'Tutte le chat', icon: '◷', color: 'lavender', path: '/chats' },
   { id: 'games', title: 'Giochi', icon: '🎮', color: 'lavender', path: '/games', description: 'La cartella dei tuoi giochi, pronti da avviare.' },
   { id: 'browser', title: 'Browser', icon: '◎', color: 'blue', path: '/browser' },
   { id: 'parental', title: 'Genitori', icon: '♡', color: 'green', path: '/parental' },

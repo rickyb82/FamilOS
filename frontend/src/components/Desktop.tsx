@@ -273,7 +273,7 @@ export default function Desktop() {
             {!recentError && !files.length && <div className="os-empty"><span>▰</span><p>Una casa per i tuoi documenti.</p><button onClick={() => open('/documents')}>Carica il primo file</button></div>}
             {files.slice(0, 4).map(f => <button className="os-recent-file" key={f.id} onClick={() => openFile(f)}><span>▤</span><span><b>{f.filename}</b><small>{new Date(f.created_at).toLocaleDateString('it-IT', { day: 'numeric', month: 'short' })}</small></span><span>↗</span></button>)}
           </section>
-          <section className="os-widget os-continue"><div className="os-widget-heading"><h2>Riprendi da qui</h2><span>◷</span></div>
+          <section className="os-widget os-continue"><div className="os-widget-heading"><h2>Riprendi da qui</h2><button onClick={() => open('/chats')}>Tutte le chat ↗</button></div>
             {conversations.slice(0, 3).map(c => <button key={c.id} onClick={() => open(`/c/${c.id}`)}><span>✳</span><span>{c.title}</span><span>→</span></button>)}
             {!conversations.length && <p className="os-empty">Le tue conversazioni con Emily compariranno qui.</p>}
             <div className="os-window-tip"><b>Tutto al suo posto.</b><p>Apri più app, affiancale e ritrovale nel dock.</p></div>

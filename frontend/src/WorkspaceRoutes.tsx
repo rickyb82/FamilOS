@@ -1,3 +1,4 @@
+const Conversations = lazy(() => import('./pages/Conversations'))
 const Games = lazy(() => import("./pages/Games"))
 const InstalledApp = lazy(() => import("./pages/InstalledApp"))
 const SafeBrowser = lazy(() => import('./pages/SafeBrowser'))
@@ -25,6 +26,7 @@ export function WorkspaceRoutes() {
   return (
       <Suspense fallback={<div className="center muted">Apertura app…</div>}><Routes>
         <Route path="/" element={<Chat />} />
+        <Route path="/chats" element={<Conversations />} />
         <Route path="/c/:id" element={<Chat />} />
         <Route path="/games" element={<Games />} />
         <Route path="/browser" element={<SafeBrowser />} />

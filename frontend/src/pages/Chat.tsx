@@ -330,6 +330,7 @@ export default function Chat() {
             </div>
           )}
           <div className="composer-box">
+            <button type="button" className="ghost small" onClick={() => nav('/chats')}>◷ Tutte le chat</button>
             <input ref={fileInput} type="file" multiple hidden onChange={(e) => upload(e.target.files)} />
             <input ref={cameraInput} type="file" accept="image/*" capture="environment" hidden onChange={(e) => upload(e.target.files)} />
             <button type="button" className="ghost small" disabled={busy} onClick={() => setText(current => current || 'Crea un mini videogioco giocabile come artifact di tipo game, con più file e le librerie grafiche adatte. La mia idea è: ')}>🎮 Crea un gioco</button>
