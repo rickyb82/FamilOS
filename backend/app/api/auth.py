@@ -421,6 +421,7 @@ class AppearanceIn(BaseModel):
     lock_after_minutes: Literal[0,1,5,15,30] = 5
 
 class PrefsIn(BaseModel):
+    default_chat_model: str | None = Field(default=None, max_length=300)
     tools_off: list[str] | None = Field(default=None,max_length=50)
     appearance: AppearanceIn | None = None
 
@@ -429,6 +430,14 @@ class PrefsIn(BaseModel):
 async def set_prefs(body: PrefsIn, ctx: AuthContext = Depends(require_auth), db: AsyncSession = Depends(get_db)):
     """Preferenze personali: gli strumenti dell'assistente che l'utente tiene spenti (Impostazioni › Strumenti dell'assistente)."""
     prefs = dict(ctx.user.prefs or {})
+    if body.default_chat_model is not None:
+        if ctx.user.role != Role.admin:
+            raise HTTPException(403, "Preferenza disponibile per gli amministratori")
+        from ..services import model_catalog
+        available = {model_catalog.key(p["id"], m["id"]) for p in model_catalog.catalog(ctx.user, effective_policy(ctx.user)) for m in p["models"]}
+        if body.default_chat_model and body.default_chat_model not in available:
+            raise HTTPException(400, "Modello non disponibile")
+        prefs["default_chat_model"] = body.default_chat_model
     if body.tools_off is not None:
         prefs["tools_off"] = sorted({t[:40] for t in body.tools_off if t})
     if body.appearance is not None:

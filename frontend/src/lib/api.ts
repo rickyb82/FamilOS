@@ -111,7 +111,7 @@ export interface Me {
   user: User
   family_name: string
   model_lock?: string
-  prefs?: { tools_off?: string[]; appearance?: import('./appearance').Appearance }
+  prefs?: { default_chat_model?: string; tools_off?: string[]; appearance?: import('./appearance').Appearance }
   mfa_verified: boolean
   mfa_required: boolean
   providers: Provider[]

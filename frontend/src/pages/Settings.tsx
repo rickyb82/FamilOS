@@ -71,8 +71,9 @@ export default function Settings() {
   return (
     <div className="page system-panel">
       <header className="system-panel-heading"><img src={brand.logo_url} alt="" /><div><p>IL TUO PROFILO</p><h1>Impostazioni</h1><span className="muted">{me?.user.display_name}</span></div></header>
-      <div className="panel-shell"><PanelMenu active={section} onChange={setSection} label="Sezioni impostazioni" groups={[{ label: 'Account', items: [{ id: 'security', label: 'Passkey e sicurezza', icon: '▣' }, { id: 'password', label: 'Password', icon: '✱' }, { id: 'sessions', label: 'Sessioni attive', icon: '◷' }] }, { label: 'Il tuo spazio', items: [{ id: 'appearance', label: 'Aspetto', icon: '◈' }, { id: 'memory', label: 'Memoria personale', icon: '◇' }, { id: 'usage', label: 'Spazio e utilizzo', icon: '▥' }, { id: 'devices', label: 'Dispositivi e Sync', icon: '▦' }, { id: 'tools', label: 'Strumenti Emily', icon: '✳' }, { id: 'guide', label: 'Guida', icon: '?' }] }]} /><main className="panel-content stack">
+      <div className="panel-shell"><PanelMenu active={section} onChange={setSection} label="Sezioni impostazioni" groups={[{ label: 'Account', items: [{ id: 'security', label: 'Passkey e sicurezza', icon: '▣' }, { id: 'password', label: 'Password', icon: '✱' }, { id: 'sessions', label: 'Sessioni attive', icon: '◷' }] }, { label: 'Il tuo spazio', items: [{ id: 'appearance', label: 'Aspetto', icon: '◈' }, { id: 'memory', label: 'Memoria personale', icon: '◇' }, { id: 'usage', label: 'Spazio e utilizzo', icon: '▥' }, { id: 'devices', label: 'Dispositivi e Sync', icon: '▦' }, ...(me?.user.role === 'admin' ? [{ id: 'assistant', label: 'Assistente', icon: '✳' }] : []), { id: 'tools', label: 'Strumenti Emily', icon: '✳' }, { id: 'guide', label: 'Guida', icon: '?' }] }]} /><main className="panel-content stack">
       {section === 'appearance' && <PersonalAppearance />}
+      {section === 'assistant' && me?.user.role === 'admin' && <PersonalModel />}
       {msg && <div className="ok">{msg}</div>}
       {err && <div className="error">{err}</div>}
 
@@ -339,4 +340,14 @@ function AssistantTools() {
       {msg && <small className="muted">{msg}</small>}
     </section>
   )
+}
+
+function PersonalModel() {
+ const {me,refresh}=useAuth()
+ const [value,setValue]=useState(me?.prefs?.default_chat_model || '')
+ const [busy,setBusy]=useState(false),[message,setMessage]=useState(''),[error,setError]=useState('')
+ useEffect(()=>setValue(me?.prefs?.default_chat_model || ''),[me?.prefs?.default_chat_model])
+ const available=me?.providers.flatMap(p=>p.models.map(m=>({key:p.id+'/'+m.id,label:p.label+' · '+(m.label || m.id)}))) || []
+ async function save(){setBusy(true);setError('');setMessage('');try{await put('/auth/prefs',{default_chat_model:value});await refresh();setMessage('Salvato: verrà usato nelle nuove chat.')}catch(e:any){setError(e.message)}finally{setBusy(false)}}
+ return <section className="card stack"><h3>Il mio modello predefinito</h3><p>Vale solo per le tue nuove chat. Nelle chat esistenti rimane il modello già scelto, che puoi cambiare dal menu della chat.</p>{me?.model_lock && <p>Hai un blocco personale attivo: prevale sulla preferenza.</p>}<label>Provider e modello<select value={value} onChange={e=>setValue(e.target.value)}><option value="">Usa il predefinito del sistema</option>{value&&!available.some(m=>m.key===value)&&<option value={value} disabled>{value} (non disponibile)</option>}{available.map(m=><option key={m.key} value={m.key}>{m.label}</option>)}</select></label><button disabled={busy} onClick={save}>{busy?'Salvataggio…':'Salva modello personale'}</button>{error&&<p role="alert">{error}</p>}{message&&<p role="status">{message}</p>}</section>
 }

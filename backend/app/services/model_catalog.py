@@ -89,6 +89,11 @@ def catalog(user: User, policy: dict) -> list[dict]:
                     for p in provs if p["id"] == lp]
             if only:
                 return only
+        preferred = (user.prefs or {}).get("default_chat_model", "")
+        dp, dm = split(preferred)
+        if any(p["id"] == dp and any(m["id"] == dm for m in p["models"]) for p in provs):
+            provs = [{**p, "default_model": dm} if p["id"] == dp else p for p in provs]
+            provs.sort(key=lambda p: p["id"] != dp)
         return provs
     if user.role == Role.child:
         return provs   # i bambini hanno gia' provider+modello fissati dal genitore (policy)
@@ -125,6 +130,8 @@ def coerce(user: User, policy: dict, provider_id: str | None, model: str | None)
         if lock:
             lp, lm = split(lock)
             return lp, lm
+        if not provider_id and not model and cat:
+            return cat[0]["id"], cat[0]["default_model"]
         return provider_id, model
     if not cat:
         return provider_id, model
