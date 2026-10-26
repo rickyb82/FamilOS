@@ -1,5 +1,35 @@
 # FamilOS
 
+**FamilOS** is a self-hosted web desktop for the whole family. It runs on your own server and gives every member a personal workspace in the browser — with draggable, tiling windows, a dock and search — built around **Emily**, an AI assistant that can use either OpenAI or a local model through Ollama.
+
+- **AI chat and projects** with tools, document search (RAG), long-term family memory, image generation and text-to-speech.
+- **Files and collaboration:** folders, sharing, version history, and integrated apps for documents, spreadsheets, PDFs, slides, whiteboards and email.
+- **Family communication:** messaging, voice and video calls, push notifications.
+- **Designed for kids:** child profiles with parental controls, daily limits, a tutor mode that guides instead of giving answers, an isolated safe browser with admin approvals, and a game studio where children create games in chat and play them together in moderated family rooms.
+- **Security first:** passkeys, TOTP, Google sign-in, login alerts, audited admin actions and sandboxed third-party apps.
+- **Easy to run:** a single Docker Compose stack behind Caddy with automatic HTTPS, backups and in-browser updates.
+
+## Screenshots
+
+> Demo instance with a fictional family and simulated AI replies.
+
+| | |
+|---|---|
+| ![Desktop](docs/screenshots/01-desktop.jpg) **Home desktop** — widgets, recent chats and files, dock | ![Emily chat](docs/screenshots/02-chat.jpg) **Emily** — the family AI assistant |
+| ![Messages](docs/screenshots/03-messages.jpg) **Messages** — family group chat with voice and video calls | ![Files](docs/screenshots/04-files.jpg) **Files** — folders, sharing and versions |
+| ![Windows](docs/screenshots/05-windows.jpg) **Multitasking** — free, two-zone and four-zone window layouts | ![Parental rules](docs/screenshots/06-parental-rules.jpg) **Parental controls** — AI rules, limits and schedules per age group |
+
+### For kids
+
+| | |
+|---|---|
+| ![Kid desktop](docs/screenshots/07-kid-desktop.jpg) **Child desktop** — same familiar shell, protected profile | ![Homework help](docs/screenshots/08-kid-homework.jpg) **Homework tutor** — Emily guides step by step instead of giving the answer |
+| ![Safe browser](docs/screenshots/09-kid-browser.jpg) **Safe browser** — isolated server-side browsing, enabled by parents | |
+
+---
+
+## Documentazione (italiano)
+
 Desktop web per la famiglia, derivato da [Emily](https://github.com/rickyb82/emily). FamilOS è la shell; Emily resta l'assistente AI.
 
 ## Funzioni
