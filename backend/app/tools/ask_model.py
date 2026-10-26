@@ -14,15 +14,12 @@ from .registry import ToolContext, ToolResult, register
 log = logging.getLogger(__name__)
 settings = get_settings()
 
-ALIASES = {'gpt': 'openai',
- 'chatgpt': 'openai',
- 'openai': 'openai',
- 'ollama': 'ollama',
- 'locale': 'ollama',
- 'local': 'ollama',
- 'qwen': 'ollama',
- 'gemma': 'ollama',
- 'gpt-oss': 'ollama'}
+ALIASES = {'gpt': 'openai', 'chatgpt': 'openai', 'openai': 'openai',
+           'claude': 'anthropic', 'anthropic': 'anthropic',
+           'gemini': 'gemini', 'google': 'gemini',
+           'ollama': 'ollama', 'locale': 'ollama', 'local': 'ollama', 'qwen': 'ollama', 'gemma': 'ollama', 'gpt-oss': 'ollama',
+           'custom': 'custom', 'compatibile': 'custom', 'openrouter': 'custom', 'groq': 'custom', 'mistral': 'custom',
+           'deepseek': 'custom'}
 MAX_CONTEXT_MESSAGES = 12
 MAX_CONTEXT_CHARS = 12_000
 
@@ -32,12 +29,14 @@ def _resolve(provider: str, model: str | None, allowed: list[str]) -> tuple[str,
     pid = ALIASES.get(key)
     if not pid:
         # accetta anche un id di modello al posto del provider (es. "gpt-4.1")
-        for prefix, p in (("gpt-oss", "ollama"), ("gpt", "openai"), ("o1", "openai"), ("o3", "openai"), ("o4", "openai"), ("qwen", "ollama"), ("gemma", "ollama"), ("llama", "ollama"), ("mistral", "ollama")):
+        for prefix, p in (("gpt-oss", "ollama"), ("gpt", "openai"), ("o1", "openai"), ("o3", "openai"), ("o4", "openai"),
+                          ("claude", "anthropic"), ("gemini", "gemini"),
+                          ("qwen", "ollama"), ("gemma", "ollama"), ("llama", "ollama"), ("mistral", "ollama")):
             if key.startswith(prefix):
                 pid, model = p, model or key
                 break
     if not pid:
-        raise ValueError(f"Provider '{provider}' sconosciuto: usa openai oppure ollama")
+        raise ValueError(f"Provider '{provider}' sconosciuto: usa openai, anthropic, gemini, ollama o custom")
     if pid not in allowed:
         raise ValueError(f"Il provider {pid} non e' consentito per questo utente")
     prov = get_provider(pid)
@@ -56,8 +55,8 @@ def _resolve(provider: str, model: str | None, allowed: list[str]) -> tuple[str,
     return pid, model or prov.default_model
 
 
-@register("ask_model", "Consulta OpenAI oppure Ollama per una seconda opinione o un compito specifico.",
-    {"type":"object","properties":{"provider":{"type":"string","enum":["openai","ollama"]},"model":{"type":"string"},"prompt":{"type":"string"},"include_context":{"type":"boolean"},"with_web_search":{"type":"boolean"}},"required":["provider","prompt"]},
+@register("ask_model", "Consulta un altro provider AI configurato (OpenAI, Claude, Gemini, Ollama o il server compatibile OpenAI) per una seconda opinione o un compito specifico.",
+    {"type":"object","properties":{"provider":{"type":"string","enum":["openai","anthropic","gemini","ollama","custom"]},"model":{"type":"string"},"prompt":{"type":"string"},"include_context":{"type":"boolean"},"with_web_search":{"type":"boolean"}},"required":["provider","prompt"]},
     usage_kind="tool")
 async def ask_model(args: dict, ctx: ToolContext) -> ToolResult:
     prompt = str(args.get("prompt", "")).strip()

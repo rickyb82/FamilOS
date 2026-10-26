@@ -23,6 +23,11 @@ settings = get_settings()
 # Le chiavi sono prefissi di nome modello; vince il prefisso piu' lungo che combacia. "*" = default del provider.
 DEFAULT_PRICING: dict = {'mock': {'*': {'in': 0.0, 'out': 0.0}},
  'ollama': {'*': {'in': 0, 'out': 0}},
+ 'custom': {'*': {'in': 0, 'out': 0}},   # server compatibile OpenAI: listino da impostare nel pannello se a pagamento
+ 'anthropic': {'*': {'in': 3.0, 'out': 15.0}, 'claude-opus': {'in': 15.0, 'out': 75.0},
+               'claude-sonnet': {'in': 3.0, 'out': 15.0}, 'claude-haiku': {'in': 1.0, 'out': 5.0}},
+ 'gemini': {'*': {'in': 0.3, 'out': 2.5}, 'gemini-2.5-pro': {'in': 1.25, 'out': 10.0}, 'gemini-2.5-flash': {'in': 0.3, 'out': 2.5},
+            'gemini-2.5-flash-lite': {'in': 0.1, 'out': 0.4}},
  'openai': {'gpt-6-luna': {'in': 0.1, 'out': 0.5}, 'gpt-6.1-sol': {'in': 2.0, 'out': 10.0}, '*': {'in': 2.0, 'out': 8.0},
             'embedding': 0.02,
             'gpt-4.1': {'in': 2.0, 'out': 8.0},
@@ -68,6 +73,10 @@ def cache_factors(provider: str, model: str) -> tuple[float, float]:
         if model.startswith(("gpt-6", "gpt-5.6")):
             return 0.1, 1.25
         return (0.25 if (model or "").startswith(("gpt-4.1", "gpt-5", "o3", "o4")) else 0.50), 1.0
+    if provider == "anthropic":
+        return 0.1, 1.25
+    if provider == "gemini":
+        return 0.25, 1.0
     return 1.0, 1.0
 
 
@@ -153,8 +162,13 @@ async def openai_spend(admin_key: str, since: datetime) -> dict:
         return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:200]}"}
 
 
-PROVIDER_LABELS = {"openai": "OpenAI", "ollama": "Locale (Ollama)"}
-LOCAL_PROVIDERS = {"ollama"}
+from ..providers.registry import PROVIDER_LABELS, PROVIDER_ORDER, local_ids  # noqa: E402
+
+CLOUD_BILLED = ("openai", "anthropic", "gemini")
+
+
+def _local_providers() -> set[str]:
+    return {"ollama"} | local_ids()
 
 
 def period_bounds(period: str) -> tuple[datetime, datetime | None, str]:
@@ -185,6 +199,7 @@ async def users_report(db: AsyncSession, family_id: str, period: str = "month") 
     people = {u.id: u for u in (await db.execute(select(User).where(User.family_id == family_id))).scalars()}
     users: dict[str, dict] = {}
     seen_providers: set[str] = set()
+    local_set = _local_providers()
     for uid, prov, model, kind, n, tin, tout, tcr, tcw in rows:
         prov, model = prov or "?", model or ""
         tin, tout, tcr, tcw, n = int(tin or 0), int(tout or 0), int(tcr or 0), int(tcw or 0), int(n or 0)
@@ -209,8 +224,8 @@ async def users_report(db: AsyncSession, family_id: str, period: str = "month") 
         if kind == "message":
             pp["messages"] += n; mm["messages"] += n; u["messages"] += n
         u["tokens"] += tok_in + tout
-        u["local_tokens" if prov in LOCAL_PROVIDERS else "cloud_tokens"] += tok_in + tout
-    order = [p for p in ("openai", "ollama") if p in seen_providers] + sorted(seen_providers - set(PROVIDER_LABELS))
+        u["local_tokens" if prov in local_set else "cloud_tokens"] += tok_in + tout
+    order = [p for p in PROVIDER_ORDER if p in seen_providers] + sorted(seen_providers - set(PROVIDER_ORDER))
     labels = PROVIDER_LABELS
     for u in users.values():
         u["cost"] = round(u["cost"], 4)
@@ -218,7 +233,7 @@ async def users_report(db: AsyncSession, family_id: str, period: str = "month") 
             pp["cost"] = round(pp["cost"], 4)
             pp["models"] = sorted(({"model": k, **v, "cost": round(v["cost"], 4)} for k, v in pp["models"].items()), key=lambda m: -(m["input_tokens"] + m["output_tokens"]))
     return {"period": period, "label": label, "since": since.isoformat(), "until": until.isoformat() if until else None,
-            "providers": [{"id": p, "label": labels.get(p, p), "local": p in LOCAL_PROVIDERS} for p in order],
+            "providers": [{"id": p, "label": labels.get(p, p), "local": p in local_set} for p in order],
             "users": sorted(users.values(), key=lambda x: (-x["tokens"], x["name"]))}
 
 
@@ -231,7 +246,7 @@ async def full_report(db: AsyncSession, family_id: str) -> dict:
     since = month_start()
     local = await local_report(db, family_id, since)
     budgets = {}
-    for prov in ("openai",):
+    for prov in CLOUD_BILLED:
         try:
             budgets[prov] = float(getattr(settings, f"budget_{prov}", "") or 0)
         except ValueError:
@@ -243,7 +258,9 @@ async def full_report(db: AsyncSession, family_id: str) -> dict:
         real["openai"] = await openai_spend(o_key, since)
         real["openai"]["via"] = "admin_key" if settings.openai_admin_key else "api_key"
     out = []
-    for prov in ("openai",):
+    for prov in CLOUD_BILLED:
+        if prov != "openai" and not getattr(settings, f"{prov}_api_key", "") and not local["providers"].get(prov):
+            continue   # provider mai configurato: nessuna scheda
         est = local["providers"].get(prov, {}).get("cost", 0.0)
         spent = real.get(prov, {}).get("usd") if real.get(prov, {}).get("ok") else None
         used = spent if spent is not None else est
@@ -254,12 +271,12 @@ async def full_report(db: AsyncSession, family_id: str) -> dict:
                     "percent": round(min(100.0, used / b * 100), 1) if b > 0 else None,
                     "stats": local["providers"].get(prov, {})})
     # modello locale: nessun costo, ma mostriamo quanto lavoro ha assorbito e cosa sarebbe costato nel cloud
-    lo_parts = [local["providers"].get(k, {}) for k in ("ollama",)]
+    lo_parts = [local["providers"].get(k, {}) for k in sorted(_local_providers())]
     lo = {"messages": sum(p.get("messages", 0) for p in lo_parts), "input_tokens": sum(p.get("input_tokens", 0) for p in lo_parts),
           "output_tokens": sum(p.get("output_tokens", 0) for p in lo_parts)} if any(lo_parts) else {}
     local_tokens_in = lo.get("input_tokens", 0)
     local_tokens_out = lo.get("output_tokens", 0)
-    cloud_msgs = sum(local["providers"].get(p, {}).get("messages", 0) for p in ("openai",))
+    cloud_msgs = sum(local["providers"].get(p, {}).get("messages", 0) for p in CLOUD_BILLED)
     ref_prov = "openai"
     ref_model = getattr(settings, f"{ref_prov}_default_model", "")
     avoided = estimate_cost(pricing_table(), ref_prov, ref_model, "message", local_tokens_in, local_tokens_out) if lo else 0.0

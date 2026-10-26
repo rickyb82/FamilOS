@@ -14,6 +14,7 @@ class OpenAIProvider(BaseProvider):
 
     image_models: list[str] = []
     reasoning_effort: str = "auto"
+    use_responses_api: bool = True          # False nei server compatibili: solo /chat/completions
     _needs_no_reasoning: set[str] = set()   # modelli che vogliono reasoning_effort='none' con i tool
 
     def _client(self):
@@ -70,7 +71,7 @@ class OpenAIProvider(BaseProvider):
     async def stream(self, model, system, messages, tools, max_tokens=4096, system_dynamic="", cache_scope="") -> AsyncIterator[ProviderEvent]:
 
         chosen = model or self.default_model
-        if chosen.startswith(("gpt-6", "gpt-5.6")):
+        if self.use_responses_api and chosen.startswith(("gpt-6", "gpt-5.6")):
             from .openai_responses import stream_response
             async for event in stream_response(self,chosen,system,messages,tools,max_tokens,system_dynamic,cache_scope):
                 yield event

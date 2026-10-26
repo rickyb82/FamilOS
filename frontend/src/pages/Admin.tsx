@@ -21,7 +21,8 @@ import AdminLog from './AdminLog'
 type Tab = 'browser-rules' | 'child-rules' | 'members' | 'apps' | 'models' | 'providers' | 'costs' | 'supervision' | 'usage' | 'devices' | 'audit' | 'mcp' | 'backup' | 'memory'
 const TOOLS = ['web_search', 'generate_image', 'read_document', 'artifacts', 'run_code', 'mcp', 'ask_model', 'memory']
 const TOOL_IT: Record<string, string> = { web_search: 'Ricerca web', generate_image: 'Immagini', read_document: 'Documenti (lettura + ricerca)', artifacts: 'Artifact (pagine/app/codice con anteprima)', run_code: 'Esecuzione codice (sandbox)', mcp: 'Server MCP', ask_model: 'Consultare altri modelli AI (ask_model)', memory: 'Memoria (ricordati che… / dimentica…)' }
-const PROVIDERS = ['openai', 'ollama']
+const PROVIDERS = ['openai', 'anthropic', 'gemini', 'ollama', 'custom']
+const PROVIDER_IT: Record<string, string> = { openai: 'OpenAI', anthropic: 'Claude', gemini: 'Gemini', ollama: 'Ollama', custom: 'Compatibile OpenAI' }
 const DAYS = ['Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab', 'Dom']
 
 
@@ -300,7 +301,7 @@ function MemberForm({ user, defaults, onClose, onError }: { user?: User; default
               </div>
             ) : (
               <div><b>Provider consentiti:</b> {PROVIDERS.map((p) => (
-                <label key={p} className="tool-toggle"><input type="checkbox" checked={(policy.allowed_providers ?? []).includes(p)} onChange={() => toggleList('allowed_providers', p)} /> {p}</label>
+                <label key={p} className="tool-toggle"><input type="checkbox" checked={(policy.allowed_providers ?? []).includes(p)} onChange={() => toggleList('allowed_providers', p)} /> {PROVIDER_IT[p] ?? p}</label>
               ))}</div>
             )}
             <div className="grid3">

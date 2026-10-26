@@ -49,14 +49,24 @@ class Settings(BaseSettings):
     # Linux con profilo compose 'ollama': http://ollama:11434
     ollama_url: str = ""
     ollama_default_model: str = "qwen3:8b"
-    # Server LLM di casa con API compatibile OpenAI (vLLM, llama.cpp, LM Studio...): es. http://192.168.4.2:8000
+    # Anthropic Claude e Google Gemini (chiavi API). Vuoto = disabilitato.
+    anthropic_api_key: str = ""
+    anthropic_default_model: str = "claude-sonnet-5-5"
+    gemini_api_key: str = ""
+    gemini_default_model: str = "gemini-3.8-flash"
+    # Qualsiasi server con API compatibile OpenAI: cloud (OpenRouter, Groq, Mistral, DeepSeek...) o in casa
+    # (vLLM, llama.cpp, LM Studio, LocalAI...). Es. https://openrouter.ai/api/v1 oppure http://192.168.1.20:8000
+    custom_llm_url: str = ""
+    custom_llm_key: str = ""              # facoltativa per i server in casa
+    custom_llm_model: str = ""            # vuoto = primo modello esposto da /v1/models
+    custom_llm_label: str = "Compatibile OpenAI"
     # Router "Auto": un modello locale piccolo decide se rispondere in locale o passare al cloud
     max_output_tokens: int = 32768      # lunghezza massima di UNA chiamata al modello (serve alta per app/artifact e codice)
     max_total_output_tokens: int = 256000   # oltre questo totale la risposta si ferma davvero (continuazioni automatiche incluse)
     auto_continue: str = "true"
     max_tool_rounds: int = 500          # passaggi con strumenti per turno: una domanda che ne richiede centinaia li fa tutti
     turn_tool_chars: int = 300000       # oltre questo totale di risultati nel turno, i piu' vecchi si riducono a un promemoria
-    thinking_mode: str = "cloud"        # off | cloud (OpenAI) | all (anche i modelli locali, piu' lenti)
+    thinking_mode: str = "cloud"        # off | cloud (OpenAI, Claude, Gemini) | all (anche i modelli locali, piu' lenti)
     debug_llm: str = "off"              # off | admins | all: pannello debug sotto le risposte (parametri, tempi, ragionamento nascosto)
     ollama_temperature: str = ""        # vuoto = temperatura del Modelfile del modello
     ollama_top_p: str = ""
@@ -143,6 +153,8 @@ class Settings(BaseSettings):
     # Costi e budget (pannello Costi)
     pricing_json: str = ""            # override del listino prezzi (JSON), vedi services/costs.py
     budget_openai: str = ""
+    budget_anthropic: str = ""
+    budget_gemini: str = ""
     openai_admin_key: str = ""        # Admin API key OpenAI per leggere la spesa reale
 
     # Sandbox esecuzione codice (servizio separato nel compose; vuoto = esecuzione disabilitata)

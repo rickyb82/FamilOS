@@ -363,8 +363,9 @@ async def prepare_user_blocks(text: str, file_ids: list[str], user: User, db: As
 def resolve_provider_model(user: User, policy: dict, provider_id: str | None, model: str | None,
                            conv: Conversation | None = None) -> tuple[str, str]:
     """Bambini: provider e modello fissati dal genitore. Adulti: scelta libera tra i provider consentiti."""
-    if provider_id and provider_id not in {"openai", "ollama", "mock"}:
-        raise HTTPException(400, "Provider non supportato: scegli OpenAI oppure Ollama")
+    from ..providers.registry import SUPPORTED_PROVIDERS
+    if provider_id and provider_id not in SUPPORTED_PROVIDERS | {"mock"}:
+        raise HTTPException(400, "Provider non supportato")
     if user.role == Role.child:
         pid = policy.get("provider") or (conv.provider if conv else None)
         if pid not in policy["allowed_providers"]:
@@ -689,7 +690,8 @@ async def run_turn(db: AsyncSession, user: User, conv: Conversation, text: str |
                 out_safety = await check_text(text_acc, policy)
                 if out_safety.flagged:
                     amsg.flagged, amsg.flag_reason = True, "output: " + out_safety.reason
-            amsg.usage = {**total_usage, "provider": provider.id, "model": model,
+            from ..providers.registry import is_local as _is_local
+            amsg.usage = {**total_usage, "provider": provider.id, "model": model, "local": _is_local(provider.id),
                           **({"debug": {"rounds": dbg_rounds}} if dbg_on else {})}
             await db.commit()
             await log_usage(db, user, "message", provider.id, model, total_usage["input_tokens"], total_usage["output_tokens"],

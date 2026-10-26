@@ -31,8 +31,16 @@ MANAGED_KEYS: dict[str, tuple[str, bool]] = {'passkeys': ('Passkey abilitate (0 
  'openai_default_model': ('Modello di default OpenAI', False),
  'openai_cache_mode': ('Cache prompt OpenAI (auto/stable)', False),
  'openai_reasoning_effort': ('Sforzo di ragionamento OpenAI (auto/none/low/medium/high)', False),
+ 'anthropic_api_key': ('Chiave API Anthropic', True),
+ 'anthropic_default_model': ('Modello di default Claude', False),
+ 'gemini_api_key': ('Chiave API Gemini', True),
+ 'gemini_default_model': ('Modello di default Gemini', False),
  'ollama_url': ('Indirizzo Ollama (modello locale)', False),
  'ollama_default_model': ('Modello locale di default', False),
+ 'custom_llm_url': ('Indirizzo server compatibile OpenAI', False),
+ 'custom_llm_key': ('Chiave API server compatibile OpenAI', True),
+ 'custom_llm_model': ('Modello server compatibile OpenAI', False),
+ 'custom_llm_label': ('Nome del server compatibile OpenAI', False),
  'web_search_provider': ('Motore di ricerca web', False),
  'searxng_url': ('Indirizzo SearXNG (ricerca web in casa)', False),
  'web_search_summarize': ('Ricerca web: riassunto pagine con modello locale (auto/none)', False),
@@ -71,6 +79,8 @@ MANAGED_KEYS: dict[str, tuple[str, bool]] = {'passkeys': ('Passkey abilitate (0 
  'google_client_secret': ('Google OAuth Client secret', True),
  'pricing_json': ('Listino prezzi (JSON)', False),
  'budget_openai': ('Budget mensile OpenAI (USD)', False),
+ 'budget_anthropic': ('Budget mensile Anthropic (USD)', False),
+ 'budget_gemini': ('Budget mensile Gemini (USD)', False),
  'openai_admin_key': ('Chiave Admin OpenAI (spesa reale)', True)}
 
 _env_defaults: dict[str, str] = {k: getattr(settings, k) for k in MANAGED_KEYS}
@@ -134,7 +144,8 @@ async def set_value(db: AsyncSession, key: str, value: str, user_id: str | None)
     _, secret = MANAGED_KEYS[key]
     row = await db.get(AppSetting, key)
     value = (value or "").strip()
-    if key.endswith(("_model", "_default_model", "_provider")) or key in ("image_model", "video_model"):
+    if (key.endswith(("_model", "_default_model", "_provider")) or key in ("image_model", "video_model")) and key not in ("custom_llm_model", "user_default_model"):
+        # (i server compatibili OpenAI come vLLM usano id con maiuscole, es. Qwen/Qwen3-32B: si lasciano intatti)
         value = value.lower().replace(" ", "")   # gli id dei modelli sono minuscoli senza spazi
     if not value:
         if row:
@@ -178,6 +189,36 @@ async def test_provider(pid: str) -> dict:
                 response.raise_for_status()
             names = [m["name"] for m in response.json().get("models", [])]
             detail = ", ".join(names[:12]) if names else "Ollama risponde; scarica un modello con ollama pull"
+        elif pid == "anthropic":
+            from anthropic import AsyncAnthropic
+            client = AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=15)
+            names = [m.id async for m in client.models.list(limit=100)]
+            detail = f"Connessione Anthropic riuscita: {len(names)} modelli ({', '.join(names[:5])})"
+        elif pid == "gemini":
+            from google import genai
+            client = genai.Client(api_key=settings.gemini_api_key)
+            names = [(m.name or "").removeprefix("models/") async for m in await client.aio.models.list()]
+            names = [n for n in names if n.startswith("gemini-")]
+            detail = f"Connessione Gemini riuscita: {len(names)} modelli ({', '.join(names[:5])})"
+        elif pid == "custom":
+            import httpx
+            from ..providers.openai_compat_provider import OpenAICompatProvider
+            from .neturl import host_url
+            base = OpenAICompatProvider.normalize_base(host_url(settings.custom_llm_url))
+            headers = {"Authorization": f"Bearer {settings.custom_llm_key}"} if settings.custom_llm_key else {}
+            try:
+                async with httpx.AsyncClient(timeout=10) as client:
+                    response = await client.get(base + "/models", headers=headers)
+            except httpx.ConnectError as error:
+                return {"ok": False, "latency_ms": int((time.perf_counter()-started)*1000),
+                        "detail": f"Il backend (nel container Docker) non raggiunge {base}: {error}. Per un server in casa "
+                                  "verifica che ascolti su 0.0.0.0 e che la porta sia aperta; sul Mac usa host.docker.internal."}
+            if response.status_code in (401, 403):
+                return {"ok": False, "latency_ms": int((time.perf_counter()-started)*1000),
+                        "detail": f"Il server richiede una chiave API valida (HTTP {response.status_code})"}
+            response.raise_for_status()
+            names = [m.get("id", "") for m in response.json().get("data", [])]
+            detail = f"{base} risponde: {len(names)} modelli ({', '.join(names[:5])})" if names else f"{base} risponde ma non elenca modelli: indica il modello"
         else:
             return {"ok": False, "detail": "Provider non supportato"}
         return {"ok": True, "detail": detail, "latency_ms": int((time.perf_counter()-started)*1000)}

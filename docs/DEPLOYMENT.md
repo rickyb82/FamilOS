@@ -3,7 +3,7 @@
 ## Configurazione
 
 Copiare `.env.example` in `.env`; impostare SECRET_KEY casuale, credenziali amministratore e provider. Conservare SECRET_KEY nei backup: cifra le impostazioni sensibili nel database.
-I valori del pannello prevalgono sull'ambiente. Le vecchie chiavi dei provider e servizi rimossi vengono ignorate. Mock disabilitato normalmente; `ENABLE_MOCK_PROVIDER=1` lo abilita per le sole prove.
+I valori del pannello prevalgono sull'ambiente. Le chiavi dei servizi rimossi vengono ignorate. Mock disabilitato normalmente; `ENABLE_MOCK_PROVIDER=1` lo abilita per le sole prove.
 
 ## HTTPS
 

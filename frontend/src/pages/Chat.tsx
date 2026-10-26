@@ -309,8 +309,8 @@ export default function Chat() {
             <button className="ghost small" onClick={() => regenerate()} title="Rigenera l'ultima risposta con il modello corrente">↻ Rigenera risposta</button>
             {(() => {
               const last = [...messages].reverse().find((m) => m.role === 'assistant')
-              const isLocal = last?.usage?.provider === 'ollama'
-              const cloud = me?.providers.find((p) => p.id === 'openai')
+              const isLocal = last?.usage?.local ?? last?.usage?.provider === 'ollama'
+              const cloud = me?.providers.find((p) => ['openai', 'anthropic', 'gemini'].includes(p.id))
               return isLocal && cloud ? (
                 <button className="ghost small" onClick={() => regenerate(cloud.id, cloud.default_model)} title={`Rifai l'ultima risposta con ${cloud.label}`}>☁️ Rifai con {cloud.label.split(' ')[0]}</button>
               ) : null

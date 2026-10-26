@@ -3,7 +3,7 @@ import { get, post, put } from '../lib/api'
 import { useAuth } from '../lib/auth'
 
 type State = { label: string; secret: boolean; configured: boolean; source: string; value: string }
-type Provider = { id: string; label: string; key: string; model_key: string; active: boolean; key_state: State; model_state: State; models: { id: string; label: string }[] }
+type Provider = { id: string; label: string; hint?: string; kind?: string; key: string; model_key: string; active: boolean; key_state: State; model_state: State; extra_states?: Record<string, State>; models: { id: string; label: string }[] }
 type Status = { providers: Provider[]; settings: Record<string, State>; mock_active: boolean }
 const GROUPS: { title: string; keys: string[] }[] = [
   { title: 'Ollama locale', keys: ['ollama_temperature', 'ollama_top_p', 'ollama_seed', 'ollama_think'] },
@@ -13,6 +13,10 @@ const GROUPS: { title: string; keys: string[] }[] = [
   { title: 'Ricerca web', keys: ['web_search_provider', 'searxng_url', 'web_search_summarize'] },
   { title: 'Email di sistema', keys: ['smtp_host', 'smtp_port', 'smtp_user', 'smtp_password', 'smtp_from', 'smtp_from_name', 'smtp_security', 'mail_transport', 'security_login_alerts'] },
 ]
+const PLACEHOLDERS: Record<string, string> = {
+  openai: 'Incolla la chiave API', anthropic: 'sk-ant-…', gemini: 'Incolla la chiave API di Google AI Studio',
+  ollama: 'http://host.docker.internal:11434', custom: 'https://openrouter.ai/api/v1 oppure http://192.168.1.20:8000',
+}
 const OPTIONS: Record<string, string[]> = {
   security_login_alerts: ['true', 'false'],
   openai_cache_mode: ['auto', 'stable'],
@@ -47,17 +51,18 @@ export default function AdminProviders() {
   }
   if (!status) return <p role="status">{error || 'Caricamento provider…'}</p>
   return <div className="stack">
-    <p className="muted">FamilOS usa OpenAI nel cloud oppure un modello locale su Ollama. Le chiavi restano cifrate sul server e non vengono inviate al browser.</p>
+    <p className="muted">FamilOS può usare OpenAI, Claude (Anthropic) e Gemini (Google) nel cloud, un modello locale su Ollama oppure qualsiasi server con API compatibile OpenAI (OpenRouter, Groq, Mistral, DeepSeek, vLLM, LM Studio…). Configura quelli che vuoi: nelle regole di ogni persona scegli quali può usare. Le chiavi restano cifrate sul server e non vengono inviate al browser.</p>
     <p className="muted small">Gli avvisi di sicurezza usano le Email di sistema e raggiungono gli amministratori attivi. Configura SMTP prima di pubblicare il sistema. I tentativi ripetuti sono raggruppati per 5 minuti, con un massimo di 20 avvisi per esito ogni ora; tutti i tentativi registrati restano nel registro accessi.</p>
     {status.mock_active && <p className="muted small">La preview usa anche un simulatore di sviluppo. Non è un provider di produzione.</p>}
     {error && <div className="error" role="alert">{error}</div>}
     {message && <div className="ok" role="status">{message}</div>}
-    {status.providers.map(p => <section className="card stack" key={p.id}><div className="row between"><h3 style={{ margin: 0 }}>{p.id === 'openai' ? 'OpenAI' : 'Ollama locale'}</h3><small className="muted">{p.active ? 'Configurato' : 'Da configurare'}</small></div>
-      <p className="muted small">{p.id === 'openai' ? 'Usa la tua chiave API OpenAI. I modelli disponibili vengono letti dal tuo account.' : 'Indica il server Ollama e un modello già scaricato. Per Docker sul Mac usa host.docker.internal:11434; su Ubuntu il servizio ollama:11434.'}</p>
-      <div className="grid2"><label>{p.id === 'openai' ? 'Chiave API' : 'Indirizzo Ollama'}<input type={p.id === 'openai' ? 'password' : 'url'} autoComplete="off" value={draft[p.key] ?? (p.id === 'ollama' ? p.key_state.value : '')} placeholder={p.key_state.configured ? 'Già configurato; lascia vuoto per conservarlo' : p.id === 'openai' ? 'Incolla la chiave API' : 'http://host.docker.internal:11434'} onChange={e => edit(p.key, e.target.value)} /></label>
-      <label>Modello predefinito{p.models.length ? <select value={draft[p.model_key] ?? p.model_state.value} onChange={e => edit(p.model_key, e.target.value)}>{!p.models.some(m => m.id === (draft[p.model_key] ?? p.model_state.value)) && <option value={p.model_state.value}>{p.model_state.value}</option>}{p.models.map(m => <option key={m.id} value={m.id}>{m.label || m.id}</option>)}</select> : <input value={draft[p.model_key] ?? p.model_state.value} onChange={e => edit(p.model_key, e.target.value)} placeholder="ID del modello" />}</label></div>
+    {status.providers.map(p => { const isUrl = p.kind === 'url'; return <section className="card stack" key={p.id}><div className="row between"><h3 style={{ margin: 0 }}>{p.label}</h3><small className="muted">{p.active ? 'Configurato' : 'Da configurare'}</small></div>
+      {p.hint && <p className="muted small">{p.hint}</p>}
+      <div className="grid2"><label>{isUrl ? 'Indirizzo del server' : 'Chiave API'}<input type={isUrl ? 'url' : 'password'} autoComplete="off" value={draft[p.key] ?? (isUrl ? p.key_state.value : '')} placeholder={p.key_state.configured && !isUrl ? 'Già configurato; lascia vuoto per conservarlo' : PLACEHOLDERS[p.id] ?? ''} onChange={e => edit(p.key, e.target.value)} /></label>
+      <label>Modello predefinito{p.models.length ? <select value={draft[p.model_key] ?? p.model_state.value} onChange={e => edit(p.model_key, e.target.value)}>{!p.models.some(m => m.id === (draft[p.model_key] ?? p.model_state.value)) && <option value={p.model_state.value}>{p.model_state.value || '(primo disponibile)'}</option>}{p.models.map(m => <option key={m.id} value={m.id}>{m.label || m.id}</option>)}</select> : <input value={draft[p.model_key] ?? p.model_state.value} onChange={e => edit(p.model_key, e.target.value)} placeholder="ID del modello" />}</label>
+      {Object.entries(p.extra_states ?? {}).map(([key, field]) => <label key={key}>{field.label}<input type={field.secret ? 'password' : 'text'} autoComplete="off" value={draft[key] ?? (field.secret ? '' : field.value)} placeholder={field.secret && field.configured ? 'Già impostata; lascia vuoto per conservarla' : field.secret ? 'Facoltativa per i server in casa' : ''} onChange={e => edit(key, e.target.value)} /></label>)}</div>
       <div className="row wrap"><button className="ghost" disabled={!!busy || !p.key_state.configured} onClick={() => test(p.id)}>{busy === p.id ? 'Verifica…' : 'Prova connessione'}</button>{p.key_state.source === 'admin' && <button className="ghost" disabled={!!busy} onClick={() => edit(p.key, '')}>Rimuovi dal pannello</button>}{tests[p.id] && <span className={tests[p.id].ok ? 'ok' : 'error'}>{tests[p.id].detail}</span>}</div>
-    </section>)}
+    </section> })}
     {GROUPS.map(group => <details className="card settings-group" key={group.title}><summary>{group.title}</summary><div className="grid2" style={{ marginTop: 16 }}>{group.keys.filter(k => status.settings[k]).map(key => { const field = status.settings[key]; const value = draft[key] ?? (field.secret ? '' : field.value); return <label key={key}>{field.label}{OPTIONS[key] ? <select value={value} onChange={e => edit(key, e.target.value)}>{OPTIONS[key].map(option => <option key={option} value={option}>{option}</option>)}</select> : <input type={field.secret ? 'password' : 'text'} value={value} autoComplete="off" onChange={e => edit(key, e.target.value)} placeholder={field.secret && field.configured ? 'Già impostato' : ''} />}</label> })}</div></details>)}
     <div className="row"><button className="primary" disabled={!!busy} onClick={save}>{busy === 'save' ? 'Salvataggio…' : Object.keys(draft).length ? 'Salva configurazione' : 'Aggiorna modelli'}</button><small className="muted">Le modifiche si applicano senza riavvio.</small></div>
   </div>

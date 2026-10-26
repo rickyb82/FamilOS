@@ -11,7 +11,7 @@ interface Report {
   since: string; providers: Prov[]; users: { name: string; cost: number; messages: number; images: number; videos: number; tokens: number }[]
   pricing: Record<string, any>; settings: Record<string, { value: string; source: string; configured: boolean; secret: boolean }>
 }
-const LABEL: Record<string, string> = { openai: 'OpenAI', ollama: 'Ollama locale' }
+const LABEL: Record<string, string> = { openai: 'OpenAI', anthropic: 'Claude (Anthropic)', gemini: 'Gemini (Google)', ollama: 'Ollama locale', custom: 'Compatibile OpenAI' }
 const usd = (v: number | null | undefined) => (v === null || v === undefined ? '—' : `$${v.toFixed(2)}`)
 
 export default function AdminCosts() {
@@ -70,7 +70,7 @@ export default function AdminCosts() {
             {!p.configured && <small className="muted">chiave non configurata</small>}
             <div><small className="muted">Stima Emily</small><div style={{ fontSize: 22, fontWeight: 600 }}>{usd(p.estimated_usd)}</div></div>
             <div><small className="muted">Spesa reale (chiave Admin)</small>
-              <div>{p.real ? (p.real.ok ? <><b>{usd(p.real.usd)}</b> <small className="muted">({p.real.via === 'api_key' ? 'con la chiave normale' : 'chiave Admin'})</small></> : <span className="error" style={{ padding: '2px 6px' }}>{p.real.error}</span>) : <span className="muted">inserisci la chiave Admin sotto</span>}</div>
+              <div>{p.provider !== 'openai' ? <span className="muted">non disponibile: vale la stima</span> : p.real ? (p.real.ok ? <><b>{usd(p.real.usd)}</b> <small className="muted">({p.real.via === 'api_key' ? 'con la chiave normale' : 'chiave Admin'})</small></> : <span className="error" style={{ padding: '2px 6px' }}>{p.real.error}</span>) : <span className="muted">inserisci la chiave Admin sotto</span>}</div>
             </div>
             <div>
               <small className="muted">Budget mensile → rimanente</small>
@@ -93,12 +93,12 @@ export default function AdminCosts() {
             <label>Budget mensile (USD)
               <input type="number" min={0} step={1} placeholder={s[`budget_${p.provider}`]?.value || '0'} value={draft[`budget_${p.provider}`] ?? ''} onChange={(e) => setDraft({ ...draft, [`budget_${p.provider}`]: e.target.value })} />
             </label>
-            {(
+            {p.provider === 'openai' && (
               <label>Chiave Admin <small className="muted">({s[`${p.provider}_admin_key`]?.configured ? s[`${p.provider}_admin_key`].value : 'non impostata'})</small>
                 <input type="password" autoComplete="off" placeholder={'Chiave Admin OpenAI'} value={draft[`${p.provider}_admin_key`] ?? ''} onChange={(e) => setDraft({ ...draft, [`${p.provider}_admin_key`]: e.target.value })} />
               </label>
             )}
-            <button disabled={busy || !(`budget_${p.provider}` in draft || `${p.provider}_admin_key` in draft)} onClick={() => save([`budget_${p.provider}`, `${p.provider}_admin_key`])}>Salva</button>
+            <button disabled={busy || !(`budget_${p.provider}` in draft || `${p.provider}_admin_key` in draft)} onClick={() => save(p.provider === 'openai' ? [`budget_${p.provider}`, `${p.provider}_admin_key`] : [`budget_${p.provider}`])}>Salva</button>
           </section>
         ))}
       </div>

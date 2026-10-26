@@ -1,6 +1,6 @@
 # FamilOS
 
-**FamilOS** is a self-hosted web desktop for the whole family. It runs on your own server and gives every member a personal workspace in the browser — with draggable, tiling windows, a dock and search — built around **Emily**, an AI assistant that can use either OpenAI or a local model through Ollama.
+**FamilOS** is a self-hosted web desktop for the whole family. It runs on your own server and gives every member a personal workspace in the browser — with draggable, tiling windows, a dock and search — built around **Emily**, an AI assistant that works with the provider you choose: OpenAI, Anthropic Claude, Google Gemini, a local model through Ollama, or any OpenAI-compatible API (OpenRouter, Groq, Mistral, DeepSeek, vLLM, LM Studio…).
 
 - **AI chat and projects** with tools, document search (RAG), long-term family memory, image generation and text-to-speech.
 - **Files and collaboration:** folders, sharing, version history, and integrated apps for documents, spreadsheets, PDFs, slides, whiteboards and email.
@@ -37,7 +37,7 @@ Desktop web per la famiglia, derivato da [Emily](https://github.com/rickyb82/emi
 - Home, dock, ricerca e finestre indipendenti: trascinamento, ridimensionamento, affiancamento e minimizzazione.
 - File, cartelle, condivisioni, versioni, progetti e chat. Nuova cartella stile macOS, anche dal tasto destro.
 - WordCraft, GridCraft, PdfCraft, DeckCraft, IdeaCraft e MailCraft, secondo i permessi dell'utente.
-- Solo OpenAI e Ollama. Ollama usa l'API nativa per streaming, strumenti e gestione del ragionamento.
+- Provider AI: OpenAI, Claude (Anthropic), Gemini (Google), Ollama e qualsiasi API compatibile OpenAI (OpenRouter, Groq, Mistral, DeepSeek, vLLM, llama.cpp, LM Studio, LocalAI…). Ollama usa l'API nativa per streaming, strumenti e gestione del ragionamento. Per ogni persona l'amministratore sceglie quali provider può usare; per i bambini decide il genitore, e senza il cloud restano solo i provider in casa.
 - App mantenute attive quando nascoste; layout ripristinato per utente nel browser. I nuovi documenti non salvati non si riaprono.
 - Layout compatto su telefono, temi chiaro/scuro e movimento ridotto.
 
@@ -49,7 +49,7 @@ Richiede Compose v2 recente (supporto a `!override`) e accesso ai repository pri
 
 ```sh
 cp .env.example .env
-# Impostare SECRET_KEY, ADMIN_EMAIL, ADMIN_PASSWORD e OLLAMA_URL oppure OPENAI_API_KEY.
+# Impostare SECRET_KEY, ADMIN_EMAIL, ADMIN_PASSWORD e almeno un provider (OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, OLLAMA_URL o CUSTOM_LLM_URL).
 ./familos.sh dev
 ```
 
@@ -108,7 +108,7 @@ L'app Genitori consente risposte dirette per un'ora o fino a fine giornata; filt
 
 ## AI e cache
 
-Il modello cloud predefinito è gpt-6-luna; Ollama resta configurabile come provider locale.
+Modelli predefiniti: gpt-6-luna (OpenAI), claude-sonnet-5-5 (Claude), gemini-3.8-flash (Gemini); l'elenco dei modelli viene letto dall'account di ogni provider. Ollama e i server compatibili OpenAI sulla rete di casa contano come locali.
 I modelli OpenAI recenti usano Responses con store=false, contabilità separata della cache per utente e prefissi stabili.
 Cache auto: riusa anche la conversazione quando possibile. Cache stable: breakpoint sul prefisso stabile.
 Le letture e scritture vengono misurate dai dati usage dell'API; il primo popolamento può costare più dell'input ordinario.

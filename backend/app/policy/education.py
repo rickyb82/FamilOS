@@ -88,9 +88,18 @@ def apply_to_policy(user, policy: dict) -> dict:
     if profile["allow_images"] and policy["cloud_allowed"]:
         allowed.add("generate_image")
     policy["allowed_tools"] = sorted(set(policy.get("allowed_tools",[])) & allowed)
+    from ..providers.registry import _providers, is_local
+    chosen = (user.policy or {}).get("provider") or ""
     if policy["cloud_allowed"]:
-        policy["provider"] = "openai"
-        policy["model"] = get_settings().openai_default_model
-    if not policy["cloud_allowed"]:
-        policy["allowed_providers"] = [p for p in policy["allowed_providers"] if p != "openai"]
+        if chosen:
+            # provider e modello scelti dal genitore nelle regole del bambino
+            policy["provider"], policy["model"] = chosen, (user.policy or {}).get("model") or ""
+        elif "openai" in _providers():
+            policy["provider"] = "openai"
+            policy["model"] = get_settings().openai_default_model
+    else:
+        # niente cloud: restano solo i provider in casa (Ollama, server compatibile OpenAI sulla rete locale)
+        policy["allowed_providers"] = [p for p in policy["allowed_providers"] if is_local(p)]
+        if policy.get("provider") and not is_local(policy["provider"]):
+            policy["provider"], policy["model"] = "", ""
     return policy

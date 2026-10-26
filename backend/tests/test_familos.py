@@ -123,50 +123,76 @@ async def test_family_catalog_excludes_telecom(admin, monkeypatch):
     assert not ids & {"covercraft", "radiocraft", "netcraft", "starlink", "intranet", "connectcraft"}
 
 
-async def test_only_openai_and_ollama_can_be_registered(monkeypatch):
+async def test_all_supported_providers_can_be_registered(monkeypatch):
     from app.config import get_settings
     from app.providers import registry
     settings = get_settings()
     with monkeypatch.context() as patch:
-        for key, value in {"openai_api_key": "test-key", "ollama_url": "http://local-test:11434",
-                           "enable_mock_provider": False}.items():
+        for key, value in {"openai_api_key": "test-key", "anthropic_api_key": "test-key", "gemini_api_key": "test-key",
+                           "ollama_url": "http://local-test:11434", "custom_llm_url": "https://llm.example.com/v1",
+                           "custom_llm_label": "Server di prova", "enable_mock_provider": False}.items():
             patch.setattr(settings, key, value)
         registry.reload_providers()
-        assert {p["id"] for p in registry.available_providers()} == {"openai", "ollama"}
-        for provider in ("anthropic", "gemini", "custom", "auto", "mock"):
+        providers = {p["id"]: p for p in registry.available_providers()}
+        assert set(providers) == {"openai", "anthropic", "gemini", "ollama", "custom"}
+        assert providers["custom"]["label"] == "Server di prova"
+        for pid in providers:
+            assert registry.get_provider(pid).id == pid
+        for provider in ("auto", "mock", "comfyui"):
             with pytest.raises(HTTPException) as error:
                 registry.get_provider(provider)
             assert error.value.status_code == 400
+        assert registry.is_local("ollama") and not registry.is_local("custom") and not registry.is_local("anthropic")
     registry.reload_providers()
 
 
-async def test_disabled_provider_cannot_be_reenabled_through_settings(admin):
+async def test_unconfigured_provider_reports_missing_configuration(monkeypatch):
+    from app.config import get_settings
+    from app.providers import registry
+    settings = get_settings()
+    with monkeypatch.context() as patch:
+        patch.setattr(settings, "gemini_api_key", "")
+        registry.reload_providers()
+        with pytest.raises(HTTPException) as error:
+            registry.get_provider("gemini")
+        assert error.value.status_code == 503
+    registry.reload_providers()
+
+
+async def test_provider_cards_cover_every_supported_provider(admin):
     response = await admin.get("/api/admin/providers")
     assert response.status_code == 200
-    assert {p["id"] for p in response.json()["providers"]} == {"openai", "ollama"}
-    assert (await admin.put("/api/admin/providers", json={"values": {"gemini_api_key": "test"}})).status_code == 400
+    cards = {p["id"]: p for p in response.json()["providers"]}
+    assert set(cards) == {"openai", "anthropic", "gemini", "ollama", "custom"}
+    assert set(cards["custom"]["extra_states"]) == {"custom_llm_key", "custom_llm_label"}
+    assert cards["custom"]["extra_states"]["custom_llm_key"]["secret"] is True
+    assert (await admin.put("/api/admin/providers", json={"values": {"comfyui_url": "http://x"}})).status_code == 400
     assert (await admin.put("/api/admin/providers", json={"values": {"embedding_provider": "gemini"}})).status_code == 400
-    assert (await admin.post("/api/admin/providers/anthropic/test")).status_code == 404
+    assert (await admin.post("/api/admin/providers/comfyui/test")).status_code == 404
 
 
-async def test_rejected_provider_does_not_fall_back_to_cloud(admin):
+async def test_unknown_provider_does_not_fall_back_to_another(admin):
+    assert (await admin.post("/api/chat/conversations", json={"provider": "auto"})).status_code == 400
     response = await admin.post("/api/chat/conversations", json={"provider": "gemini"})
-    assert response.status_code == 400
+    assert response.status_code in (400, 503)
 
 
-async def test_admin_costs_and_audit_survive_provider_cleanup(admin):
+async def test_admin_costs_include_budgets_for_cloud_providers(admin):
     costs = await admin.get("/api/admin/costs")
     assert costs.status_code == 200
-    assert set(costs.json()["settings"]) == {"pricing_json", "budget_openai", "openai_admin_key"}
-    assert {p["provider"] for p in costs.json()["providers"]} == {"openai"}
+    assert set(costs.json()["settings"]) == {"pricing_json", "budget_openai", "budget_anthropic", "budget_gemini", "openai_admin_key"}
+    assert {p["provider"] for p in costs.json()["providers"]} == {"openai"}   # gli altri compaiono quando configurati
     assert (await admin.get("/api/admin/audit")).status_code == 200
     assert (await admin.get("/api/admin/costs/users")).status_code == 200
 
 
-def test_legacy_provider_configuration_is_ignored():
+def test_provider_configuration_fields_exist():
     from app.config import Settings
-    settings = Settings(anthropic_api_key="legacy", gemini_api_key="legacy", custom_llm_url="http://legacy")
-    assert not {"anthropic_api_key", "gemini_api_key", "custom_llm_url"} & type(settings).model_fields.keys()
+    settings = Settings(anthropic_api_key="k", gemini_api_key="k", custom_llm_url="http://server:8000")
+    assert {"anthropic_api_key", "gemini_api_key", "custom_llm_url", "custom_llm_key", "custom_llm_model",
+            "custom_llm_label"} <= type(settings).model_fields.keys()
+    assert settings.custom_llm_url == "http://server:8000"
+
 
 async def test_family_migration_removes_departments_and_preserves_files(admin, anna, kid):
     from app.models import Folder, FileAsset, Chunk

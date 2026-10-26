@@ -601,6 +601,18 @@ PROVIDER_CARDS = [{'id': 'openai',
   'model_key': 'openai_default_model',
   'hint': 'platform.openai.com/api-keys — usata anche per immagini, moderazione ed embedding',
   'testable': True},
+ {'id': 'anthropic',
+  'label': 'Claude (Anthropic)',
+  'key': 'anthropic_api_key',
+  'model_key': 'anthropic_default_model',
+  'hint': 'console.anthropic.com → API Keys',
+  'testable': True},
+ {'id': 'gemini',
+  'label': 'Gemini (Google)',
+  'key': 'gemini_api_key',
+  'model_key': 'gemini_default_model',
+  'hint': 'aistudio.google.com/apikey',
+  'testable': True},
  {'id': 'ollama',
   'label': 'Modello locale (Ollama)',
   'key': 'ollama_url',
@@ -609,6 +621,17 @@ PROVIDER_CARDS = [{'id': 'openai',
   'hint': 'Mac: installa Ollama (brew install ollama), poi `ollama pull qwen3:8b` e `ollama pull qwen3:4b`; '
           'indirizzo http://host.docker.internal:11434. Ubuntu: COMPOSE_PROFILES=ollama nel .env e indirizzo '
           'http://ollama:11434',
+  'testable': True},
+ {'id': 'custom',
+  'label': 'Compatibile OpenAI',
+  'key': 'custom_llm_url',
+  'model_key': 'custom_llm_model',
+  'kind': 'url',
+  'extra_keys': ['custom_llm_key', 'custom_llm_label'],
+  'hint': 'Qualsiasi API compatibile OpenAI. Cloud: https://openrouter.ai/api/v1, https://api.groq.com/openai/v1, '
+          'https://api.mistral.ai/v1, https://api.deepseek.com/v1 (con chiave API). In casa: vLLM, llama.cpp, LM Studio, '
+          'LocalAI, es. http://192.168.1.20:8000 o http://host.docker.internal:1234 (chiave facoltativa). '
+          'Modello vuoto = il primo esposto dal server.',
   'testable': True}]
 OTHER_SETTINGS = ['user_models_json',
  'user_default_model',
@@ -661,6 +684,7 @@ async def providers_status(ctx: AuthContext = Depends(require_admin), db: AsyncS
     cards = []
     for c in PROVIDER_CARDS:
         cards.append({**c, "key_state": st[c["key"]], "model_state": st[c["model_key"]] if c["model_key"] else None,
+                      "extra_states": {k: st[k] for k in c.get("extra_keys", [])},
                       "active": c["id"] in active,
                       "models": active.get(c["id"], {}).get("models", [])})
     from .google_auth import redirect_uri
@@ -684,7 +708,7 @@ async def providers_update(body: SettingsUpdate, request: Request, ctx: AuthCont
     allowed_values = {"openai_cache_mode": {"auto", "stable"}, "embedding_provider": {"auto", "ollama", "openai", "none"}, "tts_provider": {"auto", "openai", "none"}, "image_provider": {"auto", "openai"}, "web_search_provider": {"auto", "openai", "searxng", "duckduckgo"}}
     for key, value in body.values.items():
         if value and key in allowed_values and value not in allowed_values[key]:
-            raise HTTPException(400, "Provider non supportato: scegli OpenAI oppure Ollama")
+            raise HTTPException(400, f"Valore non supportato per {key}")
     for k, v in body.values.items():
         if k not in settings_store.MANAGED_KEYS:
             raise HTTPException(400, f"Impostazione sconosciuta: {k}")
@@ -711,7 +735,7 @@ async def costs_report(ctx: AuthContext = Depends(require_admin), db: AsyncSessi
     """Spesa stimata (dai log) e reale (se chiavi Admin), budget e rimanente per il mese corrente."""
     st = await settings_store.describe(db)
     rep = await _costs.full_report(db, ctx.user.family_id)
-    rep["settings"] = {k: st[k] for k in ("pricing_json", "budget_openai", "openai_admin_key")}
+    rep["settings"] = {k: st[k] for k in ("pricing_json", "budget_openai", "budget_anthropic", "budget_gemini", "openai_admin_key")}
     return rep
 
 
