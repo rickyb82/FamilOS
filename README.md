@@ -11,7 +11,7 @@
 
 ## Screenshots
 
-> Demo instance with a fictional family and simulated AI replies.
+> 
 
 | | |
 |---|---|
@@ -30,7 +30,7 @@
 
 ## Documentazione (italiano)
 
-Desktop web per la famiglia, derivato da [Emily](https://github.com/rickyb82/emily). FamilOS è la shell; Emily resta l'assistente AI.
+Desktop web per la famiglia, derivato da [E.m.i.l.y.](https://github.com/rickyb82/emily) powered by [Sirius](https://sirius.it) . FamilOS è la shell; E.m.i.l.y. resta l'assistente AI.
 
 ## Funzioni
 
@@ -41,7 +41,7 @@ Desktop web per la famiglia, derivato da [Emily](https://github.com/rickyb82/emi
 - App mantenute attive quando nascoste; layout ripristinato per utente nel browser. I nuovi documenti non salvati non si riaprono.
 - Layout compatto su telefono, temi chiaro/scuro e movimento ridotto.
 
-Moduli telecom, monitoraggio, preventivi commerciali e personale rimossi. Calendario, spesa, bacheca e dati offline restano sviluppi futuri. I bambini conservano l'interfaccia protetta precedente.
+Calendario, spesa, bacheca e dati offline restano sviluppi futuri.
 
 ## Avvio Docker
 
