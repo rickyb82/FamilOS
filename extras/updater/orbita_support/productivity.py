@@ -15,6 +15,14 @@ def read_env(p):
   elif v.startswith("'") and v.endswith("'"):v=v[1:-1]
   result[k]=v
  return result
+def public_url():
+ # URL pubblico: FAMILOS_PUBLIC_URL nell'ambiente, altrimenti PUBLIC_HOST da apps/familos/.env
+ url=os.environ.get('FAMILOS_PUBLIC_URL','')
+ if not url:
+  host=read_env(APP/'.env').get('PUBLIC_HOST','') if (APP/'.env').exists() else ''
+  url='https://'+host if host else ''
+ if not url:raise SystemExit('Impostare FAMILOS_PUBLIC_URL oppure PUBLIC_HOST in '+str(APP/'.env'))
+ return url.rstrip('/')
 def change_env(p,changes):
  lines=p.read_text().splitlines();lines=[l for l in lines if l.split('=',1)[0] not in changes]
  lines += [k+'='+json.dumps(str(v).replace('$','$$')) for k,v in changes.items()]
@@ -129,7 +137,7 @@ def main():
   mutated=True
   cfgfile.write_text(json.dumps(cfg,indent=2)+'\n')
   rootchanges={'COMPOSE_PROFILES':','.join(sorted(profiles))}
-  if 'MAILCRAFT_TOKEN' in updates:rootchanges['FAMILOS_MAILCRAFT_TOKEN']=updates['MAILCRAFT_TOKEN'];rootchanges['FAMILOS_MAILCRAFT_PUBLIC_URL']='https://familos.example.it/mailcraft'
+  if 'MAILCRAFT_TOKEN' in updates:rootchanges['FAMILOS_MAILCRAFT_TOKEN']=updates['MAILCRAFT_TOKEN'];rootchanges['FAMILOS_MAILCRAFT_PUBLIC_URL']=public_url()+'/mailcraft'
   change_env(rootenv,rootchanges);change_env(appenv,updates)
   dc('--profile','*','config','--quiet')
   start=sorted(set(active+affected) if action!='down' else set(active)-set(affected))
@@ -145,7 +153,7 @@ def main():
      for a in apps:
       port=7878 if a=='mailcraft' else 80;host='familos-mailcraft' if a=='mailcraft' else 'familos-'+a+'-web'
       dc('exec','-T','familos-backend','python','-c',"import socket;socket.create_connection(("+repr(host)+","+str(port)+"),timeout=10).close()")
-    with urllib.request.urlopen('https://familos.example.it/api/health',timeout=15) as r:assert json.load(r)['status']=='ok'
+    with urllib.request.urlopen(public_url()+'/api/health',timeout=15) as r:assert json.load(r)['status']=='ok'
     ready=True;break
    except Exception:
     time.sleep(2)

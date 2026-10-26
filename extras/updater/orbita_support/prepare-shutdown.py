@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import json,os,re,shutil,subprocess,time
 from pathlib import Path
-ROOT=Path('/opt/orbita');STAGE=Path(os.environ.get('ORBITA_UPDATE_STAGE','/home/utente/familos-update'))
+ROOT=Path('/opt/orbita');STAGE=Path(os.environ.get('ORBITA_UPDATE_STAGE',os.path.expanduser('~'+os.environ.get('SUDO_USER',''))+'/familos-update'))
 def dc(*args,**kw):return subprocess.run(['docker','compose',*args],cwd=ROOT,check=True,**kw)
 def prepare_mailcraft(recovery_root=Path('/var/lib/orbita-install')):
  # The old Rust server ran as PID 1, which ignores default SIGTERM handling.

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import os,shutil
 from pathlib import Path
-ROOT=Path('/opt/orbita');STAGE=Path(os.environ.get('ORBITA_UPDATE_STAGE','/home/utente/familos-update'))
+ROOT=Path('/opt/orbita');STAGE=Path(os.environ.get('ORBITA_UPDATE_STAGE',os.path.expanduser('~'+os.environ.get('SUDO_USER',''))+'/familos-update'))
 def main():
  if os.geteuid()!=0:raise SystemExit('Eseguire con sudo')
  scripts=ROOT/'scripts';scripts.mkdir(exist_ok=True)

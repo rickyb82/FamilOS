@@ -2,7 +2,25 @@
 """Aggiornamento FamilOS integrato in Orbita; invocare tramite aggiorna.command."""
 import fcntl,hashlib,json,os,re,secrets,shutil,subprocess,sys,tarfile,time,urllib.request
 from pathlib import Path
-ROOT=Path('/opt/orbita'); STAGE=Path(os.environ.get('ORBITA_UPDATE_STAGE','/home/utente/familos-update'))
+ROOT=Path('/opt/orbita'); STAGE=Path(os.environ.get('ORBITA_UPDATE_STAGE',os.path.expanduser('~'+os.environ.get('SUDO_USER',''))+'/familos-update'))
+APP=ROOT/'apps/familos'
+def read_env(p):
+ result={}
+ for line in p.read_text().splitlines():
+  if not line or line.lstrip().startswith('#') or '=' not in line:continue
+  k,v=line.split('=',1)
+  if v.startswith('"'):v=json.loads(v).replace('$$','$')
+  elif v.startswith("'") and v.endswith("'"):v=v[1:-1]
+  result[k]=v
+ return result
+def public_url():
+ # URL pubblico: FAMILOS_PUBLIC_URL nell'ambiente, altrimenti PUBLIC_HOST da apps/familos/.env
+ url=os.environ.get('FAMILOS_PUBLIC_URL','')
+ if not url:
+  host=read_env(APP/'.env').get('PUBLIC_HOST','') if (APP/'.env').exists() else ''
+  url='https://'+host if host else ''
+ if not url:raise SystemExit('Impostare FAMILOS_PUBLIC_URL oppure PUBLIC_HOST in '+str(APP/'.env'))
+ return url.rstrip('/')
 def run(*args,cwd=ROOT,**kw):return subprocess.run(args,cwd=cwd,check=True,**kw)
 def dc(*args,**kw):return run('docker','compose',*args,**kw)
 def main():
@@ -93,8 +111,8 @@ def main():
   print('ORBITA_PROGRESS 80 Servizi avviati; verifica finale.',flush=True)
   for _ in range(20):
    try:
-    with urllib.request.urlopen('https://familos.example.it/api/health',timeout=5) as r:assert json.load(r)['status']=='ok'
-    with urllib.request.urlopen('https://familos.example.it/',timeout=5) as r:assert r.status==200
+    with urllib.request.urlopen(public_url()+'/api/health',timeout=5) as r:assert json.load(r)['status']=='ok'
+    with urllib.request.urlopen(public_url()+'/',timeout=5) as r:assert r.status==200
     break
    except Exception:time.sleep(2)
   else:raise RuntimeError('Controllo HTTPS fallito')
