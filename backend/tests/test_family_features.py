@@ -76,7 +76,14 @@ def test_tutor_only_for_children_and_parent_override_expires(tmp_path,monkeypatc
     monkeypatch.setattr(education,"config_path",lambda:tmp_path/"rules.json")
     kid=child()
     assert effective_policy(kid)["education_mode"]=="tutor"
-    assert effective_policy(kid)["provider"]=="openai"
+    from app.providers import registry
+    monkeypatch.setattr(registry,"_providers",lambda:{"openai":object()})
+    assert effective_policy(kid)["provider"]=="openai"   # cloud consentito e nessuna scelta del genitore: OpenAI
+    monkeypatch.setattr(registry,"_providers",lambda:{})
+    assert effective_policy(kid)["provider"]==""         # OpenAI non configurato: primo provider consentito disponibile
+    kid.policy={"provider":"gemini","model":"gemini-3.8-flash"}
+    assert (effective_policy(kid)["provider"],effective_policy(kid)["model"])==("gemini","gemini-3.8-flash")
+    kid.policy={"tutor_override_until":""}
     assert "Tutor educativo" in system_prompt_for(kid)
     kid.policy={"tutor_override_until":(datetime.now(timezone.utc)+timedelta(hours=1)).isoformat()}
     assert effective_policy(kid)["education_mode"]=="standard"

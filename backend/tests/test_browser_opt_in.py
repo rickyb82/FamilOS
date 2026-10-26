@@ -27,6 +27,7 @@ async def test_parent_switch_and_no_ai_by_default(kid,anna,monkeypatch):
  page={'url':'https://optin.example.com/one','document_ok':True,'title':'Example','image':'test','width':1280,'height':800,'notice':''}
  fake=AsyncMock(return_value=page);check=AsyncMock()
  monkeypatch.setattr(remote_browser,'worker',fake);monkeypatch.setattr(remote_browser,'review_frame',check)
+ monkeypatch.setattr(remote_browser,'child_time',lambda ctx:None)   # il test non dipende dall'ora della fascia consentita
  session=(await kid.post('/api/browser/sessions')).json()['id']
  try:
   assert (await kid.get('/api/browser/sessions/'+session+'/frame')).status_code==200
