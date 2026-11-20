@@ -145,8 +145,13 @@ class Updater:
         current = self.installed_sha(target)
         newer = sha != current
         if current and newer:
-            comparison = self.github(target, "compare/" + current + "..." + sha)
-            if comparison.get("status") != "ahead":
+            # Explicit bridge from the retired Orbita history to the reviewed main.
+            # Never waive ancestry checks for arbitrary missing commits.
+            base = current
+            if target == "core" and self.repos[target] == "rickyb82/FamilOS" and current == "40c53267b03f435174dda636552b7ce3812195fc":
+                base = "698d39aa3e933035b492612f2f678e7d0cc21c71"
+            comparison = self.github(target, "compare/" + base + "..." + sha)
+            if comparison.get("status") != "ahead" and not (base != current and sha == base and comparison.get("status") == "identical"):
                 raise ValueError("Il ramo non avanza dalla revisione installata: verificare la cronologia Git.")
         if target != "core" and self.state["installed"].get(target, {}).get("enabled") is False:
             newer = True
