@@ -8,6 +8,7 @@ import ShareDialog from '../components/ShareDialog'
 import { photoForUpload } from '../lib/photo'
 import ArtifactPanel, { type ArtifactData } from '../components/ArtifactPanel'
 import { newFilePath } from '../lib/artcraft'
+import { useDictation } from '../lib/dictation'
 import { useWindowActive } from '../lib/desktop'
 
 interface ToolInfo { name: string; description: string; kind: string; group: string }
@@ -35,6 +36,13 @@ export default function Chat() {
   const [artifacts, setArtifacts] = useState<ArtifactData[]>([])
   const [openArtifact, setOpenArtifact] = useState<ArtifactData | null>(null)
   const bottom = useRef<HTMLDivElement>(null)
+  const canWrite = access === 'owner' || access === 'write'
+  const isChild = me?.user.role === 'child'
+  const dictation = useDictation(
+    JSON.stringify([me?.user.id, id]), !!me && windowActive && canWrite && !busy,
+    isChild && me?.user.effective_policy?.cloud_allowed !== true,
+    phrase => setText(draft => draft + (draft && !/\s$/.test(draft) ? ' ' : '') + phrase),
+  )
   function upsertArtifact(a: ArtifactData | any, open = true) {
     if (a?.type === 'artifact_deleted') return removeArtifact(a.id)
     setArtifacts((l) => (l.some((x) => x.id === a.id) ? l.map((x) => (x.id === a.id ? a : x)) : [...l, a]))
@@ -154,7 +162,7 @@ export default function Chat() {
 
   async function send(e?: FormEvent) {
     e?.preventDefault()
-    if (busy || (!text.trim() && files.length === 0)) return
+    if (dictation.listening || busy || (!text.trim() && files.length === 0)) return
     const c = await ensureConversation()
     const body = { text, file_ids: files.map((f) => f.id), provider: c.provider, model: c.model, tools: Array.from(enabledTools) }
     setText('')
@@ -230,8 +238,7 @@ export default function Chat() {
   }
 
   const provider = me?.providers.find((p) => p.id === (conv?.provider ?? me.providers[0]?.id))
-  const canWrite = access === 'owner' || access === 'write'
-  const isChild = me?.user.role === 'child'
+
 
   const grouped = groupActivity(messages)
   // mentre il modello lavora dopo le chiamate ai tool (o tra una e l'altra) lo stato vive nella riga Attività, non in un secondo indicatore
@@ -352,6 +359,9 @@ export default function Chat() {
             <div className="composer-tools">
               <button type="button" className="icon" onClick={() => fileInput.current?.click()} title="Allega file o foto">📎</button>
               <button type="button" className="icon touch-only" onClick={() => cameraInput.current?.click()} title="Scatta una foto e falla analizzare">📷</button>
+              <button type="button" className="ghost small" disabled={busy} aria-pressed={dictation.listening} onClick={dictation.toggle}>
+                {dictation.listening ? 'Ferma dettatura' : '🎙 Detta'}
+              </button>
               <span style={{ flex: 1 }} />
               {!isChild && me && (
               <select
@@ -376,10 +386,11 @@ export default function Chat() {
               {busy ? (
                 <button type="button" className="send-btn stop" onClick={() => conv && abortTurn(conv.id)} title="Ferma">■</button>
               ) : (
-                <button className="send-btn" disabled={!text.trim() && files.length === 0} title="Invia">➤</button>
+                <button className="send-btn" disabled={dictation.listening || (!text.trim() && files.length === 0)} title="Invia">➤</button>
               )}
             </div>
           </div>
+          <div role="status" className="muted">{dictation.notice || (dictation.listening ? 'Microfono attivo. Ferma la dettatura per inviare.' : '')}</div>
         </form>
       ) : (
         <div className="composer muted center-text">Conversazione in sola lettura</div>
