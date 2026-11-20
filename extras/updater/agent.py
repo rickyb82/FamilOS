@@ -127,7 +127,7 @@ class Updater:
         return result.stdout.strip()
 
     def compose(self, *args):
-        return self.run("docker", "compose", "--project-directory", str(self.root), "-f", str(self.root / "docker-compose.yml"), *args)
+        return self.run("docker", "compose", "--project-directory", str(self.root), "-f", str(self.root / "docker-compose.yml"), *(["-f", str(self.root / "docker-compose.override.yml")] if (self.root / "docker-compose.override.yml").exists() else []), *args)
 
     def installed_sha(self, target):
         if target == "core" and (self.root / ".git").exists():
@@ -160,9 +160,23 @@ class Updater:
                 "created": time.time(), "newer": newer, "experimental": True,
                 "notes": "Commit del ramo di sviluppo, non una release stabile.\n"+commit.get("commit", {}).get("message", "")[:10000]}
 
+    def bundled_offer(self, target, channel):
+        manifest = self.root / 'craft/revisions.json'
+        if target == 'core' or not manifest.exists():
+            return None
+        import secrets
+        import time
+        sha = json.loads(manifest.read_text())[target]
+        installed = self.state['installed'].get(target, {})
+        return dict(id=secrets.token_hex(16), channel=channel, target=target,
+                    branch='main', tag='FamilOS@' + sha[:12], sha=sha, created=time.time(),
+                    newer=sha != installed.get('sha') or not installed.get('enabled'),
+                    experimental=channel != 'stable', notes='Versione inclusa nel FamilOS installato.')
+
     def check(self, target, channel):
-        if channel == "development":
-            offer = self.development_offer(target)
+        offer = self.bundled_offer(target, channel)
+        if offer or channel == "development":
+            offer = offer or self.development_offer(target)
             with self.lock:
                 self.state["channel"] = channel
                 self.state["offers"] = {target: offer}
@@ -199,8 +213,9 @@ class Updater:
             raise ValueError("Offerta scaduta o versione non successiva a quella installata.")
         if offer["experimental"] and body.get("accept_experimental") is not True:
             raise ValueError("Confermare esplicitamente la release sperimentale.")
-        if body["channel"] == "development":
-            latest = self.development_offer(body["target"])
+        bundled = self.bundled_offer(body["target"], body["channel"])
+        if bundled or body["channel"] == "development":
+            latest = bundled or self.development_offer(body["target"])
             if latest["sha"] != offer["sha"] or not latest["newer"]:
                 raise ValueError("Il ramo è cambiato: ricontrollare prima di installare.")
             return offer

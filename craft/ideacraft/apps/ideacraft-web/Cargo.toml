@@ -1,0 +1,24 @@
+[package]
+name = "ideacraft-web"
+description = "IdeaCraft in the browser (wasm32; build with `trunk build --release` in this directory)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+ideacraft-ui-egui = { workspace = true }
+eframe = { workspace = true, features = ["default_fonts", "glow", "persistence", "accesskit"] }
+egui = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement", "HtmlElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "Location", "UrlSearchParams", "Navigator"] }
+js-sys = "0.3"
+rfd = { workspace = true }

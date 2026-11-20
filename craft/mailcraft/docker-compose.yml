@@ -1,0 +1,23 @@
+# MailCraft behind your framework: `MAILCRAFT_TOKEN=... docker compose up -d`
+services:
+  mailcraft:
+    build: .
+    image: mailcraft
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:7878:7878"   # put an HTTPS reverse proxy (or the framework) in front
+    environment:
+      MAILCRAFT_TOKEN: ${MAILCRAFT_TOKEN:?set the service token}
+      MAILCRAFT_LANG: it
+      # OAuth clients for Gmail / Microsoft 365 sign-in (see docs/oauth.md); optional.
+      MAILCRAFT_GOOGLE_CLIENT_ID: ${MAILCRAFT_GOOGLE_CLIENT_ID:-}
+      MAILCRAFT_GOOGLE_CLIENT_SECRET: ${MAILCRAFT_GOOGLE_CLIENT_SECRET:-}
+      MAILCRAFT_MICROSOFT_CLIENT_ID: ${MAILCRAFT_MICROSOFT_CLIENT_ID:-}
+      MAILCRAFT_MICROSOFT_CLIENT_SECRET: ${MAILCRAFT_MICROSOFT_CLIENT_SECRET:-}
+      MAILCRAFT_PUBLIC_URL: ${MAILCRAFT_PUBLIC_URL:-}
+      # The framework's assistant endpoint for reply suggestions and drafts (see docs/deploy.md).
+      MAILCRAFT_ASSIST_URL: ${MAILCRAFT_ASSIST_URL:-}
+    volumes:
+      - mailcraft-data:/data
+volumes:
+  mailcraft-data:

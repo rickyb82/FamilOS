@@ -1,0 +1,32 @@
+[package]
+name = "pdfcraft-optimize"
+description = "The PDF Optimizer: image downsampling and recompression, discarding objects, clean-up"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+pdfcraft-cos = { workspace = true }
+pdfcraft-filters = { workspace = true }
+pdfcraft-content = { workspace = true }
+pdfcraft-model = { workspace = true }
+pdfcraft-annot = { workspace = true }
+thiserror.workspace = true
+# Bicubic resampling; zero codec features.
+image = { version = "0.25", default-features = false }
+# JPEG decoding and encoding via craft-libs.
+craft-jpeg = { workspace = true }
+craft-image-codecs = { workspace = true }
+
+# Lets other programs go first while a copy is being made.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+thread-priority = "3.1"
+
+[dev-dependencies]
+pdfcraft-render = { workspace = true }
+proptest.workspace = true

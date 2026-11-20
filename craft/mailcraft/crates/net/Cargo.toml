@@ -1,0 +1,25 @@
+[package]
+name = "mailcraft-net"
+description = "MailCraft transport: IMAP and SMTP over rustls"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+mailcraft-core = { workspace = true }
+imap = { workspace = true }
+imap-proto = { workspace = true }
+rustls = { workspace = true }
+rustls-native-certs = { workspace = true }
+lettre = { workspace = true }
+ehttp = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# A self-signed certificate for the fake TLS server in the tests.
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring"] }
+
+[lints]
+workspace = true

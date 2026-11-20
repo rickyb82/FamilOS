@@ -1,0 +1,4 @@
+/target
+plan/
+*.ideacraft.json.bak
+/dist

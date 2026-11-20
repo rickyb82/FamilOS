@@ -1,0 +1,15 @@
+[package]
+name = "ideacraft-mcp"
+description = "IdeaCraft MCP server: build and edit concept maps from AI agents over the Model Context Protocol (stdio)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+ideacraft-engine = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,56 @@
+services:
+  wordcraft:
+    build:
+      additional_contexts:
+        craft_src: ./craft/wordcraft
+      secrets: !reset []
+  wordcraft-web:
+    build:
+      additional_contexts:
+        craft_src: ./craft/wordcraft
+      secrets: !reset []
+  gridcraft:
+    build:
+      additional_contexts:
+        craft_src: ./craft/gridcraft
+      secrets: !reset []
+  gridcraft-web:
+    build:
+      additional_contexts:
+        craft_src: ./craft/gridcraft
+      secrets: !reset []
+  pdfcraft:
+    build:
+      additional_contexts:
+        craft_src: ./craft/pdfcraft
+      secrets: !reset []
+  pdfcraft-web:
+    build:
+      additional_contexts:
+        craft_src: ./craft/pdfcraft
+      secrets: !reset []
+  deckcraft:
+    build:
+      additional_contexts:
+        craft_src: ./craft/deckcraft
+      secrets: !reset []
+  deckcraft-web:
+    build:
+      additional_contexts:
+        craft_src: ./craft/deckcraft
+      secrets: !reset []
+  ideacraft:
+    build:
+      additional_contexts:
+        craft_src: ./craft/ideacraft
+      secrets: !reset []
+  ideacraft-web:
+    build:
+      additional_contexts:
+        craft_src: ./craft/ideacraft
+      secrets: !reset []
+  mailcraft:
+    build:
+      additional_contexts:
+        craft_src: ./craft/mailcraft
+      secrets: !reset []

@@ -62,9 +62,9 @@ compose() {
   local mode extra=()
   mode=$(cat "$MODE_FILE" 2>/dev/null || echo prod)
   if [ "$mode" = "dev" ]; then
-    $DC -f docker-compose.yml -f docker-compose.dev.yml ${extra[@]+"${extra[@]}"} "$@"
+    $DC -f docker-compose.yml -f docker-compose.override.yml -f docker-compose.dev.yml ${extra[@]+"${extra[@]}"} "$@"
   else
-    $DC -f docker-compose.yml ${extra[@]+"${extra[@]}"} "$@"
+    $DC -f docker-compose.yml -f docker-compose.override.yml ${extra[@]+"${extra[@]}"} "$@"
   fi
 }
 
@@ -322,7 +322,7 @@ case "${1:-}" in
       upgrade)
         # prende l'ultimo commit del repository dell'app e ricompila (incrementale grazie alla cache di cargo)
         repo="https://github.com/rickyb82/$app"
-        sha=$(ghgit ls-remote "$repo" HEAD 2>/dev/null | cut -f1)
+        sha=$(python3 -c 'import json,sys; print(json.load(open("craft/revisions.json"))[sys.argv[1]])' "$app")
         [ -n "$sha" ] || { echo "!! non riesco a leggere $repo (rete?)"; exit 1; }
         if grep -q "^${APPU}_SHA=$sha" .env; then echo ">> $app e' gia' all'ultimo commit (${sha:0:10})"; exit 0; fi
         echo ">> $app: aggiorno al commit ${sha:0:10} e ricompilo…"
@@ -353,7 +353,7 @@ case "${1:-}" in
         set_env MAILCRAFT_URL "http://mailcraft:7878"
         set_env MAILCRAFT_MCP_HOST "mailcraft:7889"
         if [ "$2" = upgrade ]; then
-          sha=$(ghgit ls-remote https://github.com/rickyb82/mailcraft HEAD 2>/dev/null | cut -f1)
+          sha=$(python3 -c 'import json; print(json.load(open("craft/revisions.json"))["mailcraft"])')
           [ -n "$sha" ] || { echo "!! non riesco a leggere il repository mailcraft (rete?)"; exit 1; }
           if grep -q "^MAILCRAFT_SHA=$sha" .env; then echo ">> mailcraft e' gia' all'ultimo commit (${sha:0:10})"; exit 0; fi
           echo ">> mailcraft: aggiorno al commit ${sha:0:10} e ricompilo…"

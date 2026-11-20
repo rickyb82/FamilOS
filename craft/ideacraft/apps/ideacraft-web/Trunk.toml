@@ -1,0 +1,11 @@
+# Build with: trunk build --release   (from apps/ideacraft-web)
+# The site lands in dist/web with relative URLs, so it can be hosted under any path.
+[build]
+target = "index.html"
+dist = "../../dist/web"
+public_url = "./"
+filehash = true
+
+[serve]
+addresses = ["127.0.0.1"]
+port = 8781

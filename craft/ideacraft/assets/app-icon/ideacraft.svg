@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  IdeaCraft app icon. Original artwork by the IdeaCraft contributors, MIT OR Apache-2.0.
+
+  A full-bleed 512 px rounded tile (rx=112) in the interface accent colour (#5b5bf0,
+  theme::Tokens::LIGHT.accent) with a concept-map glyph: a central idea linked to four others, the
+  satellites filled from the node palette in crates/core/src/color.rs, plus one dashed cross link.
+  Plain shapes only, so it renders without fonts. `cargo xtask icons` writes the PNG and ICO files
+  next to it; packaging/macos/package.sh builds the .icns from ideacraft-macos-1024.png.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#5b5bf0"/>
+  <g fill="none" stroke="#ffffff" stroke-linecap="round">
+    <line x1="256" y1="256" x2="124" y2="152" stroke-width="20"/>
+    <line x1="256" y1="256" x2="392" y2="136" stroke-width="20"/>
+    <line x1="256" y1="256" x2="380" y2="388" stroke-width="20"/>
+    <line x1="256" y1="256" x2="136" y2="392" stroke-width="20"/>
+    <path d="M392 136 C 442 214, 436 312, 380 388" stroke-width="12" stroke-dasharray="20 18"/>
+  </g>
+  <circle cx="256" cy="256" r="62" fill="#ffffff"/>
+  <circle cx="124" cy="152" r="40" fill="#ffe08a" stroke="#ffffff" stroke-width="12"/>
+  <circle cx="392" cy="136" r="40" fill="#b3d4ff" stroke="#ffffff" stroke-width="12"/>
+  <circle cx="380" cy="388" r="40" fill="#b1ecd8" stroke="#ffffff" stroke-width="12"/>
+  <circle cx="136" cy="392" r="40" fill="#ffc2a8" stroke="#ffffff" stroke-width="12"/>
+</svg>

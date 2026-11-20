@@ -1,0 +1,14 @@
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+# `cargo xtask icons` renders assets/app-icon/ideacraft.svg; the outputs are committed, so builds
+# and packaging never need it. No text, system fonts or raster images: the icon is plain shapes.
+resvg = { version = "0.48", default-features = false }

@@ -1,0 +1,23 @@
+[package]
+name = "mailcraft-ui-egui"
+description = "MailCraft's egui front end: a Gmail-style three-pane mail client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+mailcraft-engine = { workspace = true }
+egui = { workspace = true }
+serde_json = { workspace = true }
+sys-locale = { workspace = true }
+
+[dependencies.web-time]
+workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+png = "0.18"

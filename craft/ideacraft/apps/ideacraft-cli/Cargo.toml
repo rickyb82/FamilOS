@@ -1,0 +1,16 @@
+[package]
+name = "ideacraft-cli"
+description = "IdeaCraft headless: run commands on maps, list commands, print outlines"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+ideacraft-engine = { workspace = true }
+ideacraft-mcp = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

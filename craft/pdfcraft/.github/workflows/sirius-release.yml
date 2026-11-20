@@ -1,0 +1,202 @@
+# Sirius build of PdfCraft for the Suite Craft: Windows MSI (x64, arm64) and macOS universal DMG from this fork,
+# on the standard GitHub runners, without signing (the upstream release.yml needs macos-15-xlarge and the signing
+# secrets, which this fork does not have). The packaging scripts are the upstream ones: packaging/windows/package.ps1
+# (sign.ps1 warns and skips without a certificate) and packaging/macos/package.sh (ad-hoc signature).
+#
+# Run it from the Actions tab (workflow_dispatch) or push a tag `sirius-v<version>`; a pull request that touches the
+# packaging or this file builds without publishing. Artifacts: release-windows-<arch>, release-macos; with
+# "draft-release" the run also creates (or refreshes) the draft GitHub release `sirius-v<version>`.
+name: Sirius release
+
+on:
+  workflow_dispatch:
+    inputs:
+      draft-release:
+        description: "Create or refresh the draft GitHub release sirius-v<version> with the artifacts"
+        type: boolean
+        default: true
+  push:
+    tags: ["sirius-v*"]
+  pull_request:
+    paths: [".github/workflows/sirius-release.yml", "packaging/**", "assets/app-icon/**", "craft-i18n.rev"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sirius-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  APP_NAME: pdfcraft
+  APP_TITLE: PdfCraft
+  # The craft-fonts commit release.yml, ci.yml and freebsd.yml pin: a newer PdfCraft needs the fonts it lists.
+  CRAFT_FONTS_REF: b076417b5880bd4154bd22f00695b1d28c6bea83
+
+jobs:
+  version:
+    name: version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: v
+        name: Read the workspace version
+        run: |
+          v=$(awk '/^\[/ { in_pkg = ($0 == "[workspace.package]"); next } in_pkg && $1 == "version" { gsub(/[" ]/, "", $3); print $3; exit }' Cargo.toml)
+          [ -n "$v" ] || { echo "::error::no [workspace.package] version in Cargo.toml"; exit 1; }
+          echo "version=$v" >>"$GITHUB_OUTPUT"
+
+  windows:
+    name: Windows ${{ matrix.arch }}
+    needs: [version]
+    runs-on: windows-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, target: x86_64-pc-windows-msvc }
+          - { arch: arm64, target: aarch64-pc-windows-msvc }
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      VERSION: ${{ needs.version.outputs.version }}
+      BUILD_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out craft-fonts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: ${{ env.CRAFT_FONTS_REF }}
+          path: craft-fonts
+      # The interface translations and the language data (hyphenation, spelling) are not in this repository:
+      # the build embeds them from storytold/craft-i18n at the commit in craft-i18n.rev, and without them
+      # the app is English only.
+      - id: i18n
+        name: Read the craft-i18n pin
+        shell: bash
+        run: |
+          rev=$(tr -d ' \t\r\n' < craft-i18n.rev)
+          [[ "$rev" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::craft-i18n.rev does not hold a commit"; exit 1; }
+          echo "rev=$rev" >>"$GITHUB_OUTPUT"
+      - name: Check out craft-i18n
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-i18n
+          ref: ${{ steps.i18n.outputs.rev }}
+          path: craft-i18n
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: sirius-windows-${{ matrix.arch }}
+      - name: Install WiX
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          wix extension add -g WixToolset.UI.wixext/5.0.2 WixToolset.Util.wixext/5.0.2
+      - name: Build and package (unsigned)
+        shell: pwsh
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
+          CRAFT_I18N_DIR: ${{ github.workspace }}/craft-i18n
+          CRAFT_I18N_REQUIRED: "1"
+        run: ./packaging/windows/package.ps1 -Arch ${{ matrix.arch }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-windows-${{ matrix.arch }}
+          path: dist/release/*
+          if-no-files-found: error
+
+  macos:
+    name: macOS universal
+    needs: [version]
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      VERSION: ${{ needs.version.outputs.version }}
+      BUILD_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out craft-fonts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-fonts
+          ref: ${{ env.CRAFT_FONTS_REF }}
+          path: craft-fonts
+      # The interface translations and the language data (hyphenation, spelling) are not in this repository:
+      # the build embeds them from storytold/craft-i18n at the commit in craft-i18n.rev, and without them
+      # the app is English only.
+      - id: i18n
+        name: Read the craft-i18n pin
+        shell: bash
+        run: |
+          rev=$(tr -d ' \t\r\n' < craft-i18n.rev)
+          [[ "$rev" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::craft-i18n.rev does not hold a commit"; exit 1; }
+          echo "rev=$rev" >>"$GITHUB_OUTPUT"
+      - name: Check out craft-i18n
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-i18n
+          ref: ${{ steps.i18n.outputs.rev }}
+          path: craft-i18n
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: sirius-macos-universal
+      - name: Build and package (ad-hoc signature)
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
+          CRAFT_I18N_DIR: ${{ github.workspace }}/craft-i18n
+          CRAFT_I18N_REQUIRED: "1"
+        run: packaging/macos/package.sh --arch universal
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-macos
+          path: dist/release/*
+          if-no-files-found: error
+
+  release:
+    name: Draft GitHub release
+    if: "!cancelled() && !contains(needs.*.result, 'failure') && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.draft-release))"
+    needs: [version, windows, macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*
+          path: artifacts
+          merge-multiple: true
+      - name: Checksums
+        working-directory: artifacts
+        run: sha256sum -- * | tee SHA256SUMS.txt
+      - name: Create or refresh the draft release
+        working-directory: artifacts
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="sirius-v$VERSION"
+          title="$APP_TITLE v$VERSION (Sirius, unsigned)"
+          notes="Build of this fork for the Suite Craft. Unsigned: Windows SmartScreen and macOS Gatekeeper warn on first launch (macOS: right-click > Open)."
+          if gh release view "$tag" --json isDraft --jq .isDraft >/dev/null 2>&1; then
+            gh release view "$tag" --json assets --jq '.assets[].name' | while read -r asset; do gh release delete-asset "$tag" "$asset" --yes; done
+            gh release edit "$tag" --draft --title "$title" --notes "$notes" --target "$GITHUB_SHA"
+            gh release upload "$tag" --clobber -- *
+          else
+            gh release create "$tag" --draft --title "$title" --notes "$notes" --target "$GITHUB_SHA" -- *
+          fi

@@ -1,0 +1,18 @@
+[package]
+name = "mailcraft"
+description = "MailCraft desktop app: an open-source IMAP/SMTP mail client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+mailcraft-ui-egui = { workspace = true }
+mailcraft-net = { workspace = true }
+egui = { workspace = true }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
+rfd = { workspace = true }
+
+[lints]
+workspace = true

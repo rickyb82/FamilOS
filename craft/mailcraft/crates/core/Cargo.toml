@@ -1,0 +1,23 @@
+[package]
+name = "mailcraft-core"
+description = "MailCraft mail model: accounts, provider autoconfiguration, mailboxes, messages and MIME parsing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+mail-parser = { workspace = true }
+sha2 = "0.10"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "wasmbind"] }
+getrandom = { version = "0.2", features = ["js"] }
+
+[dependencies.web-time]
+workspace = true
+
+[lints]
+workspace = true

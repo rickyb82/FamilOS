@@ -94,13 +94,25 @@ export default function Editor() {
       // WordCraft/GridCraft (patch FamilAI): esito di ogni salvataggio verso il server
       if (d.type === 'familai:saved') { window.dispatchEvent(new Event('familai:conversations')); setSaved(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })); setDirty(false); setErr(''); void markSaved(); return }
       if (d.type === 'familai:save_failed') { setErr(`Salvataggio di ${d.name || 'documento'} non riuscito: ${d.error || 'errore sconosciuto'}`); return }
-      if (app !== 'pdfcraft') return
-      if (d.type === 'pdfcraft:dirty') setDirty(!!d.dirty)
-      else if (d.type === 'pdfcraft:failed') setErr(`PdfCraft non si è avviato: ${d.error || ''}`)
-      else if (d.type === 'pdfcraft:save') {
+      if (app === 'ideacraft') return
+      if (d.type === app + ':ready' && app !== 'pdfcraft' && !isNew) {
+        const target = frame.current?.contentWindow
+        try {
+          const response = await fetch('/files/' + encodeURIComponent(fileId), { cache: 'no-store' })
+          if (!response.ok) throw new Error('HTTP ' + response.status)
+          const bytes = await response.arrayBuffer()
+          if (target && target === frame.current?.contentWindow) {
+            target.postMessage({ type: app + ':open', name, bytes }, window.location.origin, [bytes])
+          }
+        } catch (error) { setErr('Apertura documento non riuscita: ' + String(error)) }
+        return
+      }
+      if (d.type === app + ':dirty') setDirty(!!d.dirty)
+      else if (d.type === app + ':failed') setErr(`${APP_LABEL[app]} non si è avviato: ${d.error || ''}`)
+      else if (d.type === app + ':save') {
         if (!canWrite) {
-          const blob = new Blob([d.bytes], { type: 'application/pdf' })
-          const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = d.name || 'documento.pdf'; a.click()
+          const blob = new Blob([d.bytes])
+          const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = d.name || name || 'documento'; a.click()
           return
         }
         const saveQ = new URLSearchParams({ file_id: fileId })
@@ -149,6 +161,7 @@ export default function Editor() {
       if (me?.user.display_name) q.set('author', me.user.display_name)
       return `/pdfcraft/?${q.toString()}`
     }
+    if (app !== 'ideacraft') q.set('host', 'parent')
     if (!isNew) {
       q.set('open', `/files/${fileId}?v=${loadStamp}`)   // mai una copia dalla cache del browser
       q.set('name', name || 'documento')

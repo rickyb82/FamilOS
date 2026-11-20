@@ -1,0 +1,19 @@
+[package]
+name = "mailcraft-remote"
+description = "MailCraft remote session: the engine's state mirrored from a mailcraft-cli serve server over HTTP"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+mailcraft-engine = { workspace = true }
+ehttp = { workspace = true }
+serde_json = { workspace = true }
+
+[dependencies.web-time]
+workspace = true
+
+[lints]
+workspace = true

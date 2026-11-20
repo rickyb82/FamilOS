@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  IdeaCraft MSI (WiX Toolset v5: `dotnet tool install -g wix`, plus its UI extension:
+  `wix extension add -g WixToolset.UI.wixext/5.0.2`). Built by package.ps1:
+
+    wix build ideacraft.wxs -arch x64 -ext WixToolset.UI.wixext
+      -d Version=1.2.3 -d BinDir=... -d IconPath=... -d LicenseRtf=... -o out.msi
+
+  Per-machine install into Program Files with a Start Menu shortcut. The installer shows the
+  standard WiX dialogs: welcome + licence, progress, and a finish page. The binaries link the C
+  runtime statically (package.ps1 builds with +crt-static), so no Visual C++ redistributable is
+  installed or required.
+
+  UpgradeCode and the component GUIDs below belong to IdeaCraft alone. Never copy them from (or
+  into) a sibling Craft app: Windows Installer treats every package sharing an UpgradeCode as one
+  product, so a shared code makes one app's installer refuse to install ("a newer version is
+  already installed") or silently uninstall the other.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package
+      Name="IdeaCraft"
+      Manufacturer="IdeaCraft contributors"
+      Version="$(var.Version)"
+      UpgradeCode="73C64263-810D-4CD4-8FB3-92592B408E71"
+      Scope="perMachine"
+      Compressed="yes"
+      Language="1033">
+    <SummaryInformation Description="IdeaCraft concept maps and diagrams" Manufacturer="IdeaCraft contributors" />
+    <!-- Same-version upgrades let successive pre-releases of one X.Y.Z replace each other
+         (MSI versions are numeric, so 1.2.3-rc.1 and 1.2.3-rc.2 are both 1.2.3). -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of IdeaCraft is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="IdeacraftIcon.ico" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="IdeacraftIcon.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/rickyb82/ideacraft" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/rickyb82/ideacraft/releases" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/rickyb82/ideacraft/issues" />
+
+    <!-- Installer UI: WixUI_Minimal is welcome + licence, progress, then a finish page. Its
+         dialogs and bitmaps are WiX's own (WixToolset.UI.wixext); package.ps1 builds the licence
+         RTF from LICENSE-MIT and LICENSE-APACHE. Silent installs (/qn) never show it. -->
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+    <UI>
+      <ui:WixUI Id="WixUI_Minimal" />
+    </UI>
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="IdeaCraft" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="Main" Title="IdeaCraft" Level="1">
+      <ComponentGroupRef Id="IdeacraftFiles" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="IdeacraftFiles" Directory="INSTALLFOLDER">
+      <Component Id="IdeacraftApp" Guid="EDCC8A9B-E57F-4017-85E9-C6B42D1E15F8">
+        <File Id="IdeacraftExe" Source="$(var.BinDir)\ideacraft.exe" KeyPath="yes">
+          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="IdeaCraft"
+              Description="IdeaCraft concept maps and diagrams" WorkingDirectory="INSTALLFOLDER" Advertise="yes"
+              Icon="IdeacraftIcon.ico" IconIndex="0" />
+        </File>
+
+        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\ideacraft.exe" Value="[#IdeacraftExe]" Type="string" />
+      </Component>
+
+      <!-- File association for IdeaCraft's own extension (`.ideacraft`, crates/formats
+           `Format::IdeaCraft`). The map type gets a ProgId (name, icon, open command), is listed
+           under the extension's OpenWithProgids so IdeaCraft shows in Explorer's "Open with", and
+           is registered as IdeaCraft's Capabilities (RegisteredApplications) so it appears in
+           Settings › Default apps. Nothing here takes over `.json` (the app saves
+           `name.ideacraft.json`, a generic extension) or the imported formats (.mm, .xmind, .cxl,
+           .opml, .drawio): they stay with their own tools. Removed again on uninstall. -->
+      <Component Id="IdeacraftFileTypes" Guid="E591466F-896D-4222-8E41-5B9B4EA85C6B">
+        <RegistryValue Root="HKLM" Key="Software\RegisteredApplications" Name="IdeaCraft" Value="Software\IdeaCraft\Capabilities" Type="string" KeyPath="yes" />
+        <RegistryValue Root="HKLM" Key="Software\IdeaCraft\Capabilities" Name="ApplicationName" Value="IdeaCraft" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\IdeaCraft\Capabilities" Name="ApplicationDescription" Value="Design concept maps, mind maps and diagrams." Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\IdeaCraft\Capabilities" Name="ApplicationIcon" Value="&quot;[#IdeacraftExe]&quot;,0" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\ideacraft.exe" Name="FriendlyAppName" Value="IdeaCraft" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\ideacraft.exe\shell\open\command" Value="&quot;[#IdeacraftExe]&quot; &quot;%1&quot;" Type="string" />
+
+        <ProgId Id="IdeaCraft.Map" Description="IdeaCraft Map" Icon="IdeacraftExe" IconIndex="0" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\IdeaCraft.Map\shell\open\command" Value="&quot;[#IdeacraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\.ideacraft\OpenWithProgids" Name="IdeaCraft.Map" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\Classes\Applications\ideacraft.exe\SupportedTypes" Name=".ideacraft" Value="" Type="string" />
+        <RegistryValue Root="HKLM" Key="Software\IdeaCraft\Capabilities\FileAssociations" Name=".ideacraft" Value="IdeaCraft.Map" Type="string" />
+      </Component>
+
+      <Component Id="IdeacraftCli">
+        <File Id="IdeacraftCliExe" Source="$(var.BinDir)\ideacraft-cli.exe" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

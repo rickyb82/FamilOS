@@ -79,29 +79,12 @@ def main():
  profiles=set(filter(None,read_env(rootenv).get('COMPOSE_PROFILES','').split(',')))
  updates={};shas={};env=None
  if action in ('up','upgrade'):
-  private=APP/'private';private.mkdir(mode=0o700,exist_ok=True)
-  tokenfile=private/'github-token'
-  if not tokenfile.exists() or not tokenfile.read_text().strip():
-   if os.environ.get('ORBITA_WEB_UPDATE')=='1':raise SystemExit('Configurare prima private/github-token sul server')
-   token=getpass.getpass('Token GitHub con lettura dei repository Craft (Invio se pubblici): ').strip()
-   tokenfile.write_text(token);tokenfile.chmod(0o600)
-  token=tokenfile.read_text().strip()
+  bundled=json.loads((APP/'craft/revisions.json').read_text())
   for a in apps:
-   pinned=os.environ.get('ORBITA_PINNED_SHA','') if os.environ.get('ORBITA_PINNED_APP')==a else ''
-   if pinned:
-    if not re.fullmatch('[0-9a-f]{40}',pinned):raise SystemExit('Commit richiesto non valido')
-    sha=pinned
-   elif action=='up' and 'familos-'+a in cfg['services']:
-    sha=cfg['services']['familos-'+a].get('build',{}).get('args',{}).get('UPSTREAM_SHA','')
-   else:sha=''
-   if not re.fullmatch('[0-9a-f]{40}',sha):
-    headers={'Accept':'application/vnd.github+json','User-Agent':'Orbita-FamilOS'}
-    if token:headers['Authorization']='Bearer '+token
-    req=urllib.request.Request('https://api.github.com/repos/rickyb82/'+a+'/commits/HEAD',headers=headers)
-    try:
-     with urllib.request.urlopen(req,timeout=30) as r:sha=json.load(r)['sha']
-    except Exception:raise SystemExit('Accesso al repository '+a+' non riuscito. Verifica token e permessi; token non stampato.')
-   shas[a]=sha;print(a+': '+sha[:12],flush=True)
+   sha=bundled[a]
+   if os.environ.get('ORBITA_PINNED_APP')==a and os.environ.get('ORBITA_PINNED_SHA')!=sha:
+    raise SystemExit('La versione Craft richiesta non corrisponde alla release FamilOS installata.')
+   shas[a]=sha
   prepare_build_cache(APP/'extras/artcraft')
   proposed=plan(cfg,catalog,apps,shas)
   env=os.environ.copy();env['DOCKER_BUILDKIT']='1';env['COMPOSE_PARALLEL_LIMIT']='1'

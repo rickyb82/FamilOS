@@ -1,0 +1,22 @@
+[package]
+name = "ideacraft-ui-egui"
+description = "IdeaCraft's egui front end: the concept-map canvas, toolbar and status bar"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+ideacraft-engine = { workspace = true }
+egui = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+sys-locale = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+png = "0.18"

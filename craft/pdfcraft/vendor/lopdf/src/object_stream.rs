@@ -1,0 +1,519 @@
+use crate::parser;
+use crate::{Document, Error, Object, ObjectId, Result, Stream};
+use std::cell::Cell;
+use std::collections::BTreeMap;
+use std::num::TryFromIntError;
+use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+use log::warn;
+#[cfg(feature = "rayon")]
+use rayon::prelude::*;
+
+/// PdfCraft patch: index entries read from one object stream (the same clamp `pdfcraft_cos`
+/// applies to `/N`). Entries past it are ignored, so a huge index block cannot allocate an entry
+/// list or parse a member per entry.
+pub(crate) const MAX_OBJECT_STREAM_MEMBERS: usize = 1_000_000;
+
+/// PdfCraft patch: objects (every member and everything nested in it) one load may build from
+/// all of its object streams together, about one per object of the largest cross-reference
+/// table `pdfcraft_cos` accepts (8,388,607). Each stream is bounded by the decompression limit,
+/// but a file may hold many, and every two decoded bytes can be an object of a hundred bytes or
+/// more; this keeps the worst case near a gigabyte instead of tens.
+pub(crate) const MAX_LOAD_NODES: usize = 1 << 23;
+
+/// PdfCraft patch: the objects parsing may still build, shared by every object stream one load
+/// parses (and by rayon workers, hence atomic). Each member reserves its share before parsing
+/// and refunds what it did not use, so concurrent members cannot overshoot the total. Public so
+/// PdfCraft's tests can load object streams from a small budget.
+///
+/// The loaders parse their object streams one after another in object-number order, and a
+/// stream whose members could run the budget out parses them in index order (see
+/// [`ObjectStream::new_within`]), so the members skipped once it is spent are the same on every
+/// load of a file.
+pub struct NodeBudget(AtomicUsize);
+
+impl NodeBudget {
+    /// A budget of `nodes` objects.
+    pub fn new(nodes: usize) -> Self {
+        Self(AtomicUsize::new(nodes))
+    }
+
+    /// Take up to `want` nodes and return how many were granted (0 once the budget is spent).
+    fn reserve(&self, want: usize) -> usize {
+        // A compare-exchange loop rather than `fetch_update`, which newer toolchains deprecate
+        // in favour of a `try_update` older than this crate's minimum Rust version.
+        let mut left = self.0.load(Ordering::Relaxed);
+        loop {
+            let take = left.min(want);
+            match self
+                .0
+                .compare_exchange_weak(left, left - take, Ordering::Relaxed, Ordering::Relaxed)
+            {
+                Ok(_) => return take,
+                Err(now) => left = now,
+            }
+        }
+    }
+
+    /// Give back nodes [`Self::reserve`] granted and parsing did not use. Refunds never exceed
+    /// what was taken, so the count stays within the starting budget and cannot overflow.
+    fn refund(&self, nodes: usize) {
+        self.0.fetch_add(nodes, Ordering::Relaxed);
+    }
+
+    /// The nodes not yet reserved.
+    fn left(&self) -> usize {
+        self.0.load(Ordering::Relaxed)
+    }
+
+    /// Whether nothing is left to build from.
+    pub fn spent(&self) -> bool {
+        self.left() == 0
+    }
+}
+
+#[derive(Debug)]
+pub struct ObjectStream {
+    pub objects: BTreeMap<ObjectId, Object>,
+    max_objects: usize,
+    compression_level: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ObjectStreamBuilder {
+    max_objects: usize,
+    compression_level: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ObjectStreamConfig {
+    pub max_objects_per_stream: usize,
+    pub compression_level: u32,
+}
+
+impl Default for ObjectStreamConfig {
+    fn default() -> Self {
+        Self {
+            max_objects_per_stream: 100,
+            compression_level: 6,
+        }
+    }
+}
+
+impl ObjectStream {
+    /// Parse an existing object stream without modifying its encoded content or
+    /// filter dictionary.
+    ///
+    /// This decodes the stream without any size limit. For untrusted input,
+    /// prefer [`ObjectStream::new_with_limit`] to guard against decompression
+    /// bombs.
+    pub fn new(stream: &Stream) -> Result<ObjectStream> {
+        Self::new_with_limit(stream, None)
+    }
+
+    /// Parse an existing object stream without modifying it, rejecting the
+    /// decoded content if it would exceed `max_decompressed_size` bytes. `None`
+    /// means no limit (the behavior of [`ObjectStream::new`]).
+    ///
+    /// PdfCraft patch: members are built from a budget of `MAX_LOAD_NODES` objects of their own.
+    pub fn new_with_limit(stream: &Stream, max_decompressed_size: Option<usize>) -> Result<ObjectStream> {
+        Self::new_within(stream, max_decompressed_size, &NodeBudget::new(MAX_LOAD_NODES))
+    }
+
+    /// PdfCraft patch: [`ObjectStream::new_with_limit`], building members from `budget`, which a
+    /// load shares between all of its object streams. A member that would exceed its share, or
+    /// any member once the budget is spent, is skipped with a warning.
+    ///
+    /// When the budget holds enough for every member, they are parsed in parallel from a share
+    /// reserved for this stream alone, which no member can run out; otherwise they are parsed in
+    /// index order from `budget`. Either way which members are built doesn't depend on the order
+    /// in which rayon's workers reach them.
+    pub fn new_within(
+        stream: &Stream, max_decompressed_size: Option<usize>, budget: &NodeBudget,
+    ) -> Result<ObjectStream> {
+        Self::new_members_within(stream, max_decompressed_size, budget, |_| true)
+    }
+
+    /// PdfCraft patch: [`ObjectStream::new_within`], parsing only the members whose object
+    /// number `keep` accepts. The others are never parsed, so they spend nothing from `budget`:
+    /// a loader passes the members it would add (not placed in another stream by the
+    /// cross-reference table, and not already loaded), and a lookup the one member it wants.
+    pub(crate) fn new_members_within(
+        stream: &Stream, max_decompressed_size: Option<usize>, budget: &NodeBudget, keep: impl Fn(u32) -> bool,
+    ) -> Result<ObjectStream> {
+        let content = match max_decompressed_size {
+            // Object streams are decoded while the document is loaded, so
+            // enforcing the limit here bounds the memory a single stream can use.
+            Some(max) => stream.get_plain_content_with_limit(max)?,
+            None => stream.get_plain_content()?,
+        };
+
+        if content.is_empty() {
+            return Ok(ObjectStream {
+                objects: BTreeMap::new(),
+                max_objects: 100,
+                compression_level: 6,
+            });
+        }
+
+        let first_offset = stream
+            .dict
+            .get(b"First")
+            .and_then(Object::as_i64)?
+            .try_into()
+            .map_err(|e: TryFromIntError| Error::NumericCast(e.to_string()))?;
+        let index_block = content.get(..first_offset).ok_or(Error::InvalidOffset(first_offset))?;
+
+        let numbers_str = std::str::from_utf8(index_block).map_err(|e| Error::InvalidObjectStream(e.to_string()))?;
+        // PdfCraft patch: read at most `MAX_OBJECT_STREAM_MEMBERS` index entries.
+        let numbers: Vec<_> = numbers_str
+            .split_whitespace()
+            .take(2 * MAX_OBJECT_STREAM_MEMBERS)
+            .map(|number| u32::from_str(number).ok())
+            .collect();
+        let len = numbers.len() / 2 * 2; // Ensure only pairs.
+
+        let n = stream.dict.get(b"N").and_then(Object::as_i64)?;
+        if numbers.len().try_into().ok() != n.checked_mul(2) {
+            warn!("object stream: the object stream dictionary specifies a wrong number of objects")
+        }
+        if usize::try_from(n).is_ok_and(|n| n > MAX_OBJECT_STREAM_MEMBERS) {
+            warn!("object stream: /N {n} exceeds {MAX_OBJECT_STREAM_MEMBERS}; later members are ignored")
+        }
+
+        // PdfCraft patch: bound members by the next distinct offset and parse each offset
+        // only once, so overlapping or duplicate entries cannot amplify decoded content.
+        let mut extents = BTreeMap::new();
+        for (index, chunk) in numbers[..len].chunks(2).enumerate() {
+            if let &[Some(_), Some(offset)] = chunk {
+                let offset = first_offset.saturating_add(offset as usize);
+                if offset < content.len() {
+                    extents.entry(offset).or_insert((index, content.len()));
+                }
+            }
+        }
+        let mut end = content.len();
+        for (&offset, (_, extent_end)) in extents.iter_mut().rev() {
+            *extent_end = end;
+            end = offset;
+        }
+
+        // PdfCraft patch: find each member's bytes first, in index order, so the members can be
+        // charged to the budget before any is parsed.
+        let mut members = Vec::new();
+        for (index, chunk) in numbers[..len].chunks(2).enumerate() {
+            let &[Some(id), Some(offset)] = chunk else { continue };
+            let offset = first_offset.saturating_add(offset as usize);
+
+            if offset >= content.len() {
+                warn!("out-of-bounds offset in object stream");
+                continue;
+            }
+            let Some(&(first_index, extent_end)) = extents.get(&offset) else {
+                continue;
+            };
+            if index != first_index {
+                warn!("duplicate offset in object stream");
+                continue;
+            }
+            if !keep(id) {
+                continue;
+            }
+            // Skip leading whitespace — some PDFs emit newlines before objects in ObjStm
+            let mut start = offset;
+            while start < extent_end && content.get(start).is_some_and(u8::is_ascii_whitespace) {
+                start += 1;
+            }
+            if start >= extent_end {
+                warn!("only whitespace after offset in object stream");
+                continue;
+            }
+            members.push((id, start, extent_end));
+        }
+
+        // PdfCraft patch: each member builds at most `MAX_OBJECT_NODES` objects, reserved from
+        // `from`; once that is spent the remaining members are skipped unparsed. Every object
+        // takes at least one byte, so a member reserves no more than its length.
+        let share = |&(_, start, end): &(u32, usize, usize)| parser::MAX_OBJECT_NODES.min(end - start);
+        let skipped = AtomicBool::new(false);
+        let parse_member = |from: &NodeBudget, member: &(u32, usize, usize)| -> Option<(ObjectId, Object)> {
+            let &(id, start, end) = member;
+            let granted = from.reserve(share(member));
+            if granted == 0 {
+                skipped.store(true, Ordering::Relaxed);
+                return None;
+            }
+            let nodes = Cell::new(granted);
+            let object = content
+                .get(start..end)
+                .and_then(|bytes| parser::direct_object_within(bytes, &nodes));
+            from.refund(nodes.get());
+            if object.is_none() && nodes.get() == 0 {
+                warn!("object stream: member {id} exceeds the object budget and was skipped");
+            }
+            Some(((id, 0), object?))
+        };
+
+        let want = members.iter().map(&share).fold(0, usize::saturating_add);
+        let granted = budget.reserve(want);
+        let objects: BTreeMap<ObjectId, Object> = if granted == want {
+            // Every member fits, so they are parsed in parallel from this stream's own share:
+            // its members' reservations add up to it, so none is refused whatever the order.
+            let own = NodeBudget::new(granted);
+            #[cfg(feature = "rayon")]
+            let objects = members
+                .par_iter()
+                .filter_map(|member| parse_member(&own, member))
+                .collect();
+            #[cfg(not(feature = "rayon"))]
+            let objects = members.iter().filter_map(|member| parse_member(&own, member)).collect();
+            budget.refund(own.left());
+            objects
+        } else {
+            // The budget may run out part-way, so the members are parsed in index order and the
+            // ones skipped are the same on every load.
+            budget.refund(granted);
+            members
+                .iter()
+                .filter_map(|member| parse_member(budget, member))
+                .collect()
+        };
+        if skipped.load(Ordering::Relaxed) {
+            warn!("object stream: the object budget is spent; remaining members were skipped");
+        }
+
+        Ok(ObjectStream {
+            objects,
+            max_objects: 100,
+            compression_level: 6,
+        })
+    }
+
+    /// Create a builder for constructing new object streams
+    pub fn builder() -> ObjectStreamBuilder {
+        ObjectStreamBuilder {
+            max_objects: 100,
+            compression_level: 6,
+        }
+    }
+
+    /// Add an object to the stream
+    pub fn add_object(&mut self, id: ObjectId, obj: Object) -> Result<()> {
+        // Check if object can be added to stream
+        if matches!(obj, Object::Stream(_)) {
+            return Err(Error::InvalidObjectStream(
+                "Stream objects cannot be stored in object streams".into(),
+            ));
+        }
+
+        // Check capacity
+        if self.objects.len() >= self.max_objects {
+            return Err(Error::InvalidObjectStream(format!(
+                "Object stream has reached maximum capacity of {} objects",
+                self.max_objects
+            )));
+        }
+
+        self.objects.insert(id, obj);
+        Ok(())
+    }
+
+    /// Get the number of objects in the stream
+    pub fn object_count(&self) -> usize {
+        self.objects.len()
+    }
+
+    /// Build the stream content in the format required by PDF spec
+    pub fn build_stream_content(&self) -> Result<Vec<u8>> {
+        if self.objects.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Sort objects by ID for consistent output
+        let mut sorted_objects: Vec<_> = self.objects.iter().collect();
+        sorted_objects.sort_by_key(|(id, _)| *id);
+
+        // First build the offset table to know its size
+        let mut offset_entries = Vec::new();
+        let mut current_offset = 0;
+
+        for ((obj_num, _gen), obj) in &sorted_objects {
+            // Store the object number and its offset
+            offset_entries.push(format!("{obj_num} {current_offset}"));
+
+            // Calculate size of this object's serialization
+            let mut obj_bytes = Vec::new();
+            crate::writer::Writer::write_object(&mut obj_bytes, obj)?;
+            current_offset += obj_bytes.len() + 1; // +1 for space separator
+        }
+
+        // Build the complete offset table with proper spacing
+        let offset_table = offset_entries.join(" ") + " ";
+
+        // Now build the final content
+        let mut content = Vec::new();
+        content.extend_from_slice(offset_table.as_bytes());
+
+        // Add serialized objects with space separators
+        for ((_, _), obj) in &sorted_objects {
+            let mut obj_bytes = Vec::new();
+            crate::writer::Writer::write_object(&mut obj_bytes, obj)?;
+            content.extend_from_slice(&obj_bytes);
+            content.push(b' '); // Space separator between objects
+        }
+
+        Ok(content)
+    }
+
+    /// Convert to a Stream object ready for insertion into a PDF
+    pub fn to_stream_object(&self) -> Result<Stream> {
+        let content = self.build_stream_content()?;
+
+        // Calculate where the first object starts
+        // We need to find the size of the offset table
+        let mut sorted_objects: Vec<_> = self.objects.iter().collect();
+        sorted_objects.sort_by_key(|(id, _)| *id);
+
+        // Build the offset entries to calculate exact size
+        let mut offset_entries = Vec::new();
+        let mut current_offset = 0;
+
+        for ((obj_num, _gen), obj) in &sorted_objects {
+            offset_entries.push(format!("{obj_num} {current_offset}"));
+
+            // Calculate size of this object's serialization
+            let mut obj_bytes = Vec::new();
+            crate::writer::Writer::write_object(&mut obj_bytes, obj)?;
+            current_offset += obj_bytes.len() + 1; // +1 for space separator
+        }
+
+        // The offset table is joined with spaces and has a trailing space
+        let offset_table = offset_entries.join(" ") + " ";
+        let first_offset = offset_table.len();
+
+        let dict = dictionary! {
+            "Type" => "ObjStm",
+            "N" => self.objects.len() as i64,
+            "First" => first_offset as i64,
+        };
+
+        let mut stream = Stream::new(dict, content);
+
+        // Apply compression - object streams should always be compressed
+        if self.compression_level > 0 {
+            // Force compression by setting Filter directly
+            use flate2::Compression;
+            use flate2::write::ZlibEncoder;
+            use std::io::prelude::*;
+
+            let compression = match self.compression_level {
+                0 => Compression::none(),
+                1..=3 => Compression::fast(),
+                4..=6 => Compression::default(),
+                _ => Compression::best(),
+            };
+
+            let mut encoder = ZlibEncoder::new(Vec::new(), compression);
+            encoder.write_all(&stream.content)?;
+            let compressed = encoder.finish()?;
+
+            stream.dict.set("Filter", "FlateDecode");
+            stream.set_content(compressed);
+        }
+
+        Ok(stream)
+    }
+
+    /// Check if an object can be compressed into an object stream
+    pub fn can_be_compressed(id: ObjectId, obj: &Object, doc: &Document) -> bool {
+        // Rule 1: Stream objects cannot be compressed
+        if matches!(obj, Object::Stream(_)) {
+            return false;
+        }
+
+        // Rule 2: Objects with non-zero generation cannot be compressed
+        if id.1 != 0 {
+            return false;
+        }
+
+        // Rule 3: Only encryption dictionary cannot be compressed from trailer references
+        if let Ok(Object::Reference(encrypt_ref)) = doc.trailer.get(b"Encrypt")
+            && id == *encrypt_ref
+        {
+            return false;
+        }
+
+        // Rule 4: Specific object types that cannot be compressed
+        if let Object::Dictionary(dict) = obj
+            && let Ok(type_obj) = dict.get(b"Type")
+            && let Ok(type_name) = type_obj.as_name()
+        {
+            match type_name {
+                // Cross-reference streams and object streams cannot be compressed
+                b"XRef" => return false,
+                b"ObjStm" => return false,
+
+                // Catalog can only be excluded in linearized PDFs
+                b"Catalog" if Self::is_linearized(doc) => {
+                    return false;
+                }
+                b"Catalog" => {}
+
+                // Page, Pages, and all other types CAN be compressed
+                _ => {}
+            }
+        }
+
+        // Default: Allow compression
+        true
+    }
+
+    /// Check if a PDF document is linearized
+    fn is_linearized(doc: &Document) -> bool {
+        // In a linearized PDF, the first object after the header should be a
+        // linearization dictionary with /Linearized entry
+        // For simplicity, we check if any object has a /Linearized entry
+        for obj in doc.objects.values() {
+            if let Object::Dictionary(dict) = obj
+                && dict.has(b"Linearized")
+            {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+impl ObjectStreamBuilder {
+    /// Set the maximum number of objects per stream
+    pub fn max_objects(mut self, max: usize) -> Self {
+        self.max_objects = max;
+        self
+    }
+
+    /// Set the compression level (0-9)
+    pub fn compression_level(mut self, level: u32) -> Self {
+        self.compression_level = level;
+        self
+    }
+
+    /// Build the ObjectStream
+    pub fn build(self) -> ObjectStream {
+        ObjectStream {
+            objects: BTreeMap::new(),
+            max_objects: self.max_objects,
+            compression_level: self.compression_level,
+        }
+    }
+
+    /// Get the current max_objects setting
+    pub fn get_max_objects(&self) -> usize {
+        self.max_objects
+    }
+
+    /// Get the current compression_level setting
+    pub fn get_compression_level(&self) -> u32 {
+        self.compression_level
+    }
+}

@@ -1,0 +1,22 @@
+[package]
+name = "ideacraft"
+description = "IdeaCraft desktop app: open-source dynamic concept maps"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+ideacraft-ui-egui = { workspace = true }
+egui = { workspace = true }
+serde_json = { workspace = true }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
+rfd = { workspace = true }
+
+[build-dependencies]
+# Windows only (build.rs): embeds assets/app-icon/ideacraft.ico and the version info in the exe.
+winresource = "0.1"
+
+[lints]
+workspace = true

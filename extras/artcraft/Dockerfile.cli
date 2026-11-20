@@ -17,8 +17,7 @@ ARG UPSTREAM_SHA
 RUN apt-get update && apt-get install -y --no-install-recommends git pkg-config cmake clang libclang-dev perl \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-RUN --mount=type=secret,id=gh_token set -e; t="$(tr -d ' \r\n' 2>/dev/null < /run/secrets/gh_token || true)"; if [ -n "$t" ]; then export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$t" | base64 | tr -d '\n')"; fi; \
-    git init . && git remote add origin "$REPO" && git fetch --depth 1 origin "${UPSTREAM_SHA:-$REF}" && git checkout --detach FETCH_HEAD && if [ -n "$UPSTREAM_SHA" ]; then test "$(git rev-parse HEAD)" = "$UPSTREAM_SHA"; fi
+COPY --from=craft_src . /src
 RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo-registry \
     --mount=type=cache,target=/src/target,id=target-cli-${APP} \
     cargo build --release -p ${APP}-cli && cp target/release/${APP}-cli /usr/local/bin/${APP}-cli

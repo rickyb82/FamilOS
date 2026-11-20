@@ -1,0 +1,453 @@
+//! pdfcraft-forms — interactive forms (AcroForm, ISO 32000-2 §12.7), execution plan M6.1–M6.2.
+//!
+//! - [`fields`]: the field tree flattened to terminal fields, each with its widgets (page,
+//!   rectangle, on-state), inherited attributes (`/FT`, `/Ff`, `/V`, `/DV`, `/DA`, `/Q`,
+//!   `/MaxLen`) and choice options.
+//! - [`set_value`]: fill a field. Text and choice fields get new appearance streams
+//!   ([`appearance`]); check boxes and radio buttons switch `/V` and each widget's `/AS` between
+//!   the states their appearances already define.
+//! - [`reset`]: Acrobat's Clear form (back to `/DV`).
+//! - [`table`]: a table of text fields, laid out and named before any of it is added.
+//!
+//! Not yet: JavaScript actions (format, keystroke, validate, calculate — M6.4/M6.5) and rich text
+//! values (`/RV`, which is removed when a value is set so it can't contradict `/V`).
+
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
+use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, PdfString};
+
+mod actions;
+pub mod af;
+pub mod appearance;
+mod author;
+mod calc_order;
+pub mod detect;
+mod scripting;
+pub mod table;
+pub use actions::{FieldAction, Trigger, field_action_chains, field_actions, set_field_actions, widget_scripts};
+pub use author::{
+    BorderStyle, CheckStyle, FieldFont, FieldProps, Look, LookPatch, MIN_FIELD_SIDE, NewField, add_field, check_style, delete_field,
+    delete_field_object, delete_widget, duplicate_field, look, redraw_field, redraw_fields, set_button_icon, set_button_icon_target, set_props,
+};
+pub use calc_order::{CalculatedField, CalculationIssue, CalculationOrder, calculation_order, set_calculation_order};
+pub use scripting::{
+    DocumentTrigger, FieldChange, FieldEvent, NoScripts, PageEvent, PageScript, ScriptResult, Scripts, apply_script_changes, document_action_scripts,
+    document_scripts, document_scripts_named, page_scripts, set_document_script, set_field_script,
+};
+
+mod appearances;
+mod read;
+mod tab_order;
+mod values;
+
+pub use appearances::{FieldAppearanceCache, declares_pdfa, need_appearances, undrawn_fields, with_field_appearances, with_field_appearances_cached};
+pub(crate) use read::page_refs;
+pub use read::selected_options;
+pub use read::{Fields, acroform, adopted_page_fields, fields, fields_with_adopted, form_reads_on_this_thread};
+#[cfg(test)]
+use read::{MAX_SCRIPT_BYTES, PageWalk, enumerate, form_reads_on_this_thread as form_reads};
+use read::{first_by_export, qualified_name, script, script_budget};
+pub use tab_order::{TabOrder, move_in_tab_order, set_tab_order, tab_orders};
+#[cfg(test)]
+use values::has_password_flag;
+use values::write_value;
+pub(crate) use values::{ask_viewers_to_redraw, merged_appearance, redraw_calculated_value};
+pub use values::{
+    calculations_changed, clear_password_values, default_value_known, has_password_values, password_values, recalculate, recalculate_with, reset,
+    reset_with_counts, reset_with_formatting, reset_with_scripts, restore_password_values, set_value, set_value_with, set_values,
+};
+
+#[cfg(test)]
+mod tests;
+
+#[derive(Debug, thiserror::Error, PartialEq)]
+pub enum FormError {
+    #[error("the document has no form fields")]
+    NoForm,
+    #[error("there is no field named {0:?}")]
+    NoSuchField(String),
+    #[error("{0:?} is read-only")]
+    ReadOnly(String),
+    #[error("{0}")]
+    Invalid(String),
+    /// The value doesn't fit the field's format (its keystroke check refused it), which is
+    /// checked before any of the field's scripts run.
+    #[error("{0}")]
+    Format(String),
+    #[error("{0}")]
+    Cos(#[from] pdfcraft_cos::CosError),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FieldKind {
+    Text,
+    CheckBox,
+    Radio,
+    PushButton,
+    Combo,
+    List,
+    Signature,
+}
+
+/// Field flags (§12.7.4, Tables 226, 228, 229, 231).
+pub mod flags {
+    pub const READ_ONLY: u32 = 1;
+    pub const REQUIRED: u32 = 1 << 1;
+    pub const MULTILINE: u32 = 1 << 12;
+    pub const PASSWORD: u32 = 1 << 13;
+    pub const NO_TOGGLE_TO_OFF: u32 = 1 << 14;
+    pub const RADIO: u32 = 1 << 15;
+    pub const PUSH_BUTTON: u32 = 1 << 16;
+    pub const COMBO: u32 = 1 << 17;
+    pub const EDIT: u32 = 1 << 18;
+    pub const SORT: u32 = 1 << 19;
+    pub const FILE_SELECT: u32 = 1 << 20;
+    pub const MULTI_SELECT: u32 = 1 << 21;
+    pub const DO_NOT_SPELL_CHECK: u32 = 1 << 22;
+    pub const DO_NOT_SCROLL: u32 = 1 << 23;
+    pub const COMB: u32 = 1 << 24;
+    /// Buttons: radios in unison. Text fields use the same bit for rich text.
+    pub const RADIOS_IN_UNISON: u32 = 1 << 25;
+    pub const RICH_TEXT: u32 = 1 << 25;
+    pub const COMMIT_ON_SEL_CHANGE: u32 = 1 << 26;
+}
+
+/// One widget (the field's appearance on a page).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Widget {
+    pub obj: ObjRef,
+    /// 0-based page index, when the widget is on a page.
+    pub page: Option<usize>,
+    /// In user space, normalized.
+    pub rect: [f64; 4],
+    /// Check boxes and radio buttons: the name of the "on" appearance state.
+    pub on_state: Option<String>,
+    /// The current appearance state (`/AS`).
+    pub state: Option<String>,
+    /// Position in the document's tab order (pages in order; within a page by its `/Tabs`:
+    /// rows, columns, or annotation/structure order). `usize::MAX` when not on a page.
+    pub tab: usize,
+    /// The widget's Locked flag (`/F` bit 8): its properties can't be changed.
+    pub locked: bool,
+    /// The widget's Hidden or NoView flag (`/F` bit 2 or 6): it isn't shown and takes no input.
+    pub hidden: bool,
+    /// Read-only: the field is, or the widget's own `/Ff` says so (a radio button of a group can
+    /// be locked on its own, as an XFA exclusion group's layout writes it).
+    pub read_only: bool,
+    /// `/MK /R` as 0, 90, 180 or 270 degrees counterclockwise. Anything else is stored as 0.
+    pub rotation: i64,
+    /// Push buttons: the normal label (`/MK /CA`), separate from the field's name.
+    pub caption: Option<String>,
+    /// Text widget JavaScript to run on a mouse-up click.
+    pub mouse_up_script: Option<String>,
+    /// The widget has a mouse-down action (`/AA /D`): a press runs it (the LaTeX `animate`
+    /// package's controls act on mouse down), so a push button with only that still takes a press.
+    pub mouse_down: bool,
+    /// List boxes: where the options are drawn, so a click can pick the one under the pointer.
+    pub list: Option<appearance::ListRows>,
+    /// Drawn round: a radio button, or a check box laid out for a round XFA check button
+    /// (`/PCXfaRound true`).
+    pub round: bool,
+}
+
+/// A terminal form field.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Field {
+    /// Fully qualified name (`parent.child`).
+    pub name: String,
+    pub obj: ObjRef,
+    pub kind: FieldKind,
+    /// Text: the text. Check box / radio: the selected state (none when off). Choice: the
+    /// selected export values.
+    pub value: Vec<String>,
+    pub default: Vec<String>,
+    pub flags: u32,
+    pub max_len: Option<usize>,
+    /// Choice options: (export value, display text).
+    pub options: Vec<(String, String)>,
+    /// Combo and list boxes: the selected options, as ascending positions in `options` (see
+    /// [`selected_options`]). Two options can share an export value, so `value` alone can't say
+    /// which of them is selected. Empty for other kinds.
+    pub selected: Vec<usize>,
+    /// A list box without MultiSelect whose `/V` is an array (a value of one option is a string,
+    /// ISO 32000-2 Table 233): `value` holds its first entry only, and picking that option again
+    /// writes the value as one string rather than leaving the array.
+    pub single_value_is_array: bool,
+    /// Default appearance string (`/DA`, inherited from the form if absent).
+    pub da: String,
+    /// Quadding: 0 left, 1 centred, 2 right.
+    pub quadding: i64,
+    pub tooltip: Option<String>,
+    pub widgets: Vec<Widget>,
+    /// Format, validate and calculate scripts (Acrobat's AF functions), see [`af`].
+    pub actions: af::Actions,
+    /// Push buttons: what a click does.
+    pub button: Option<af::ButtonAction>,
+}
+
+impl Field {
+    pub fn has(&self, flag: u32) -> bool {
+        self.flags & flag != 0
+    }
+
+    /// A comb field: the Comb flag set with a `/MaxLen`, neither multiline nor password (ISO
+    /// 32000-2 Table 228). Each cell holds one character.
+    pub fn is_comb(&self) -> bool {
+        self.has(flags::COMB) && !self.has(flags::MULTILINE) && !self.has(flags::PASSWORD) && self.max_len.is_some_and(|m| m > 0)
+    }
+
+    pub fn read_only(&self) -> bool {
+        self.has(flags::READ_ONLY)
+    }
+
+    /// Locked (Field Properties ▸ General ▸ Locked): its properties can't be changed.
+    pub fn locked(&self) -> bool {
+        self.widgets.iter().any(|w| w.locked)
+    }
+
+    /// Check boxes and radio groups with `/Opt` (PDF 1.4): one export value per widget, in widget
+    /// order. Their on states are then often just positions (`/0`, `/1` …), as pdf-lib writes them.
+    fn button_exports(&self) -> Option<&[(String, String)]> {
+        (matches!(self.kind, FieldKind::CheckBox | FieldKind::Radio) && !self.options.is_empty() && self.options.len() == self.widgets.len())
+            .then_some(self.options.as_slice())
+    }
+
+    /// The export value of widget `i` of a check box or radio group: its `/Opt` entry when the
+    /// field has one per widget, otherwise the widget's on-state name.
+    pub fn export_of(&self, i: usize) -> Option<&str> {
+        let on = self.widgets.get(i)?.on_state.as_deref()?;
+        Some(self.button_exports().and_then(|o| o.get(i)).map_or(on, |(e, _)| e.as_str()))
+    }
+
+    /// The on-state name that selects `choice` in a check box or radio group, where `choice` is an
+    /// on-state name or an export value from `/Opt`.
+    pub fn state_for(&self, choice: &str) -> Option<&str> {
+        self.widgets.iter().filter_map(|w| w.on_state.as_deref()).find(|s| *s == choice).or_else(|| {
+            let i = (0..self.widgets.len()).find(|&i| self.export_of(i) == Some(choice))?;
+            self.widgets.get(i)?.on_state.as_deref()
+        })
+    }
+
+    /// The on-state name that selects `value` read as an export value: form data, or one of the
+    /// options [`Field::export_of`] lists. A field with one `/Opt` entry per widget matches those
+    /// entries first and its on-state names only after them: the names may be positions (`/0`,
+    /// `/1`; ISO 32000-2 Table 230), so the export value `1` is the first widget, not the second
+    /// one's state `/1`. The order is (1) an `/Opt` export value, (2) an on-state name: when one
+    /// button's on state is named `1` and another button exports `1`, `1` selects the one that
+    /// exports it. Elsewhere this is [`Field::state_for`].
+    pub fn state_for_export(&self, value: &str) -> Option<&str> {
+        let by_export = self.button_exports().and_then(|exports| {
+            let i = exports.iter().position(|(e, _)| e == value)?;
+            self.widgets.get(i)?.on_state.as_deref()
+        });
+        by_export.or_else(|| self.state_for(value))
+    }
+
+    /// The on-state name of the button whose export value is the number `value` (`/Opt [(1.0)
+    /// (2.0)]`: `1` and `1.0` both name the first button), compared as numbers, so the spelling a
+    /// caller writes a number in doesn't matter. `None` when no export value is that number, or
+    /// the field has no `/Opt`, and for a number at or past 2^53 in magnitude: there a float no
+    /// longer holds every integer (`9007199254740992` and `9007199254740993` are the same `f64`),
+    /// so such a number is left to match an export value only by its text.
+    pub fn state_for_number(&self, value: f64) -> Option<&str> {
+        const EXACT: f64 = 9_007_199_254_740_992.0; // 2^53
+        if !value.is_finite() || value.abs() >= EXACT {
+            return None;
+        }
+        let exports = self.button_exports()?;
+        let i = exports.iter().position(|(e, _)| e.trim().parse::<f64>().is_ok_and(|x| x == value))?;
+        self.widgets.get(i)?.on_state.as_deref()
+    }
+
+    /// The export value for an on-state name such as the field's value; the name itself when the
+    /// field has no `/Opt`.
+    pub fn export_for_state<'a>(&'a self, state: &'a str) -> &'a str {
+        self.widgets.iter().position(|w| w.on_state.as_deref() == Some(state)).and_then(|i| self.export_of(i)).unwrap_or(state)
+    }
+
+    /// Values for data export, resolving button appearance names through /Opt.
+    pub fn export_values(&self) -> Vec<String> {
+        if matches!(self.kind, FieldKind::CheckBox | FieldKind::Radio) {
+            self.value.iter().map(|v| self.export_for_state(v).to_string()).collect()
+        } else {
+            self.value.clone()
+        }
+    }
+
+    /// Whether widget `i` of a check box or radio group is on: its `/AS` is its on state. Widgets
+    /// sharing an on state tell themselves apart only by `/AS`, which ISO 32000-2 §12.7.5.2.3 and
+    /// §12.7.5.2.4 make the deciding entry where it and `/V` differ. A widget without `/AS`
+    /// follows the field's value, except that in a radio group without RadiosInUnison at most one
+    /// button is on (Table 229): of the widgets sharing that state, none when one of them has it
+    /// as its `/AS`, else only the first without `/AS`.
+    pub fn widget_on(&self, i: usize) -> bool {
+        let Some(w) = self.widgets.get(i) else { return false };
+        let Some(on) = w.on_state.as_deref() else { return false };
+        if let Some(s) = w.state.as_deref() {
+            return s == on;
+        }
+        if self.value.first().map(String::as_str) != Some(on) {
+            return false;
+        }
+        if self.kind != FieldKind::Radio || self.has(flags::RADIOS_IN_UNISON) {
+            return true;
+        }
+        let sharing = |x: &Widget| x.on_state.as_deref() == Some(on);
+        !self.widgets.iter().any(|x| sharing(x) && x.state.as_deref() == Some(on))
+            && self.widgets.iter().position(|x| sharing(x) && x.state.is_none()) == Some(i)
+    }
+
+    /// The value that gives this check box the stored value `value` (`/V`, `/DV`, imported or
+    /// script data): the on state it names (or whose `/Opt` export it is), so that of kids with
+    /// different on states the right one turns on (ISO 32000-2 §12.7.5.2.3, Table 230); checked
+    /// for any other value but Off, unchecked for none.
+    pub fn check_box_value(&self, value: Option<&str>) -> FieldValue {
+        match value.filter(|v| !v.is_empty() && *v != "Off") {
+            Some(v) => self.state_for(v).map_or(FieldValue::Check(true), |s| FieldValue::Text(s.to_owned())),
+            None => FieldValue::Check(false),
+        }
+    }
+
+    /// Combo and list boxes: this field's option positions `picked` as positions in `other`'s
+    /// options, in the same order. Same-name twins are one field (ISO 32000-2 §12.7.3.1) but can
+    /// list their options in different orders, and a value given by position is read in the first
+    /// twin's options. `None` when an option picked has no match in `other`.
+    pub fn positions_in(&self, other: &Field, picked: &[usize]) -> Option<Vec<usize>> {
+        option_positions_in(picked, &self.options, &other.options)
+    }
+
+    /// Combo and list boxes: the selected options in the order the value names them (`/V` keeps
+    /// the order they were picked in), so the last is the latest pick.
+    pub fn picked_in_order(&self) -> Vec<usize> {
+        let mut out: Vec<usize> = Vec::with_capacity(self.selected.len());
+        let mut taken: std::collections::HashSet<usize> = std::collections::HashSet::with_capacity(self.selected.len());
+        let mut unpicked = self.selected_by_export();
+        for v in &self.value {
+            if let Some(i) = unpicked.get_mut(v.as_str()).and_then(std::collections::VecDeque::pop_front) {
+                taken.insert(i);
+                out.push(i);
+            }
+        }
+        // Positions `/I` holds beyond what the value names (none while the two agree).
+        out.extend(self.selected.iter().copied().filter(|i| !taken.contains(i)));
+        out
+    }
+
+    /// The value as one string: text, the state name, or the selected display texts.
+    pub fn display_value(&self) -> String {
+        match self.kind {
+            FieldKind::Combo | FieldKind::List => {
+                // Each value as the selected option it names (options can share an export
+                // value), in the value's order; past those, the first option exporting it.
+                let mut unpicked = self.selected_by_export();
+                let first = first_by_export(&self.options);
+                self.value
+                    .iter()
+                    .map(|v| {
+                        let i =
+                            unpicked.get_mut(v.as_str()).and_then(std::collections::VecDeque::pop_front).or_else(|| first.get(v.as_str()).copied());
+                        i.and_then(|i| self.options.get(i)).map_or(v.clone(), |(_, d)| d.clone())
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
+            _ => self.value.join(", "),
+        }
+    }
+
+    /// The selected positions grouped by the export value of their option, each group
+    /// ascending, so a value takes the next selected option exporting it in one lookup.
+    fn selected_by_export(&self) -> std::collections::HashMap<&str, std::collections::VecDeque<usize>> {
+        let mut out: std::collections::HashMap<&str, std::collections::VecDeque<usize>> = std::collections::HashMap::new();
+        for &i in &self.selected {
+            if let Some((e, _)) = self.options.get(i) {
+                out.entry(e.as_str()).or_default().push_back(i);
+            }
+        }
+        out
+    }
+}
+
+/// A value to put in a field.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FieldValue {
+    Text(String),
+    /// Check box: checked or not.
+    Check(bool),
+    /// Radio group: the on-state to select (`None`: none selected). Of radio buttons sharing that
+    /// state, the one already on stays on, else the first, unless the group has RadiosInUnison.
+    Radio(Option<String>),
+    /// Check box or radio group: turn on widget `i` (an index into [`Field::widgets`]); it never
+    /// turns it off. A radio button sharing its on state with others is the only one turned on
+    /// unless the group has RadiosInUnison (ISO 32000-2 Table 229).
+    Widget(usize),
+    /// Combo box or list box: export values (several only for multi-select lists).
+    Choice(Vec<String>),
+    /// Combo box or list box: options by their zero-based position in `/Opt` (as `/I` numbers
+    /// them), which tells apart options that share an export value. Several only for
+    /// multi-select lists; `/V` takes them in this order.
+    ChoiceIndices(Vec<usize>),
+}
+
+// ── reading ─────────────────────────────────────────────────────────────────────────────────
+
+fn text_of(o: &Object) -> Option<String> {
+    match o {
+        Object::String(s) => Some(s.to_text()),
+        Object::Name(n) => Some(name_text(n)),
+        _ => None,
+    }
+}
+
+/// A name object's bytes as text that [`name_bytes`] turns back into the same bytes. UTF-8 names
+/// read as themselves; other bytes (Shift-JIS check box states such as 「はい」 in Japanese
+/// forms) and `#` are written `#XX`, as in PDF name syntax.
+pub fn name_text(bytes: &[u8]) -> String {
+    let escape = |b: u8| format!("#{b:02X}");
+    match std::str::from_utf8(bytes) {
+        Ok(s) => s.replace('#', "#23"),
+        Err(_) => bytes.iter().map(|&b| if (0x21..=0x7e).contains(&b) && b != b'#' { char::from(b).to_string() } else { escape(b) }).collect(),
+    }
+}
+
+/// The bytes of the name written as `text` by [`name_text`] (`#XX` is the byte XX).
+pub fn name_bytes(text: &str) -> Vec<u8> {
+    let b = text.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while let Some(&c) = b.get(i) {
+        let hex = |j: usize| b.get(j).and_then(|h| char::from(*h).to_digit(16));
+        match (c, hex(i + 1), hex(i + 2)) {
+            // Both digits are below 16, so the byte fits.
+            (b'#', Some(hi), Some(lo)) => {
+                out.push(u8::try_from(hi * 16 + lo).unwrap_or(b'#'));
+                i += 3;
+            }
+            _ => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// A name object from text written by [`name_text`].
+fn name_obj(text: &str) -> Object {
+    Object::Name(name_bytes(text))
+}
+
+fn invalid<T>(m: impl Into<String>) -> Result<T, FormError> {
+    Err(FormError::Invalid(m.into()))
+}
+
+/// The positions in `target` of the options at positions `picked` in `source`, in the same order:
+/// each goes to `target`'s first not yet taken option with the same export value and text, so two
+/// options sharing both stay apart. `None` when one has no such option in `target`.
+pub(crate) fn option_positions_in(picked: &[usize], source: &[(String, String)], target: &[(String, String)]) -> Option<Vec<usize>> {
+    let mut free: std::collections::HashMap<(&str, &str), std::collections::VecDeque<usize>> = std::collections::HashMap::new();
+    for (i, (e, d)) in target.iter().enumerate() {
+        free.entry((e.as_str(), d.as_str())).or_default().push_back(i);
+    }
+    picked.iter().map(|&p| source.get(p).and_then(|(e, d)| free.get_mut(&(e.as_str(), d.as_str()))).and_then(|q| q.pop_front())).collect()
+}
