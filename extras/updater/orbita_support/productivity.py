@@ -36,7 +36,7 @@ def plan(cfg,catalog,apps,shas):
   assert not service.get('ports') and not service.get('network_mode'),'Il modulo non può pubblicare porte o usare rete host'
   sha=shas[app];assert re.fullmatch('[a-f0-9]{40}',sha)
   service['build']['args']['UPSTREAM_SHA']=sha
-  service['image']='orbita-'+name+':'+sha[:12]
+  service['image']='orbita-'+name+':bundle-'+sha[:12]
   cfg['services'][name]=service
  cfg.setdefault('secrets',{}).update(catalog['secrets'])
  return cfg
