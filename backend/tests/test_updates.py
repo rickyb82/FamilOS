@@ -253,3 +253,23 @@ def test_github_repository_metadata_has_no_trailing_slash(updater,monkeypatch,su
         return io.BytesIO(b'{"default_branch":"main"}')
     monkeypatch.setattr(agent.urllib.request,'urlopen',urlopen)
     assert updater.github('core',suffix)['default_branch']=='main'
+
+
+@pytest.mark.parametrize("channel", ["stable", "development"])
+def test_bundled_craft_offer_and_changed_bundle(updater, monkeypatch, channel):
+    import json
+
+    def no_remote(*args):
+        pytest.fail("Bundled Craft must use the locally installed release")
+
+    monkeypatch.setattr(updater, "github", no_remote)
+    manifest = updater.root / "craft" / "revisions.json"
+    manifest.parent.mkdir()
+    manifest.write_text(json.dumps({"wordcraft": "a" * 40}))
+    updater.check("wordcraft", channel)
+    offer = updater.state["offers"]["wordcraft"]
+    body = {"target": "wordcraft", "channel": channel, "offer_id": offer["id"], "accept_experimental": True}
+    assert updater.validate_offer(body)["sha"] == "a" * 40
+    manifest.write_text(json.dumps({"wordcraft": "b" * 40}))
+    with pytest.raises(ValueError, match="cambiato"):
+        updater.validate_offer(body)
