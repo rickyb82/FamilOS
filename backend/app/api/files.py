@@ -223,7 +223,7 @@ async def blank_pdf(body: BlankPdf, ctx: AuthContext = Depends(require_auth), db
 @serialize_file_write("file_id")
 async def wordcraft_save(request: Request, background: BackgroundTasks, file_id: str, conversation_id: str | None = None,
                          project_id: str | None = None, filename: str | None = None, folder_id: str | None = None,
-                         ctx: AuthContext = Depends(require_auth),
+                         save_as: bool = False, ctx: AuthContext = Depends(require_auth),
                          db: AsyncSession = Depends(get_db)):
     """Salvataggio dagli editor nel browser, WordCraft e GridCraft (File > Salva / Esporta): il corpo e' il file, il nome arriva
     nell'header X-Filename. `file_id` e' il documento aperto: se esiste e l'estensione coincide viene sovrascritto
@@ -248,7 +248,8 @@ async def wordcraft_save(request: Request, background: BackgroundTasks, file_id:
         # nome senza estensione (PdfCraft lo ricava dall'URL): eredita quella del file aperto, altrimenti .docx
         ext = Path(existing.filename).suffix.lower() if existing else ".docx"
         name = f"{name}{ext}"
-    if existing is not None and Path(existing.filename).suffix.lower() == ext:
+    replace_existing = existing is not None and not save_as and Path(existing.filename).suffix.lower() == ext
+    if replace_existing:
         # il nome lo decide FamilAI (titolo dell'editor / elenco Documenti), non il nome interno dell'app
         name = existing.filename
     elif existing is None and filename:
@@ -270,12 +271,12 @@ async def wordcraft_save(request: Request, background: BackgroundTasks, file_id:
         raise HTTPException(413, "File troppo grande")
     mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
     from ..services import quota as _quota
-    await _quota.ensure_space(db, ctx.user, len(data) - (existing.size if existing is not None and Path(existing.filename).suffix.lower() == ext else 0))
+    await _quota.ensure_space(db, ctx.user, len(data) - (existing.size if replace_existing else 0))
 
     asset = existing
     if asset is not None:
         await require_access(db, "file", file_id, ctx.user, write=True)
-        if Path(asset.filename).suffix.lower() != ext:
+        if not replace_existing:
             # esportazione in un altro formato: nuovo file nella stessa chat/progetto
             nid = uuid.uuid4().hex
             path = settings.generated_dir / f"{nid}{ext}"

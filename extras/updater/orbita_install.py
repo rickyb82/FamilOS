@@ -49,6 +49,8 @@ def install(root):
     except BaseException:
         cfgpath.write_bytes(old); raise
     shutil.copyfile(source/'orbita_support/backup-fixed.py', ROOT/'scripts/backup.py')
+    shutil.copyfile(source/'orbita_support/productivity.py', ROOT/'scripts/familos-productivity.py')
+    shutil.copyfile(source/'orbita_support/modules.json', ROOT/'scripts/modules.json')
     # Persist the public catalogue in platform backups; no socket or backup password copied there.
     (ROOT/'data/app-catalog').mkdir(mode=0o700, exist_ok=True)
     unit = Path('/etc/systemd/system/familos-updater.service')

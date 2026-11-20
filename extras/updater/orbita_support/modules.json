@@ -103,7 +103,7 @@
       "restart": "unless-stopped",
       "environment": [
         "MCP_PORT=7983",
-        "MCP_ARGS="
+        "MCP_ARGS=--automation-read-root /data --automation-write-root /data/gridcraft"
       ],
       "volumes": [
         "./apps/familos/data:/data:ro",
@@ -180,7 +180,7 @@
       "restart": "unless-stopped",
       "environment": [
         "MCP_PORT=7984",
-        "MCP_ARGS=--root /data --compact"
+        "MCP_ARGS=--root /data --compact --automation-read-root /data --automation-write-root /data/pdfcraft"
       ],
       "volumes": [
         "./apps/familos/data:/data:ro",
@@ -257,7 +257,7 @@
       "restart": "unless-stopped",
       "environment": [
         "MCP_PORT=7985",
-        "MCP_ARGS="
+        "MCP_ARGS=--automation-read-root /data --automation-write-root /data/deckcraft"
       ],
       "volumes": [
         "./apps/familos/data:/data:ro",
@@ -334,7 +334,7 @@
       "restart": "unless-stopped",
       "environment": [
         "MCP_PORT=7986",
-        "MCP_ARGS="
+        "MCP_ARGS=--automation-read-root /data --automation-write-root /data/ideacraft"
       ],
       "volumes": [
         "./apps/familos/data:/data:ro",

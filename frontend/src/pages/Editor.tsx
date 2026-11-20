@@ -21,7 +21,8 @@ export default function Editor() {
   const fileId = params.get('file') || ''
   // Keep the initial load mode stable when promoting the first saved document.
   // Changing the URL must not reload the iframe and discard edits made during save.
-  const isNew = useRef(params.get('new') === '1').current
+  const initialNewFile = useRef(params.get('new') === '1' ? fileId : null)
+  const isNew = initialNewFile.current === fileId
   const promoted = useRef(false)
   const [hasSaved, setHasSaved] = useState(false)
   const [file, setFile] = useState<FileOut | null>(null)
@@ -123,6 +124,8 @@ export default function Editor() {
         if (isNew && name) saveQ.set('filename', name)
         // PdfCraft ricava il nome dall'URL (?file=/files/<id>): senza estensione vale il nome vero del file
         const fname = d.name && /\.[a-z0-9]{1,5}$/i.test(d.name) ? d.name : (name || 'documento.pdf')
+        const saveAs = d.saveAs === true && revision.current !== 'new'
+        if (saveAs) saveQ.set('save_as', 'true')
         try {
           const r = await fetch(`/api/files/wordcraft-save?${saveQ.toString()}`, { method: 'POST', credentials: 'include',
             headers: { 'Content-Type': 'application/octet-stream', 'X-Requested-With': 'FamilAI', 'X-Filename': encodeURIComponent(fname), 'If-Match': revision.current }, body: d.bytes })
@@ -130,6 +133,13 @@ export default function Editor() {
           const savedFile: FileOut = await r.json()
           if (savedFile.id === fileId) revision.current = savedFile.sha256 || revision.current
           if (savedFile.id === fileId) void markSaved()
+          if (saveAs && savedFile.id !== fileId) {
+            const next = new URLSearchParams(params)
+            next.set('file', savedFile.id)
+            next.set('name', savedFile.filename)
+            next.delete('new')
+            nav('/editor?' + next.toString(), { replace: true })
+          }
           setDirty(false)
           setSaved(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))
           setErr('')

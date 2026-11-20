@@ -168,9 +168,10 @@ class Updater:
         import time
         sha = json.loads(manifest.read_text())[target]
         installed = self.state['installed'].get(target, {})
+        tag = 'FamilOS@' + sha[:12]
         return dict(id=secrets.token_hex(16), channel=channel, target=target,
-                    branch='main', tag='FamilOS@' + sha[:12], sha=sha, created=time.time(),
-                    newer=sha != installed.get('sha') or not installed.get('enabled'),
+                    branch='main', tag=tag, sha=sha, created=time.time(),
+                    newer=sha != installed.get('sha') or tag != installed.get('tag') or not installed.get('enabled'),
                     experimental=channel != 'stable', notes='Versione inclusa nel FamilOS installato.')
 
     def check(self, target, channel):

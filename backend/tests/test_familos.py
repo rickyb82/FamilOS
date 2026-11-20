@@ -78,6 +78,17 @@ async def test_editor_rejects_stale_save_and_keeps_winning_content(anna):
     assert (await anna.get(file["url"])).content == b"next save"
 
 
+async def test_editor_save_as_preserves_original(anna):
+    original = await uploaded(anna, "original.txt", b"prima")
+    response = await anna.post(f"/api/files/wordcraft-save?file_id={original['id']}&save_as=true",
+                               headers={"X-Filename": "copia.txt", "If-Match": original["sha256"]}, content=b"dopo")
+    assert response.status_code == 200, response.text
+    copy = response.json()
+    assert copy["id"] != original["id"] and copy["filename"] == "copia.txt"
+    assert (await anna.get(copy["url"])).content == b"dopo"
+    assert (await anna.get(original["url"])).content == b"prima"
+
+
 async def test_explicit_rag_file_does_not_expand_scope(anna, monkeypatch):
     file = await uploaded(anna)
     from app.tools import rag_search

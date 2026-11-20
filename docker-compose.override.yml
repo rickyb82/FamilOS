@@ -10,6 +10,8 @@ services:
         craft_src: ./craft/wordcraft
       secrets: !reset []
   gridcraft:
+    environment:
+      MCP_ARGS: "--automation-read-root /data --automation-write-root /data/gridcraft"
     build:
       additional_contexts:
         craft_src: ./craft/gridcraft
@@ -20,6 +22,8 @@ services:
         craft_src: ./craft/gridcraft
       secrets: !reset []
   pdfcraft:
+    environment:
+      MCP_ARGS: "--root /data --compact --automation-read-root /data --automation-write-root /data/pdfcraft"
     build:
       additional_contexts:
         craft_src: ./craft/pdfcraft
@@ -30,6 +34,8 @@ services:
         craft_src: ./craft/pdfcraft
       secrets: !reset []
   deckcraft:
+    environment:
+      MCP_ARGS: "--automation-read-root /data --automation-write-root /data/deckcraft"
     build:
       additional_contexts:
         craft_src: ./craft/deckcraft
@@ -40,6 +46,8 @@ services:
         craft_src: ./craft/deckcraft
       secrets: !reset []
   ideacraft:
+    environment:
+      MCP_ARGS: "--automation-read-root /data --automation-write-root /data/ideacraft"
     build:
       additional_contexts:
         craft_src: ./craft/ideacraft
