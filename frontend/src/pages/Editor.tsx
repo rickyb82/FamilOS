@@ -96,6 +96,14 @@ export default function Editor() {
       if (d.type === 'familai:saved') { window.dispatchEvent(new Event('familai:conversations')); setSaved(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })); setDirty(false); setErr(''); void markSaved(); return }
       if (d.type === 'familai:save_failed') { setErr(`Salvataggio di ${d.name || 'documento'} non riuscito: ${d.error || 'errore sconosciuto'}`); return }
       if (app === 'ideacraft') return
+      if (app === 'wordcraft' && d.type === 'wordcraft:ready' && isNew) {
+        const editor = frame.current?.contentWindow as (Window & {
+          wordcraft?: { execute(command: string, params: Record<string, unknown>): Promise<unknown> }
+        }) | null
+        try { await editor?.wordcraft?.execute('file.new', {}) }
+        catch (error) { setErr('Creazione documento non riuscita: ' + String(error)) }
+        return
+      }
       if (d.type === app + ':ready' && app !== 'pdfcraft' && !isNew) {
         const target = frame.current?.contentWindow
         try {
@@ -218,7 +226,7 @@ export default function Editor() {
           onError={() => setErr(`L'editor non si è caricato: il container ${app}-web è attivo?`)} />
       ) : <div className="editor-frame center muted">Caricamento…</div>}
       <EditorHint id="editor">
-        Salva con <b>File › Salva</b> (o Ctrl/Cmd+S) dentro l'editor: il file viene aggiornato qui su Emily, non scaricato{app === 'wordcraft' && ' (e il salvataggio automatico resta attivo)'}. Per cambiare nome al file clicca sul titolo qui sopra.
+        Salva con <b>File › Salva</b> (o Ctrl/Cmd+S) dentro l'editor: il file viene aggiornato nei Documenti di Emily. Per cambiare nome al file clicca sul titolo qui sopra.
         {app !== 'pdfcraft' && <><b> File › Esporta</b> (PDF, CSV…) crea un nuovo file accanto a questo.</>} Serve un browser con WebGPU o WebGL2.
       </EditorHint>
     </div>
