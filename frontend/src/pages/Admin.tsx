@@ -273,6 +273,7 @@ function MemberForm({ user, defaults, onClose, onError }: { user?: User; default
         <details open={advanced} onToggle={(e) => setAdvanced((e.target as any).open)}>
           <summary>Permessi e limiti {isChild ? '(controllo genitori)' : ''}</summary>
           <div className="stack">
+            {isChild && <p className="muted">Le impostazioni salvate qui valgono solo per questo bambino e prevalgono sul profilo globale. MCP richiede anche un server connesso e la relativa app abilitata.</p>}
             <div><b>Strumenti consentiti:</b> {TOOLS.map((t) => (
               <label key={t} className="tool-toggle"><input type="checkbox" checked={(policy.allowed_tools ?? []).includes(t)} onChange={() => toggleList('allowed_tools', t)} /> {TOOL_IT[t]}</label>
             ))}</div>

@@ -68,26 +68,29 @@ def cloud_allowed(user) -> bool:
     group = user.age_group.value
     config = rules()
     profile = config["profiles"].get(group,DEFAULTS["young"])
-    return bool(profile["allow_cloud"])
+    return bool((user.policy or {}).get("cloud_allowed", profile["allow_cloud"]))
 
 
 def apply_to_policy(user, policy: dict) -> dict:
     if user.role != Role.child:
         return policy
     profile = rules()["profiles"].get(user.age_group.value,DEFAULTS["young"])
-    policy.update(education_mode=mode_for(user),homework_mode="allow" if mode_for(user)=="standard" else "tutor",safe_search=True,moderation=True,parent_can_view=True,
+    overrides = user.policy or {}
+    policy.update(education_mode=mode_for(user),homework_mode="allow" if mode_for(user)=="standard" else "tutor",safe_search=overrides.get("safe_search", True),moderation=overrides.get("moderation", True),parent_can_view=overrides.get("parent_can_view", True),
                   cloud_allowed=cloud_allowed(user),
-                  time_windows=[{"days":list(range(7)),"start":profile["start"],"end":profile["end"]}])
+                  time_windows=overrides.get("time_windows", [{"days":list(range(7)),"start":profile["start"],"end":profile["end"]}]))
     # Explicit administrator settings override the age default, including 0 (unlimited).
     limit = (user.policy or {}).get("daily_message_limit")
     policy["daily_message_limit"] = profile["daily_message_limit"] if limit is None else int(limit)
-    policy["daily_image_limit"] = profile["daily_image_limit"] if profile["allow_images"] and policy["cloud_allowed"] else 0
+    policy["daily_image_limit"] = overrides.get("daily_image_limit", profile["daily_image_limit"] if profile["allow_images"] and policy["cloud_allowed"] else 0)
     allowed = {"read_document","artifacts"}
     if profile["allow_web"]:
         allowed.add("web_search")
     if profile["allow_images"] and policy["cloud_allowed"]:
         allowed.add("generate_image")
-    policy["allowed_tools"] = sorted(set(policy.get("allowed_tools",[])) & allowed)
+    # Individual administrator choices are authoritative, including an empty list.
+    # Global service availability and per-app grants are still checked by tool_allowed.
+    policy["allowed_tools"] = list(overrides["allowed_tools"]) if "allowed_tools" in overrides else sorted(set(policy.get("allowed_tools",[])) & allowed)
     from ..providers.registry import _providers, is_local
     chosen = (user.policy or {}).get("provider") or ""
     if policy["cloud_allowed"]:
