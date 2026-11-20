@@ -21,9 +21,11 @@ type SpeechWindow = Window & {
 export function useDictation(scope: string, enabled: boolean, localOnly: boolean, append: (value: string) => void) {
   const current = useRef<Recognition | null>(null)
   const [listening, setListening] = useState(false)
+  const [interim, setInterim] = useState('')
   const [notice, setNotice] = useState('')
   useEffect(() => {
     setListening(false)
+    setInterim('')
     setNotice('')
     return () => {
       const recognition = current.current
@@ -55,16 +57,28 @@ export function useDictation(scope: string, enabled: boolean, localOnly: boolean
     }
     recognition.lang = 'it-IT'
     recognition.continuous = true
-    recognition.interimResults = false
+    recognition.interimResults = true
+    let confirmed = 0
+    let pending = ''
     recognition.onresult = event => {
       if (current.current !== recognition) return
-      for (let i = event.resultIndex; i < event.results.length; i++) {
+      pending = ''
+      for (let i = confirmed; i < event.results.length; i++) {
         const result = event.results[i]
-        if (result.isFinal && result[0].transcript.trim()) append(result[0].transcript.trim())
+        const phrase = result[0].transcript.trim()
+        if (result.isFinal) {
+          confirmed = i + 1
+          if (phrase) append(phrase)
+        } else if (phrase) {
+          pending += (pending ? ' ' : '') + phrase
+        }
       }
+      setInterim(pending)
     }
     recognition.onerror = event => {
       if (current.current !== recognition) return
+      pending = ''
+      setInterim('')
       const messages: Record<string, string> = {
         'not-allowed': 'Consenti al browser di usare il microfono per dettare.',
         'audio-capture': 'Microfono non disponibile.',
@@ -76,6 +90,8 @@ export function useDictation(scope: string, enabled: boolean, localOnly: boolean
     recognition.onend = () => {
       if (current.current !== recognition) return
       current.current = null
+      if (pending) append(pending)
+      setInterim('')
       setListening(false)
     }
     current.current = recognition
@@ -88,5 +104,5 @@ export function useDictation(scope: string, enabled: boolean, localOnly: boolean
       setNotice('Avvio del microfono non riuscito. ' + fallback)
     }
   }
-  return { listening, notice, toggle }
+  return { listening, interim, notice, toggle }
 }

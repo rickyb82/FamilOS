@@ -344,7 +344,8 @@ export default function Chat() {
             <textarea
               ref={composerRef}
               autoFocus
-              value={text}
+              value={text + (dictation.interim && text && !/\s$/.test(text) ? ' ' : '') + dictation.interim}
+              readOnly={!!dictation.interim}
               onChange={(e) => setText(e.target.value)}
               placeholder={isChild ? 'Scrivi qui…' : 'Scrivi a Emily…'}
               title="Invio per inviare, Shift+Invio per andare a capo"

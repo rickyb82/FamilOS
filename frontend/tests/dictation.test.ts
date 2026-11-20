@@ -40,3 +40,23 @@ it('requires local speech support for an account without cloud permission', () =
   expect(speech().start).not.toHaveBeenCalled()
   expect(result.current.notice).toContain('locale')
 })
+
+it('replaces provisional words and commits each confirmed segment once', () => {
+  const speech = fakeBrowser()
+  const append = vi.fn()
+  const { result } = renderHook(() => useDictation('chat', true, false, append))
+  act(() => result.current.toggle())
+  const segment = (transcript: string, isFinal = false) => ({ isFinal, 0: { transcript } })
+  const emit = (...results: ReturnType<typeof segment>[]) =>
+    act(() => speech().onresult?.({ resultIndex: 0, results }))
+  emit(segment('buon'))
+  expect(result.current.interim).toBe('buon')
+  emit(segment('buongiorno'), segment('Emily'))
+  expect(result.current.interim).toBe('buongiorno Emily')
+  expect(append).not.toHaveBeenCalled()
+  emit(segment('buongiorno', true), segment('Emily'))
+  expect(result.current.interim).toBe('Emily')
+  emit(segment('buongiorno', true), segment('Emily', true))
+  expect(result.current.interim).toBe('')
+  expect(append.mock.calls).toEqual([['buongiorno'], ['Emily']])
+})
