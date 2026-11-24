@@ -2,6 +2,16 @@ import XCTest
 @testable import HomePulse
 
 final class HomePulseTests:XCTestCase {
+    func testBatteryAlertThresholdHysteresisAndPersistence()throws{
+        var alert=BatteryAlertState()
+        XCTAssertFalse(alert.observe(11));XCTAssertTrue(alert.observe(10));XCTAssertFalse(alert.observe(9))
+        alert=try JSONDecoder().decode(BatteryAlertState.self,from:JSONEncoder().encode(alert))
+        XCTAssertFalse(alert.observe(10));XCTAssertFalse(alert.observe(11));XCTAssertFalse(alert.observe(10))
+        XCTAssertFalse(alert.observe(20));XCTAssertTrue(alert.observe(8));XCTAssertFalse(alert.observe(0))
+        XCTAssertFalse(alert.observe(101));XCTAssertFalse(alert.observe(-1))
+        var first=BatteryAlertState();XCTAssertTrue(first.observe(5))
+    }
+
     func testLiveIBIWithMotionRemainsAcceptedAndFlagged()throws{
         let d=Data(hex:"2f0f280211020000e81300000000ac0d01")!
         let value=try OuraWire.live(d,api:[2,0,0])
@@ -165,4 +175,25 @@ final class HomePulseTests:XCTestCase {
         try store.reconcileSessions([],active:nil);XCTAssertNil(store.load(WorkoutSession.self,key:"activeWorkout"))
     }
 
+}
+
+final class OuraBatteryProtocolTests:XCTestCase {
+    func testBatteryPercentageAndChargingFieldsRemainDistinct()throws{
+        let low=try OuraWire.battery(Data(hex:"0d030a0001")!)
+        XCTAssertEqual(low.level,10);XCTAssertEqual(low.isCharging,false)
+        XCTAssertEqual(low.chargingProgressRaw,0);XCTAssertEqual(low.chargingRecommendationRaw,1)
+        let full=try OuraWire.battery(Data(hex:"0d03646400")!)
+        XCTAssertEqual(full.level,100);XCTAssertEqual(full.isCharging,true)
+        XCTAssertEqual(full.chargingProgressRaw,100)
+    }
+    func testBatteryMissingWrongLengthAndInvalidPercentageAreRejected(){
+        for hex in ["0d020a00","0d040a000100","0c030a0001","0d037f0000","0d03ff0000"]{
+            XCTAssertThrowsError(try OuraWire.battery(Data(hex:hex)!))
+        }
+    }
+    func testBatteryUnknownChargeProgressNeverClaimsCharging()throws{
+        let value=try OuraWire.battery(Data(hex:"0d0332ff02")!)
+        XCTAssertEqual(value.level,50);XCTAssertNil(value.isCharging)
+        XCTAssertEqual(value.chargingProgressRaw,255);XCTAssertEqual(value.chargingRecommendationRaw,2)
+    }
 }

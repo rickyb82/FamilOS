@@ -135,3 +135,15 @@ struct HistoricalMetrics {var temperatureC:Double?;var receivedAt:Date?;var moti
 
 // Identificativi verificati nel catalogo Android, non dedotti dal nome libero.
 enum ActivityCatalog { static let defaults:[(Int,String)]=[(65535,"Altro"),(14,"Camminata"),(12,"Corsa"),(5,"Ciclismo"),(8,"Pesi"),(10,"Pilates"),(15,"Yoga")] }
+
+struct RingBatterySnapshot:Codable {var level:Int;var at:Date}
+/// One alert per discharge. Hysteresis prevents repeated alerts around 10%.
+struct BatteryAlertState:Codable {
+    var armed=true
+    mutating func observe(_ level:Int)->Bool {
+        guard (0...100).contains(level) else{return false}
+        if level>=20{armed=true;return false}
+        guard level<=10,armed else{return false}
+        armed=false;return true
+    }
+}

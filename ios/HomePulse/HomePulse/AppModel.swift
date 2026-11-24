@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import UserNotifications
 
 @MainActor final class AppModel:ObservableObject {
     @Published var settings:LocalSettings
@@ -12,6 +13,9 @@ import Combine
     @Published var syncStatus="Offline pronto";@Published var message:String?
     @Published var ownerName:String?;@Published var enrolled=false;@Published var pending=0
     @Published var allowedActivities:[(Int,String)]=ActivityCatalog.defaults
+    @Published var batteryLevel:Int?;@Published var batteryAt:Date?
+    @Published var batteryNotificationStatus="Notifiche da autorizzare"
+    private var batteryAlert=BatteryAlertState();private var batteryNotificationPending=false
     let store:EventStore;let api:WellnessAPI;let ring:RingBridge;let gym:GymDetection
     private var ticking:Task<Void,Never>?;private var refreshing=false
     init(store:EventStore,folder:URL){
@@ -36,9 +40,41 @@ import Combine
         gym.onCandidate={[weak self] id,date in self?.startWorkout(auto:true,id:id,at:date)}
         gym.onReply={[weak self] id,name,negative in self?.resolveCandidate(id:id,name:name,negative:negative)}
         gym.onRegion={[weak self] inside in self?.regionEvent(inside)}
+        if let snapshot=store.load(RingBatterySnapshot.self,key:"ringBattery.latest"){batteryLevel=snapshot.level;batteryAt=snapshot.at}
+        batteryAlert=store.load(BatteryAlertState.self,key:"ringBattery.alert") ?? BatteryAlertState()
+        ring.onBattery={[weak self] level,date in self?.receiveBattery(level,at:date)}
+        Task{await refreshBatteryNotificationStatus()}
         pending=store.pendingCount
         if current==nil,let id=gym.engine.state.candidateSessionID,let date=gym.engine.state.candidateAt{startWorkout(auto:true,id:id,at:date)}
         ticking=Task{[weak self] in var ticks=0;while !Task.isCancelled{try? await Task.sleep(nanoseconds:1_000_000_000);guard let self else{return};now=Date();ring.maintenance();ticks+=1;if ticks%30==0{await refresh();pending=store.pendingCount}}}
+    }
+    func refreshBatteryNotificationStatus()async{
+        let permission=await UNUserNotificationCenter.current().notificationSettings()
+        batteryNotificationStatus=permission.authorizationStatus == .authorized || permission.authorizationStatus == .provisional ? "Avviso al 10% attivo":"Notifiche da autorizzare nelle impostazioni iPhone"
+    }
+    func requestBatteryNotifications()async{
+        do{_ = try await UNUserNotificationCenter.current().requestAuthorization(options:[.alert,.sound]);await refreshBatteryNotificationStatus()
+            if let level=batteryLevel,let date=batteryAt,Date().timeIntervalSince(date)<600{receiveBattery(level,at:date)}
+        }catch{message="Autorizzazione notifiche non completata"}
+    }
+    private func receiveBattery(_ level:Int,at date:Date){
+        guard (0...100).contains(level) else{return}
+        batteryLevel=level;batteryAt=date
+        do{try store.save(RingBatterySnapshot(level:level,at:date),key:"ringBattery.latest")}catch{message="Livello batteria non salvato"}
+        if level>=20{_ = batteryAlert.observe(level);try? store.save(batteryAlert,key:"ringBattery.alert")}
+        guard level<=10,batteryAlert.armed,!batteryNotificationPending else{return}
+        batteryNotificationPending=true
+        Task{defer{batteryNotificationPending=false}
+            let center=UNUserNotificationCenter.current(),permission=await UNUserNotificationCenter.current().notificationSettings()
+            guard permission.authorizationStatus == .authorized || permission.authorizationStatus == .provisional else{await refreshBatteryNotificationStatus();return}
+            // A later charging sample must not produce an alert for an obsolete low reading.
+            guard let latest=batteryLevel,latest<=10,batteryAlert.armed else{return}
+            let content=UNMutableNotificationContent();content.title="Batteria Oura al \(latest)%"
+            content.body="Metti l’anello in carica per continuare a registrare gli allenamenti.";content.sound = .default
+            do{try await center.add(UNNotificationRequest(identifier:"homepulse.ring-battery-low",content:content,trigger:nil))
+                _ = batteryAlert.observe(latest);try store.save(batteryAlert,key:"ringBattery.alert")
+            }catch{message="Avviso batteria non completato"}
+        }
     }
     var displayedBPM:Int?{guard let sampleAt,now.timeIntervalSince(sampleAt)>=0,now.timeIntervalSince(sampleAt)<=8 else{return nil};return bpm}
     private func receive(_ value:OuraLive,at date:Date){warnings=value.warnings;temperatureRaw=value.temperatureRaw

@@ -3,28 +3,35 @@ import CoreBluetooth
 import Combine
 
 @MainActor final class RingBridge:NSObject,ObservableObject,@preconcurrency CBCentralManagerDelegate,@preconcurrency CBPeripheralDelegate {
-    @Published var status="Anello scollegato"
+    @Published var status="Anello scollegato" {didSet{if status != oldValue{try? store.append(kind:"device_status",payload:.object(["source":.string("iphone_bluetooth"),"status":.string(status)]));onJournal?()}}}
     @Published var devices:[CBPeripheral]=[]
     @Published var connected=false;@Published var ready=false;@Published var busy=false
     @Published var apiVersion:[Int]=[];@Published var capabilities:[Int:Int]=[:]
     @Published var exerciseRaw:JSONValue = .null
+    @Published var batteryLevel:Int?;@Published var batteryAt:Date?
+    @Published var lastConnectionError:String?
+    var onBattery:((Int,Date)->Void)?
     var onLive:((OuraLive,Date)->Void)?;var onHistory:((Data)->Void)?;var onJournal:(()->Void)?
     private var central:CBCentralManager!;private var peripheral:CBPeripheral?
     private var writeCharacteristic:CBCharacteristic?;private var notifyCharacteristic:CBCharacteristic?
+    private var connectionTimeout:Task<Void,Never>?;private var connectionFailure:String?
     private var desired=false;private var authenticating=false;private var pairingAttempt=false
     private var logicalRing:String?;private var framer=OuraFramer()
     private var continuation:CheckedContinuation<Data,Error>?
     private var responseMatch:((Data)->Bool)?;private var timeoutTask:Task<Void,Never>?
     private struct SportControl:Codable{var restoreMode:UInt8;var pendingStop:Bool}
     private var sportKey:String{"sport.control.\(logicalRing ?? "unbound")"}
-    private var nextHistoryAt=Date.distantPast;private var nextExerciseAt=Date.distantPast
+    private var nextHistoryAt=Date.distantPast;private var nextExerciseAt=Date.distantPast;private var nextBatteryAt=Date.distantPast
     private var pageRecords:[Data]?;private let store:EventStore
     init(store:EventStore){self.store=store;super.init();logicalRing=UserDefaults.standard.string(forKey:"ringLogicalID");desired=UserDefaults.standard.bool(forKey:"ringWantsConnection");central=CBCentralManager(delegate:self,queue:.main,options:[CBCentralManagerOptionRestoreIdentifierKey:"com.familos.homepulse.central",CBCentralManagerOptionShowPowerAlertKey:true])}
     func configure(logicalRing:String){self.logicalRing=logicalRing;UserDefaults.standard.set(logicalRing,forKey:"ringLogicalID")}
     var hasOwnerKey:Bool {guard let id=logicalRing else{return false};return SecureStore.read("ring.\(id)")?.count==16}
     func scan(){guard central.state == .poweredOn else{status="Attiva il Bluetooth sull’iPhone";return};guard hasOwnerKey else{status="Attendi l’associazione dell’anello da FamilOS";return};devices=[];central.scanForPeripherals(withServices:[CBUUID(string:OuraWire.service)],options:nil);status="Ricerca anello…";Task{try? await Task.sleep(nanoseconds:15_000_000_000);central.stopScan()}}
-    func connect(_ device:CBPeripheral){guard hasOwnerKey else{status="Credenziale anello non ancora configurata";return};desired=true;UserDefaults.standard.set(true,forKey:"ringWantsConnection");peripheral=device;device.delegate=self;central.stopScan();UserDefaults.standard.set(device.identifier.uuidString,forKey:"ringPeripheral");central.connect(device,options:[CBConnectPeripheralOptionNotifyOnDisconnectionKey:true]);status="Connessione…"}
-    func disconnect(){desired=false;UserDefaults.standard.set(false,forKey:"ringWantsConnection")
+    func connect(_ device:CBPeripheral){connectionTimeout?.cancel();connectionFailure=nil;guard hasOwnerKey else{status="Credenziale anello non ancora configurata";return};desired=true;UserDefaults.standard.set(true,forKey:"ringWantsConnection");peripheral=device;device.delegate=self;central.stopScan();UserDefaults.standard.set(device.identifier.uuidString,forKey:"ringPeripheral");central.connect(device,options:[CBConnectPeripheralOptionNotifyOnDisconnectionKey:true]);status="Connessione…"
+        if device.state == .connected{centralManager(central,didConnect:device);return}
+        connectionTimeout=Task{try? await Task.sleep(nanoseconds:30_000_000_000);guard !Task.isCancelled,peripheral===device,!connected else{return};connectionFailure="Collegamento non completato entro 30 secondi. Avvicina l’anello e riprova.";lastConnectionError=connectionFailure;status=connectionFailure!;central.cancelPeripheralConnection(device)}
+    }
+    func disconnect(){connectionTimeout?.cancel();connectionFailure=nil;desired=false;UserDefaults.standard.set(false,forKey:"ringWantsConnection")
         guard let peripheral else{return}
         guard ready,!busy else{ready=false;central.cancelPeripheralConnection(peripheral);return}
         busy=true;Task{defer{ready=false;busy=false;central.cancelPeripheralConnection(peripheral)}
@@ -36,7 +43,7 @@ import Combine
         if central.state != .poweredOn {status=central.state == .unauthorized ? "Autorizza Bluetooth nelle impostazioni":"Bluetooth non disponibile";return}
         if desired,hasOwnerKey {
             if peripheral==nil,let text=UserDefaults.standard.string(forKey:"ringPeripheral"),let id=UUID(uuidString:text){peripheral=central.retrievePeripherals(withIdentifiers:[id]).first;peripheral?.delegate=self}
-            if let peripheral{central.connect(peripheral,options:nil)}
+            if let peripheral{connect(peripheral)}
         }
     }
     func centralManager(_ central:CBCentralManager,willRestoreState dict:[String:Any]){
@@ -44,10 +51,10 @@ import Combine
         if let values=dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral],let p=values.first {peripheral=p;p.delegate=self;desired=true;if p.state == .connected {connected=true;p.discoverServices([CBUUID(string:OuraWire.service)])}}
     }
     func centralManager(_ central:CBCentralManager,didDiscover peripheral:CBPeripheral,advertisementData:[String:Any],rssi RSSI:NSNumber){if !devices.contains(where:{$0.identifier==peripheral.identifier}){devices.append(peripheral)}}
-    func centralManager(_ central:CBCentralManager,didConnect peripheral:CBPeripheral){connected=true;ready=false;pairingAttempt=false;framer=OuraFramer();peripheral.delegate=self;peripheral.discoverServices([CBUUID(string:OuraWire.service)]);status="Verifica servizi anello…"}
-    func centralManager(_ central:CBCentralManager,didFailToConnect peripheral:CBPeripheral,error:Error?){lost()}
+    func centralManager(_ central:CBCentralManager,didConnect peripheral:CBPeripheral){connectionTimeout?.cancel();connectionFailure=nil;lastConnectionError=nil;connected=true;ready=false;pairingAttempt=false;framer=OuraFramer();peripheral.delegate=self;peripheral.discoverServices([CBUUID(string:OuraWire.service)]);status="Verifica servizi anello…"}
+    func centralManager(_ central:CBCentralManager,didFailToConnect peripheral:CBPeripheral,error:Error?){connectionFailure=error.map{"Connessione non riuscita: \($0.localizedDescription)"};lastConnectionError=connectionFailure;lost()}
     func centralManager(_ central:CBCentralManager,didDisconnectPeripheral peripheral:CBPeripheral,error:Error?){lost()}
-    private func lost(){connected=false;ready=false;writeCharacteristic=nil;notifyCharacteristic=nil;busy=false;authenticating=false;failWaiter(AppError.message("Collegamento anello interrotto"));status="Anello scollegato";if desired,let peripheral{Task{try? await Task.sleep(nanoseconds:5_000_000_000);if desired,central.state == .poweredOn{central.connect(peripheral,options:nil)}}}}
+    private func lost(){connectionTimeout?.cancel();connected=false;ready=false;writeCharacteristic=nil;notifyCharacteristic=nil;busy=false;authenticating=false;failWaiter(AppError.message("Collegamento anello interrotto"));status=connectionFailure ?? "Anello scollegato";if desired,let peripheral{Task{try? await Task.sleep(nanoseconds:5_000_000_000);if desired,central.state == .poweredOn{connect(peripheral)}}}}
     func peripheral(_ peripheral:CBPeripheral,didDiscoverServices error:Error?){guard error==nil,let service=peripheral.services?.first(where:{$0.uuid==CBUUID(string:OuraWire.service)})else{status="Servizio Oura non disponibile";return};peripheral.discoverCharacteristics([CBUUID(string:OuraWire.write),CBUUID(string:OuraWire.notify)],for:service)}
     func peripheral(_ peripheral:CBPeripheral,didDiscoverCharacteristicsFor service:CBService,error:Error?){
         guard error==nil else{status="Caratteristiche Bluetooth non disponibili";return}
@@ -131,6 +138,8 @@ import Combine
             try OuraWire.ack(await exchange(Data([0x2f,3,0x22,2,3]),tag:0x2f,extended:0x23),extended:0x23,feature:2)
             try OuraWire.ack(await exchange(Data([0x2f,3,0x26,2,2]),tag:0x2f,extended:0x27),extended:0x27,feature:2)
             ready=true;status="Collegato · attendi un IBI valido"
+            nextBatteryAt=Date().addingTimeInterval(60)
+            do{try await batteryRead();nextBatteryAt=Date().addingTimeInterval(300)}catch{status="Lettura batteria rinviata"}
             let more=try await historyPages(maxPages:32);nextHistoryAt=Date().addingTimeInterval(more ? 2:60)
         }catch{status=error.localizedDescription}
     }
@@ -157,15 +166,21 @@ import Combine
     }
     func maintenance(){
         let now=Date()
-        guard ready,!busy,now>=nextHistoryAt || now>=nextExerciseAt else{return}
-        let historyDue=now>=nextHistoryAt,exerciseDue=now>=nextExerciseAt && capabilities[3] != nil
+        guard ready,!busy,now>=nextHistoryAt || now>=nextExerciseAt || now>=nextBatteryAt else{return}
+        let historyDue=now>=nextHistoryAt,exerciseDue=now>=nextExerciseAt && capabilities[3] != nil,batteryDue=now>=nextBatteryAt
         nextExerciseAt=now.addingTimeInterval(60)
         if historyDue{nextHistoryAt=now.addingTimeInterval(60)}
+        if batteryDue{nextBatteryAt=now.addingTimeInterval(60)}
         busy=true
         Task{defer{busy=false}
+            if batteryDue{do{try await batteryRead();nextBatteryAt=Date().addingTimeInterval(300)}catch{status="Lettura batteria rinviata"}}
             if exerciseDue{do{try await exerciseRead()}catch{status="Lettura cardio attività rinviata"}}
             if historyDue{do{let more=try await historyPages(maxPages:32);nextHistoryAt=Date().addingTimeInterval(more ? 2:60)}catch{status=error.localizedDescription}}
         }
+    }
+    private func batteryRead()async throws{
+        let value=try OuraWire.battery(await exchange(Data([0x0c,0]),tag:0x0d,seconds:8))
+        let at=Date();batteryLevel=value.level;batteryAt=at;onBattery?(value.level,at)
     }
     func readExercise()async{guard ready,!busy else{return};busy=true;defer{busy=false};do{try await exerciseRead();nextExerciseAt=Date().addingTimeInterval(60)}catch{status=error.localizedDescription}}
     private func exerciseRead()async throws{

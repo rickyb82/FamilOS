@@ -4,12 +4,24 @@ import CommonCrypto
 struct OuraLive {
     var bpm:Int?;var ibi:Int?;var flags:Int;var state:Int;var validity:Int;var age:Int;var temperatureRaw:Int;var warnings:[String]
 }
+struct OuraBattery:Equatable {
+    var level:Int
+    var chargingProgressRaw:Int
+    var chargingRecommendationRaw:Int
+    var isCharging:Bool?{(0...100).contains(chargingProgressRaw) ? chargingProgressRaw>0:nil}
+}
 enum OuraWire {
     static let service="98ed0001-a541-11e4-b6a0-0002a5d5c51b"
     static let write="98ed0002-a541-11e4-b6a0-0002a5d5c51b", notify="98ed0003-a541-11e4-b6a0-0002a5d5c51b"
     static func complete(_ data:Data,minimum:Int,tag:UInt8,extended:UInt8?=nil)throws->[UInt8]{
         let b=[UInt8](data);guard b.count>=minimum,b[0]==tag,Int(b[1])+2==b.count else{throw AppError.message("Pacchetto anello incompleto")}
         if let extended, b.count<3 || b[2] != extended {throw AppError.message("Risposta anello inattesa")};return b
+    }
+    // GetBatteryLevel: 0c00 -> 0d03 [level, chargingProgress, recommendation].
+    static func battery(_ frame:Data)throws->OuraBattery{
+        let b=try complete(frame,minimum:5,tag:0x0d)
+        guard b.count==5,(0...100).contains(Int(b[2])) else{throw AppError.message("Livello batteria anello non valido")}
+        return OuraBattery(level:Int(b[2]),chargingProgressRaw:Int(b[3]),chargingRecommendationRaw:Int(b[4]))
     }
     static func firmware(_ frame:Data)throws->[Int]{let b=try complete(frame,minimum:20,tag:9);return b[2..<5].map(Int.init)}
     static func capabilities(_ frame:Data)throws->(Int,[Int:Int]){

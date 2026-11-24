@@ -14,7 +14,7 @@ struct RootView:View {
             SettingsView().tabItem{Label("Impostazioni",systemImage:"slider.horizontal.3")}
         }.tint(.teal).preferredColorScheme(.dark)
         .onOpenURL{url in Task{await model.openPairingURL(url)}}
-        .task{await model.refresh()}
+        .task{await model.refresh();await model.requestBatteryNotifications()}
         .onChange(of:scene){_,value in if value == .active{Task{await model.refresh()}}}
         .alert("Home Pulse",isPresented:Binding(get:{model.message != nil},set:{if !$0{model.message=nil}})){Button("OK"){model.message=nil}}message:{Text(model.message ?? "")}
     }
@@ -55,10 +55,17 @@ struct LiveCard:View{
     @EnvironmentObject var model:AppModel;@ObservedObject var ring:RingBridge
     var body:some View{Card(title:"Battito live"){
         HStack(alignment:.firstTextBaseline){Text(model.displayedBPM.map(String.init) ?? "—").font(.system(size:82,weight:.semibold,design:.rounded)).monospacedDigit();Text("BPM").font(.title3).foregroundStyle(.secondary);Spacer();Image(systemName:"heart.fill").foregroundStyle(.red).font(.title)}
+        HStack{
+            Label(model.batteryLevel.map{"Batteria anello: \($0)%"} ?? "Batteria anello: —",systemImage:(model.batteryLevel ?? 100)<=10 ? "battery.0percent":"battery.100percent")
+                .foregroundStyle((model.batteryLevel ?? 100)<=10 ? Color.orange:Color.secondary)
+            Spacer()
+            if let at=model.batteryAt{Text(at,style:.relative).font(.caption).foregroundStyle(.secondary)}
+        }.font(.subheadline)
         Label(ring.status,systemImage:ring.connected ? "antenna.radiowaves.left.and.right":"antenna.radiowaves.left.and.right.slash").font(.subheadline)
+        if let error=ring.lastConnectionError{Text(error+" Ritento automaticamente; puoi premere Scollega per fermare i tentativi.").font(.caption).foregroundStyle(.orange)}
         ForEach(model.warnings,id:\.self){Text($0).font(.caption).foregroundStyle(.orange)}
         if model.displayedBPM==nil{Text("Il valore appare solo con un IBI valido e recente.").font(.caption).foregroundStyle(.secondary)}
-        HStack{Button("Cerca anello"){ring.scan()}.buttonStyle(.borderedProminent);if ring.connected{Button("Scollega"){ring.disconnect()}.buttonStyle(.bordered)}}
+        HStack{Button("Cerca anello"){ring.scan()}.buttonStyle(.borderedProminent);if ring.connected || ring.status == "Connessione…"{Button("Scollega"){ring.disconnect()}.buttonStyle(.bordered)}}
         ForEach(ring.devices,id:\.identifier){device in Button(device.name ?? "Anello Oura"){ring.connect(device)}.buttonStyle(.bordered)}
         if ring.ready{Button("Scarica storico"){Task{await ring.downloadHistory()}}.disabled(ring.busy)}
         DisclosureGroup("Qualità e origine"){
@@ -202,6 +209,12 @@ struct SettingsView:View{
                 Button("Associa questo iPhone"){Task{if let url=URL(string:code),url.scheme=="familos-homepulse"{await model.openPairingURL(url)}else{await model.enroll(code:code,server:server)};code=""}}
                 Button("Scansiona QR",systemImage:"qrcode.viewfinder"){scanning=true}
             }
+        }
+        Section("Batteria anello"){
+            Text(model.batteryLevel.map{"Ultima lettura: \($0)%"} ?? "In attesa della prima lettura")
+            Text(model.batteryNotificationStatus).font(.caption)
+            Button("Abilita avviso al 10%"){Task{await model.requestBatteryNotifications()}}
+            Text("Un avviso al 10% o meno. Si riattiva dopo una lettura di ricarica almeno al 20%. Se l’anello è scollegato, il livello mostrato resta l’ultimo ricevuto.").font(.caption).foregroundStyle(.secondary)
         }
         Section("Profilo · nessun valore presunto"){
             TextField("Peso (kg)",value:$model.settings.profile.weight_kg,format:.number).keyboardType(.decimalPad)
