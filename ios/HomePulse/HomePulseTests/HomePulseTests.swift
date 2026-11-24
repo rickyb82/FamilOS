@@ -98,6 +98,16 @@ final class HomePulseTests:XCTestCase {
         var first=BatteryAlertState();XCTAssertTrue(first.observe(5))
     }
 
+    func testChargingWakeOnlyRunsOffscreenOnChargerAndWhenIdle(){
+        func delay(_ foreground:Bool=false,_ desired:Bool=true,_ ready:Bool=true,_ busy:Bool=false,_ progress:Int?=53)->TimeInterval?{
+            ChargeCheckPolicy.delay(foreground:foreground,desired:desired,ready:ready,busy:busy,progress:progress)
+        }
+        XCTAssertEqual(delay(),60);XCTAssertEqual(delay(false,true,true,false,100),60)
+        XCTAssertNil(delay(true));XCTAssertNil(delay(false,false));XCTAssertNil(delay(false,true,false))
+        XCTAssertNil(delay(false,true,true,true));XCTAssertNil(delay(false,true,true,false,0))
+        XCTAssertNil(delay(false,true,true,false,nil));XCTAssertNil(delay(false,true,true,false,255))
+    }
+
     func testFullBatteryAlertOnceAcrossRestartAndChargeFluctuation()throws{
         var alert=BatteryFullAlertState()
         XCTAssertFalse(alert.observe(level:99,progress:99))

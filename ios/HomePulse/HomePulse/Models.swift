@@ -145,6 +145,12 @@ enum RingChargeState:String {
     var label:String{switch self{case .idle:return "Non in carica";case .charging:return "In carica";case .full:return "Carica completa"}}
     var isCharging:Bool{self != .idle}
 }
+enum ChargeCheckPolicy {
+    static func delay(foreground:Bool,desired:Bool,ready:Bool,busy:Bool,progress:Int?)->TimeInterval?{
+        guard !foreground,desired,ready,!busy,RingChargeState(progress:progress)?.isCharging == true else{return nil}
+        return 60
+    }
+}
 struct RingBatterySnapshot:Codable {var level:Int;var at:Date;var chargingProgressRaw:Int?=nil}
 /// One alert per discharge. Hysteresis prevents repeated alerts around 10%.
 struct BatteryAlertState:Codable {

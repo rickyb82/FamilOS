@@ -14,8 +14,8 @@ struct RootView:View {
             SettingsView().tabItem{Label("Impostazioni",systemImage:"slider.horizontal.3")}
         }.tint(.teal).preferredColorScheme(.dark)
         .onOpenURL{url in Task{await model.openPairingURL(url)}}
-        .task{model.api.setForeground(scene == .active);await model.refresh();await model.requestBatteryNotifications()}
-        .onChange(of:scene){_,value in model.api.setForeground(value == .active);if value == .active{Task{await model.refresh()}}}
+        .task{model.ring.setForeground(scene == .active);model.api.setForeground(scene == .active);await model.refresh();await model.requestBatteryNotifications()}
+        .onChange(of:scene){_,value in model.ring.setForeground(value == .active);model.api.setForeground(value == .active);if value == .active{Task{await model.refresh()}}}
         .alert("Home Pulse",isPresented:Binding(get:{model.message != nil},set:{if !$0{model.message=nil}})){Button("OK"){model.message=nil}}message:{Text(model.message ?? "")}
     }
 }

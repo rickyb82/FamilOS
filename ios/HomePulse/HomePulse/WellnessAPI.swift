@@ -98,7 +98,7 @@ final class WellnessAPI:NSObject,URLSessionDataDelegate,URLSessionTaskDelegate,@
             guard let batch=try store.prepareBatch(limit:500,prioritizeLive:true) else{finishPreparation();status("Live collegato a FamilOS");retry(after:1);return}
             let bytes=try JSONEncoder().encode(batch)
             var request=try eventRequest(credentials);request.httpBody=bytes
-            let execution=LiveUploadExecution()
+            let execution=ShortBackgroundExecution(name:"HomePulse live upload")
             let task=live.dataTask(with:request){[weak self] data,response,error in
                 defer{Task{@MainActor in execution.finish()}}
                 guard let self else{return};var delay=3.0
@@ -157,11 +157,11 @@ final class WellnessAPI:NSObject,URLSessionDataDelegate,URLSessionTaskDelegate,@
 
 
 /// Protects one short network request from suspension; no perpetual runtime.
-@MainActor private final class LiveUploadExecution {
+@MainActor final class ShortBackgroundExecution {
     private var identifier:UIBackgroundTaskIdentifier = .invalid
-    init(){
+    init(name:String){
         if UIApplication.shared.applicationState != .active{
-            identifier=UIApplication.shared.beginBackgroundTask(withName:"HomePulse live upload"){[weak self] in
+            identifier=UIApplication.shared.beginBackgroundTask(withName:name){[weak self] in
                 Task{@MainActor in self?.finish()}
             }
         }
