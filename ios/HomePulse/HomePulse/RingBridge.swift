@@ -9,6 +9,8 @@ import Combine
     @Published var apiVersion:[Int]=[];@Published var capabilities:[Int:Int]=[:]
     @Published var exerciseRaw:JSONValue = .null
     @Published var batteryLevel:Int?;@Published var batteryAt:Date?
+    @Published var batteryStatus="Batteria non ancora letta"
+    private let diagnosticsURL:URL?;private var batteryAttemptAt:Date?;private var batteryReplyHex:String?
     @Published var lastConnectionError:String?
     var onBattery:((Int,Date)->Void)?
     var onLive:((OuraLive,Date)->Void)?;var onHistory:((Data)->Void)?;var onJournal:(()->Void)?
@@ -23,7 +25,7 @@ import Combine
     private var sportKey:String{"sport.control.\(logicalRing ?? "unbound")"}
     private var nextHistoryAt=Date.distantPast;private var nextExerciseAt=Date.distantPast;private var nextBatteryAt=Date.distantPast
     private var pageRecords:[Data]?;private let store:EventStore
-    init(store:EventStore){self.store=store;super.init();logicalRing=UserDefaults.standard.string(forKey:"ringLogicalID");desired=UserDefaults.standard.bool(forKey:"ringWantsConnection");central=CBCentralManager(delegate:self,queue:.main,options:[CBCentralManagerOptionRestoreIdentifierKey:"com.familos.homepulse.central",CBCentralManagerOptionShowPowerAlertKey:true])}
+    init(store:EventStore,diagnosticsURL:URL?=nil){self.store=store;self.diagnosticsURL=diagnosticsURL;super.init();logicalRing=UserDefaults.standard.string(forKey:"ringLogicalID");desired=UserDefaults.standard.bool(forKey:"ringWantsConnection");central=CBCentralManager(delegate:self,queue:.main,options:[CBCentralManagerOptionRestoreIdentifierKey:"com.familos.homepulse.central",CBCentralManagerOptionShowPowerAlertKey:true])}
     func configure(logicalRing:String){self.logicalRing=logicalRing;UserDefaults.standard.set(logicalRing,forKey:"ringLogicalID")}
     var hasOwnerKey:Bool {guard let id=logicalRing else{return false};return SecureStore.read("ring.\(id)")?.count==16}
     func scan(){guard central.state == .poweredOn else{status="Attiva il Bluetooth sull’iPhone";return};guard hasOwnerKey else{status="Attendi l’associazione dell’anello da FamilOS";return};devices=[];central.scanForPeripherals(withServices:[CBUUID(string:OuraWire.service)],options:nil);status="Ricerca anello…";Task{try? await Task.sleep(nanoseconds:15_000_000_000);central.stopScan()}}
@@ -95,6 +97,12 @@ import Combine
     }
     private func receive(_ frame:Data){
         let b=[UInt8](frame)
+        if b.first==0x0d,ready {
+            batteryReplyHex=Data(frame.prefix(5)).hex
+            do{let value=try OuraWire.battery(frame);let at=Date();batteryLevel=value.level;batteryAt=at;batteryStatus="Batteria ricevuta: \(value.level)%";onBattery?(value.level,at)}
+            catch{batteryStatus=error.localizedDescription}
+            writeBatteryDiagnostic()
+        }
         if b.count>=3,b[0]==0x2f,b[2]==0x28,b.count>=4,b[3]==2,ready,!apiVersion.isEmpty {
             if let live=try? OuraWire.live(frame,api:apiVersion){onLive?(live,Date())}
             return
@@ -183,8 +191,18 @@ import Combine
         do{try await batteryRead();nextBatteryAt=Date().addingTimeInterval(300)}catch{status="Lettura batteria da riprovare";nextBatteryAt=Date().addingTimeInterval(10)}
     }
     private func batteryRead()async throws{
-        let value=try OuraWire.battery(await exchange(Data([0x0c,0]),tag:0x0d,seconds:8))
-        let at=Date();batteryLevel=value.level;batteryAt=at;onBattery?(value.level,at)
+        batteryAttemptAt=Date();batteryStatus="Lettura batteria in corso…";writeBatteryDiagnostic()
+        do{_ = try OuraWire.battery(await exchange(Data([0x0c,0]),tag:0x0d,seconds:8))}
+        catch{batteryStatus=error.localizedDescription;writeBatteryDiagnostic();throw error}
+    }
+    private func writeBatteryDiagnostic(){
+        guard let diagnosticsURL else{return}
+        // Battery exchange only: no health samples, ring IDs or credentials.
+        var value:[String:Any]=["at":Date().timeIntervalSince1970,"status":batteryStatus,"connected":connected,"ready":ready,"busy":busy]
+        if let batteryAttemptAt{value["attempt_at"]=batteryAttemptAt.timeIntervalSince1970}
+        if let batteryReplyHex{value["battery_reply_hex"]=batteryReplyHex}
+        if let batteryLevel{value["battery_percentage"]=batteryLevel}
+        if let data=try? JSONSerialization.data(withJSONObject:value){try? data.write(to:diagnosticsURL,options:[.atomic,.completeFileProtectionUntilFirstUserAuthentication])}
     }
     func readExercise()async{guard ready,!busy else{return};busy=true;defer{busy=false};do{try await exerciseRead();nextExerciseAt=Date().addingTimeInterval(60)}catch{status=error.localizedDescription}}
     private func exerciseRead()async throws{

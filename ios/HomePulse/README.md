@@ -70,6 +70,8 @@ Gli endpoint dopo l’associazione usano Bearer token. Non sono necessarie API c
 
 La percentuale viene letta con `0c00`, risposta `0d03` con livello, progresso di carica e raccomandazione distinti. Si richiede dopo l’autenticazione, quindi ogni 5 minuti quando il collegamento e i risvegli iOS lo consentono; un errore rinvia il tentativo di 60 secondi. La risposta originale rimane nel journal e segue la normale sincronizzazione. Percentuale e data dell’ultima lettura rimangono visibili anche dopo lo scollegamento. Nessuna risposta significa valore assente.
 
+Il Gen3 può aggiungere campi al pacchetto batteria: si leggono i primi tre byte del payload dopo aver verificato il framing completo, senza imporre una lunghezza fissa di cinque byte. Le risposte valide arrivate oltre il timeout aggiornano comunque la percentuale. Lo stato della lettura è nelle impostazioni.
+
 Una notifica locale scatta alla prima lettura al 10% o meno, se autorizzata. Lo stato persistente evita avvisi ripetuti dopo la riapertura dell’app; una successiva lettura almeno al 20% riattiva l’avviso. La richiesta del permesso compare all’apertura; il comando nelle Impostazioni permette di ricontrollarlo. La notifica non richiede un servizio push remoto.
 
 Le connessioni Bluetooth pendenti vengono annullate dopo 30 secondi e riprovate automaticamente. L’ultimo errore resta visibile fino a una connessione riuscita; Scollega interrompe i tentativi. I cambiamenti di stato vengono archiviati come eventi `device_status` senza credenziali.

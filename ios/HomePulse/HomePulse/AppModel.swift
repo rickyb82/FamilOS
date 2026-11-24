@@ -23,7 +23,7 @@ import UserNotifications
         self.store=store
         settings=store.load(LocalSettings.self,key:"settings") ?? LocalSettings()
         api=WellnessAPI(store:store,folder:folder.appendingPathComponent("uploads"))
-        ring=RingBridge(store:store);gym=GymDetection(store:store)
+        ring=RingBridge(store:store,diagnosticsURL:folder.appendingPathComponent("battery-status.json"));gym=GymDetection(store:store)
         enrolled=SecureStore.credentials() != nil
         if let active=store.load(WorkoutSession.self,key:"activeWorkout"),["running","paused"].contains(active.state){current=active}
         sessions=store.sessions();readings=store.readings();metrics=store.metrics()

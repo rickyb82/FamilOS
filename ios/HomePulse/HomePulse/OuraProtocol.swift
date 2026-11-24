@@ -17,10 +17,11 @@ enum OuraWire {
         let b=[UInt8](data);guard b.count>=minimum,b[0]==tag,Int(b[1])+2==b.count else{throw AppError.message("Pacchetto anello incompleto")}
         if let extended, b.count<3 || b[2] != extended {throw AppError.message("Risposta anello inattesa")};return b
     }
-    // GetBatteryLevel: 0c00 -> 0d03 [level, chargingProgress, recommendation].
+    // GetBatteryLevel: first three payload bytes are level, charge progress and
+    // recommendation. Gen3 can append fields; keep the complete frame in the journal.
     static func battery(_ frame:Data)throws->OuraBattery{
         let b=try complete(frame,minimum:5,tag:0x0d)
-        guard b.count==5,(0...100).contains(Int(b[2])) else{throw AppError.message("Livello batteria anello non valido")}
+        guard (0...100).contains(Int(b[2])) else{throw AppError.message("Livello batteria anello non valido")}
         return OuraBattery(level:Int(b[2]),chargingProgressRaw:Int(b[3]),chargingRecommendationRaw:Int(b[4]))
     }
     static func firmware(_ frame:Data)throws->[Int]{let b=try complete(frame,minimum:20,tag:9);return b[2..<5].map(Int.init)}

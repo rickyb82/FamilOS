@@ -273,9 +273,13 @@ final class OuraBatteryProtocolTests:XCTestCase {
         XCTAssertEqual(full.chargingProgressRaw,100)
     }
     func testBatteryMissingWrongLengthAndInvalidPercentageAreRejected(){
-        for hex in ["0d020a00","0d040a000100","0c030a0001","0d037f0000","0d03ff0000"]{
+        for hex in ["0d020a00","0d040a0001","0c030a0001","0d037f0000","0d03ff0000"]{
             XCTAssertThrowsError(try OuraWire.battery(Data(hex:hex)!))
         }
+    }
+    func testBatteryExtendedGen3PayloadRetainsPercentage(){
+        XCTAssertEqual(try OuraWire.battery(Data(hex:"0d06330000000000")!).level,51)
+        XCTAssertEqual(try OuraWire.battery(Data(hex:"0d040a000100")!).level,10)
     }
     func testBatteryUnknownChargeProgressNeverClaimsCharging()throws{
         let value=try OuraWire.battery(Data(hex:"0d0332ff02")!)

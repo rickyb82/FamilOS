@@ -72,6 +72,7 @@ struct RingSettingsControls:View{
     @EnvironmentObject var model:AppModel;@ObservedObject var ring:RingBridge
     var body:some View{VStack(alignment:.leading,spacing:12){
         Label(ring.status,systemImage:ring.connected ? "antenna.radiowaves.left.and.right":"antenna.radiowaves.left.and.right.slash").font(.subheadline)
+        Text(ring.batteryStatus).font(.caption).foregroundStyle(.secondary)
         if let error=ring.lastConnectionError{Text(error+" Ritento automaticamente; puoi premere Scollega per fermare i tentativi.").font(.caption).foregroundStyle(.orange)}
         ForEach(model.warnings,id:\.self){Text($0).font(.caption).foregroundStyle(.orange)}
         HStack{Button("Cerca anello"){ring.scan()}.buttonStyle(.borderedProminent);if ring.connected || ring.status == "Connessione…"{Button("Scollega"){ring.disconnect()}.buttonStyle(.bordered)}}
