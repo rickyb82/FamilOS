@@ -1,0 +1,220 @@
+{
+  "target": {
+    "package": "com.ouraring.oura",
+    "version_name": "7.10.0",
+    "native_version": [
+      3,
+      6,
+      2
+    ],
+    "architecture": "linux/amd64"
+  },
+  "static_integrity": {
+    "original_sha256": "a4e8a213f87283cae183f70ab0ed17d0e30aa259868d757a1385189d1a43ca08",
+    "compat_sha256": "163e10037c93ef70bd939641e0d391441e74cb4dd339946cd0a5421b91703f21",
+    "architecture": "x86_64",
+    "native_version_expected": [
+      3,
+      6,
+      2
+    ],
+    "changed_byte_count": 32,
+    "algorithm_sections": {
+      ".rodata": {
+        "unchanged": true,
+        "sha256": "2b19d64b81ef5e8f8ab2bedc965e803d8488d5afcb60efe55fc87a124d857f5d"
+      },
+      ".text": {
+        "unchanged": true,
+        "sha256": "b8693195d833425ab06030d7e67e592f28f7c4e0d1008c2ca404b1cbd0607187"
+      }
+    },
+    "limitations": [
+      "Minimal Bionic shim; FILE/stdio not ported",
+      "Not clinical validation or bit-exact Android equivalence"
+    ]
+  },
+  "abi_evidence": {
+    "init_arguments": 12,
+    "sysv_registers_first_six": [
+      "persistent",
+      "persistent_bytes",
+      "synthetic_mac6",
+      "raw_callback1",
+      "raw_callback2",
+      "raw_callback3"
+    ],
+    "sysv_stack_last_six": [
+      "sleep_callback",
+      "activity_callback1",
+      "activity_callback2",
+      "output_ref_null",
+      "trace_callback_null",
+      "trace_ref_null"
+    ],
+    "init_source": "JNI0xbdbb2..0xbdbf9 and ecore_cpp_init0xeec40",
+    "mapping_source": "JNI0xbfb44..0xbfb79, resolve_ring_times0x107987..0x1079b1, JNIcallback0xbfc8e..0xbfcd1",
+    "mapping_callback": "void(context,uint64_utc_ms,Record20 by value on stack)",
+    "record20_size": 20,
+    "record20_alignment": 4,
+    "timepair_return": "uint32 ticks@0,uint64 UTCms@8; returned in RAX/RDX",
+    "spo2_source": "JNIcallback0xbead0; UTC@8, average@24 and qualityfloat@36",
+    "spo2_prefix_size": 40,
+    "user_info_zero_bytes": 28,
+    "synthetic_mac": true,
+    "trace_disabled": true,
+    "no_internal_function_addresses_called": true
+  },
+  "runtime": {
+    "docker_engine": "29.8.1",
+    "official_base": "python:3.12-slim-bookworm@sha256:82836454a795d9d75549a9e157fd08dbac6c383292cf89e99f4248a97ce6b2ff",
+    "amd64_base_config": "sha256:1475c4f5b6bcb7d35e57661d6f5d7429ec4041275633c15f2b49350ac898276d",
+    "built_image_local": "homepulse-core-amd64:local",
+    "built_image_config": "sha256:b3882aa73e2341e75c1366f2eb3da4c088d804681d6c7b3e87cdd5df154ff181",
+    "shim_gcc_sha256": "fb6d6af1ead191679daa36ee784034509cbe6a029f4d4fec5e91ed26f524ac32",
+    "shim_zig_initial_sha256": "e41abc8d5fc9283b7328eb7a5ec3517dc1d6791ae44d4c37755045974790230f",
+    "native_library_in_image": false,
+    "native_library_in_deliverable": false
+  },
+  "isolation": {
+    "initial_witness_network": "none",
+    "read_only_root": true,
+    "cap_drop": "ALL",
+    "no_new_privileges": true,
+    "nonroot": true,
+    "pids_limit": 64,
+    "memory": "512m",
+    "cpus": 1,
+    "core_dump": false,
+    "host_timeout_seconds": 30,
+    "mounts": "exact library,shim/script/fixture files RO and private output only RW",
+    "docker_socket_mounted": false,
+    "http_network": "private internal Docker network only",
+    "native_child_network": "mandatory seccomp deny sockets and io_uring; no exec/fork/clone; x32 rejected",
+    "child_environment": "explicit minimal dictionary, no service token/LD_PRELOAD/credentials",
+    "http_offline_witness_flag_supported": false
+  },
+  "observed": {
+    "load_and_version_only": {
+      "version": [
+        3,
+        6,
+        2
+      ],
+      "succeeded": true
+    },
+    "synthetic": {
+      "record_count": 16,
+      "mapping_complete": true,
+      "record_identity_verified": true,
+      "process_true": true,
+      "deinit_returned": true,
+      "spo2_output_count": 0,
+      "quality_validated": false,
+      "final_image_shim_gcc_succeeded": true
+    },
+    "authorized_sensor_replay": {
+      "source_file_sha256": "104ada8a1dcd32ac907b9328986223c3dcadd61e83552b7bdfc61ee001d3ff73",
+      "canonical_http_input_sha256": "ba54cd4ce0ebdcbc6ef0ec30054e5e9297e7aa08c413a70bc43c9e1058f1c436",
+      "input_records": 1962,
+      "processed_records": 1957,
+      "excluded_initial_debug_metadata": 5,
+      "mapping_complete": true,
+      "record_identity_verified": true,
+      "process_true": true,
+      "deinit_returned": true,
+      "averages": [
+        98,
+        97,
+        97,
+        97
+      ],
+      "qualities": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "temperature_dates": 51,
+      "motion_steps_dates": 92,
+      "breathing_record_in_this_capture": false,
+      "replayed_with_final_image_gcc_shim": true
+    },
+    "http_image": {
+      "health": {
+        "configured": true,
+        "architecture": "x86_64",
+        "expected_version": [
+          3,
+          6,
+          2
+        ],
+        "library_sha256": "163e10037c93ef70bd939641e0d391441e74cb4dd339946cd0a5421b91703f21",
+        "shim_sha256": "fb6d6af1ead191679daa36ee784034509cbe6a029f4d4fec5e91ed26f524ac32",
+        "native_loaded_in_http_parent": false,
+        "seccomp_required_for_process": true
+      },
+      "http_process_status": 502,
+      "process_status": "worker_error",
+      "process_true": false,
+      "native_error": "[Errno 22] Native child seccomp could not be installed",
+      "no_measurement_promoted": true
+    },
+    "unit_tests_passed": 14,
+    "original_apkm_extraction_hash_verified": true,
+    "private_compose_config_validated": true,
+    "owned_test_containers_remaining": 0,
+    "native_ubuntu_loopback_http": {
+      "verified_at": "2026-11-24T13:10:17.697329+00:00",
+      "platform": "Ubuntu Linux amd64 native",
+      "transport": "loopback HTTP",
+      "seccomp_required": true,
+      "synthetic_input_records": 16,
+      "process_true": true,
+      "deinit_returned": true,
+      "mapping_complete": true,
+      "record_identity_verified": true,
+      "token_enforced": true,
+      "native_version": [
+        3,
+        6,
+        2
+      ],
+      "synthetic_spo2_output_count": 0,
+      "no_personal_data_sent": true,
+      "no_persistent_service_installed": true,
+      "library_sha256": "163e10037c93ef70bd939641e0d391441e74cb4dd339946cd0a5421b91703f21"
+    },
+    "orbita_installer_mock_tests_passed": 14
+  },
+  "limits": {
+    "input_records": 65536,
+    "input_body_bytes": 4000000,
+    "result_bytes": 32000000,
+    "native_child_seconds": 30,
+    "unresolved_physiological_records": "fail-closed; not dropped",
+    "medical_validation_claimed": false,
+    "bit_exact_android_equivalence_claimed": false,
+    "general_bionic_file_stdio_support": false,
+    "live_spo2_claimed": false,
+    "profile_dependent_metrics_enabled": false,
+    "production_http_calculation_verified": true,
+    "remote_server_changed": false,
+    "remaining": "Native Ubuntu loopback HTTP with mandatory seccomp and synthetic data has succeeded. Persistent Orbita deployment, Docker readiness and owner bootstrap remain separate reviewed installer steps; no persistent service was installed by the witness.",
+    "persistent_production_deployment_verified": false
+  },
+  "source_sha256": {
+    "worker.py": "8c11f9b90f70106ddb1c0a996fd48645288301b726129bacccb675e2fdbadacc",
+    "sandbox.py": "1376f28e7757a7eb743e08e0dd90e55d4679cc63d041755ceea52b002890108d",
+    "service.py": "9c4560cf6934ba598584e7fe0a4634f60936ade2684068330cff3e8d86cc5237",
+    "prepare_native.py": "8561de5f0c6420f3f623d56846514e4e57b742005e3b7d9009ab17811e313739",
+    "bionic_shim.c": "ce3f3a736135aaf0e521943f1b2d1df71d808930ff7181d6d54b5b018500fe09",
+    "Dockerfile": "513a3e3106e0f2dfbfa84d15220e23da0c9e771de95e01ce601d005259a42960",
+    "compose.private.yml": "c13e7b22b17714b133620b1c740e2bda64ab1e769308b7623911cd0f91761686",
+    "synthetic_fixture.json": "df17304071cab238340bc36ab6c0adf481a0e7848edd3b51b42b9aa34d46286f",
+    "test_service.py": "ec1549d5573fc531370074d5614aed8fa79e2ccb86f5fcb09e3f425afb22d8d7",
+    "README.md": "d750a1c6b561b615b5c9357767d11139a43b8bab27475d21c4094363c964cd82",
+    "test_orbita_install.py": "cc08aaabc4fb606206dec668c367e37c137f9d917a36785a8bd942ad22b25e8c",
+    "../updater/orbita_support/wellness.py": "8425b3d1a448e20598d8de1432b2b6cb58b4f20c30a678117b695ce6fcc945cc"
+  }
+}

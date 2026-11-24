@@ -28,6 +28,8 @@ services:
     - TURN_URLS=${TURN_URLS:-}
     - TURN_SECRET=${TURN_SECRET:-}
     - STUN_URLS=${STUN_URLS:-}
+    - HOME_PULSE_CORE_URL=http://homepulse-core:8081
+    - HOME_PULSE_CORE_TOKEN=${HOME_PULSE_CORE_TOKEN:-}
     volumes:
     - ./data:/data
     - ./mcp_servers.json:/app/mcp_servers.json:ro
@@ -47,10 +49,38 @@ services:
     - default
     - sandbox_net
     - browser_net
+    - homepulse_net
     depends_on:
     - sandbox
     extra_hosts:
     - host.docker.internal:host-gateway
+  homepulse-core:
+    build: ./extras/homepulse-core
+    platform: linux/amd64
+    profiles: [wellness]
+    restart: unless-stopped
+    user: '10001:10001'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 512m
+    cpus: 1
+    ulimits:
+      core: 0
+    tmpfs:
+    - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    volumes:
+    - type: bind
+      source: ./private/homepulse/libappecore-compat.so
+      target: /native/libappecore-compat.so
+      read_only: true
+      bind:
+        create_host_path: false
+    environment:
+    - HOME_PULSE_CORE_TOKEN=${HOME_PULSE_CORE_TOKEN:-}
+    expose: ['8081']
+    networks: [homepulse_net]
   browser:
     build: ./extras/browser
     profiles: [browser]
@@ -436,6 +466,8 @@ services:
         max-size: 2m
         max-file: '2'
 networks:
+  homepulse_net:
+    internal: true
   browser_net:
     internal: true
   default: null

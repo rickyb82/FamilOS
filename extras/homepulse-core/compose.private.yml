@@ -1,0 +1,30 @@
+# Merge into the deployment with the authenticated backend as caller.
+# Do not publish a host port. No Docker socket, home, keys or profile mounts.
+services:
+  homepulse-core:
+    image: homepulse-core:local
+    build: .
+    platform: linux/amd64
+    user: "${HOME_PULSE_CORE_UID:-10001}:${HOME_PULSE_CORE_GID:-10001}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 512m
+    cpus: 1
+    ulimits:
+      core: 0
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+    volumes:
+      - type: bind
+        source: ${HOME_PULSE_NATIVE_LIBRARY:?Prepare your private amd64 library first}
+        target: /native/libappecore-compat.so
+        read_only: true
+    environment:
+      HOME_PULSE_CORE_TOKEN: ${HOME_PULSE_CORE_TOKEN:-}
+    expose: ["8081"]
+    networks: [homepulse_net]
+networks:
+  homepulse_net:
+    internal: true

@@ -1,0 +1,481 @@
+"""Profile-private, durable workout and raw sensor storage.
+
+Acknowledgement follows the transaction committing the original event and its
+projections. Arrival time never replaces source acquisition time. No radio,
+owner-key inference, destructive ring commands or family-wide health sharing.
+"""
+from __future__ import annotations
+
+import base64
+from contextlib import contextmanager
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import secrets
+import sqlite3
+import stat
+import threading
+import time
+import uuid
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+from .protocol import OuraProtocolError, parse_live
+from .history import describe_raw_record, split_history_packet
+from .activity import parse_exercise_latest
+from .motion import parse_motion_record, parse_activity_record
+from .breathing import decode_breathing_record
+from .workout import validate_profile, validate_plan, composition, schedule, energy_for_interval
+
+
+class StoreError(ValueError):
+    pass
+
+
+class ConflictError(StoreError):
+    pass
+
+
+def _json(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False)
+
+
+def _finite(value, low=0, high=None):
+    if type(value) not in (int, float) or not math.isfinite(value) or value < low or high is not None and value > high:
+        raise StoreError('Valore numerico non valido')
+    return value
+
+
+def _identity(value):
+    if not isinstance(value, str) or not value or len(value) > 200 or any(ord(c) < 32 for c in value):
+        raise StoreError('Identificatore non valido')
+    return value
+
+
+ALLOWED_ACTIVITIES = [
+    {'id':65535,'name':'Altro'}, {'id':14,'name':'Camminata'},
+    {'id':12,'name':'Corsa'}, {'id':5,'name':'Ciclismo'},
+    {'id':8,'name':'Allenamento di forza'}, {'id':10,'name':'Pilates'},
+    {'id':15,'name':'Yoga'},
+]
+
+
+def defaults():
+    return {'profile':{**validate_profile({}), 'resting_hr':None},
+            'config':{'work':40,'rest':20,'rounds':8,'hrmax':None,'plan':[], 'activity_name':None,'activity_id':None},
+            'weekly_schedule':[],
+            'auto_detection':{'enabled':False,'gym':{'id':'serendip-prato','name':'Serendip Prato',
+                'address':'Via Giuseppe Valentini 20, 59100 Prato, Italia', 'latitude':None,'longitude':None,'radius_m':150},
+                'heart_rate_delta_bpm':15,'sustain_seconds':30,'cooldown_seconds':3600}}
+
+
+def validate_settings(value, previous=None):
+    if not isinstance(value, dict):
+        raise StoreError('Impostazioni non valide')
+    merged={**(previous or defaults()), **value}
+    if set(merged) - {'profile','config','weekly_schedule','auto_detection'}:
+        raise StoreError('Impostazione sconosciuta')
+    if any(not isinstance(merged.get(key),dict) for key in ('profile','config','auto_detection')):
+        raise StoreError('Profilo, scheda o rilevamento non validi')
+    profile=validate_profile(merged['profile'])
+    resting=merged['profile'].get('resting_hr')
+    if resting is not None:_finite(resting,20,200)
+    profile['resting_hr']=resting
+    cfg={**defaults()['config'], **merged['config']}
+    cfg['plan']=validate_plan(cfg.get('plan',[]))
+    for key,low,high in [('work',5,3600),('rest',0,3600),('rounds',1,100)]:
+        if type(cfg[key]) is not int or not low <= cfg[key] <= high:raise StoreError('Parametro scheda non valido')
+    if cfg['hrmax'] is not None:_finite(cfg['hrmax'],80,240)
+    if cfg['activity_name'] is not None:
+        if not isinstance(cfg['activity_name'],str) or len(cfg['activity_name'])>80:raise StoreError('Nome attività non valido')
+        cfg['activity_name']=cfg['activity_name'].strip() or None
+    if cfg['activity_id'] is not None and (type(cfg['activity_id']) is not int or not 0 <= cfg['activity_id'] <= 65535):
+        raise StoreError('Identificatore attività non valido')
+    schedule(0,**{k:cfg[k] for k in ('work','rest','rounds','plan')})
+    weekly=merged['weekly_schedule']
+    if not isinstance(weekly,list) or len(weekly)>100:raise StoreError('Calendario non valido')
+    normalized=[]
+    for entry in weekly:
+        if not isinstance(entry,dict) or type(entry.get('weekday')) is not int or not 1 <= entry['weekday'] <= 7:
+            raise StoreError('Giorno del calendario non valido')
+        try:
+            start=datetime.strptime(entry['start'],'%H:%M').time()
+            end=datetime.strptime(entry['end'],'%H:%M').time()
+            zone=ZoneInfo(entry.get('timezone','Europe/Rome'))
+        except (KeyError,TypeError,ValueError):raise StoreError('Orario o fuso del calendario non valido') from None
+        if end <= start:raise StoreError('Fine sessione precedente all’inizio')
+        normalized.append({'id':_identity(entry.get('id') or uuid.uuid4().hex),'weekday':entry['weekday'],
+            'start':start.strftime('%H:%M'),'end':end.strftime('%H:%M'),'timezone':str(zone),
+            'label':str(entry.get('label','Palestra'))[:120]})
+    auto={**defaults()['auto_detection'],**merged.get('auto_detection',{})}
+    if type(auto['enabled']) is not bool:raise StoreError('Rilevamento automatico non valido')
+    gym={**defaults()['auto_detection']['gym'],**auto.get('gym',{})}
+    for key in ('id','name','address'):
+        if not isinstance(gym[key],str) or not 1 <= len(gym[key]) <= 300:raise StoreError('Palestra non valida')
+    if gym['latitude'] is not None:_finite(gym['latitude'],-90,90)
+    if gym['longitude'] is not None:_finite(gym['longitude'],-180,180)
+    _finite(gym['radius_m'],25,2000)
+    for key,low,high in [('heart_rate_delta_bpm',1,100),('sustain_seconds',5,600),('cooldown_seconds',60,86400)]:
+        _finite(auto[key],low,high)
+    auto['gym']=gym
+    return {'profile':profile,'config':cfg,'weekly_schedule':normalized,'auto_detection':auto}
+
+
+def occurrences(entries, now=None, days=14):
+    now=time.time() if now is None else now
+    values=[]
+    for item in entries:
+        zone=ZoneInfo(item['timezone'])
+        today=datetime.fromtimestamp(now,zone).date()
+        for offset in range(days+1):
+            date=today+timedelta(days=offset)
+            if date.isoweekday()!=item['weekday']:continue
+            start=datetime.combine(date,datetime.strptime(item['start'],'%H:%M').time(),zone)
+            end=datetime.combine(date,datetime.strptime(item['end'],'%H:%M').time(),zone)
+            if end.timestamp()<now:continue
+            values.append({**item,'date':date.isoformat(),'starts_at':start.timestamp(),'ends_at':end.timestamp(),
+                           'duration_minutes':(end.timestamp()-start.timestamp())/60})
+    return sorted(values,key=lambda item:item['starts_at'])
+
+
+class HomePulseStore:
+    def __init__(self, base:Path, encrypt=lambda value:value, decrypt=lambda value:value):
+        self.base=Path(base)
+        if self.base.is_symlink():raise StoreError('Percorso archivio non valido')
+        self.base.mkdir(parents=True,exist_ok=True,mode=0o700)
+        self.path=self.base/'wellness.sqlite3'
+        if self.path.is_symlink():raise StoreError('Archivio non valido')
+        self.encrypt,self.decrypt=encrypt,decrypt
+        self.lock=threading.RLock()
+        fd=os.open(self.path,os.O_RDWR|os.O_CREAT|getattr(os,'O_NOFOLLOW',0),0o600);os.close(fd)
+        os.chmod(self.path,0o600)
+        with self.connection() as db:
+            db.executescript('''
+            CREATE TABLE IF NOT EXISTS settings(owner_id TEXT PRIMARY KEY,value TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS pairings(code_hash TEXT PRIMARY KEY,owner_id TEXT NOT NULL,expires_at REAL NOT NULL,used INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY,owner_id TEXT NOT NULL,name TEXT NOT NULL,token_hash TEXT NOT NULL UNIQUE,created_at REAL NOT NULL,last_seen_at REAL,revoked INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS ring_bindings(owner_id TEXT PRIMARY KEY,logical_ring_id TEXT NOT NULL,encrypted_key TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY,owner_id TEXT NOT NULL,device_id TEXT NOT NULL,event_id TEXT NOT NULL,sequence INTEGER NOT NULL,captured_at REAL NOT NULL,received_at REAL NOT NULL,kind TEXT NOT NULL,payload TEXT NOT NULL,digest TEXT NOT NULL,decode_error TEXT,UNIQUE(device_id,event_id));
+            CREATE INDEX IF NOT EXISTS events_owner_time ON events(owner_id,captured_at,id);
+            CREATE TABLE IF NOT EXISTS history(id INTEGER PRIMARY KEY,owner_id TEXT NOT NULL,ring_id TEXT NOT NULL,raw_hex TEXT NOT NULL,digest TEXT NOT NULL,tag INTEGER NOT NULL,cursor INTEGER,received_at REAL NOT NULL,UNIQUE(owner_id,ring_id,digest));
+            CREATE INDEX IF NOT EXISTS history_owner_cursor ON history(owner_id,ring_id,cursor,id);
+            CREATE TABLE IF NOT EXISTS points(id INTEGER PRIMARY KEY,owner_id TEXT NOT NULL,kind TEXT NOT NULL,t REAL NOT NULL,value REAL NOT NULL,source TEXT NOT NULL,quality REAL,metadata TEXT NOT NULL,identity TEXT NOT NULL,UNIQUE(owner_id,kind,identity));
+            CREATE INDEX IF NOT EXISTS points_owner_kind_time ON points(owner_id,kind,t,id);
+            CREATE TABLE IF NOT EXISTS sessions(owner_id TEXT NOT NULL,id TEXT NOT NULL,activity_name TEXT,started_at REAL NOT NULL,ended_at REAL,active_seconds REAL NOT NULL,status TEXT NOT NULL,auto_detected INTEGER NOT NULL DEFAULT 0,provisional INTEGER NOT NULL DEFAULT 0,config TEXT NOT NULL,profile TEXT NOT NULL,last_event_at REAL NOT NULL,source TEXT NOT NULL,PRIMARY KEY(owner_id,id));
+            CREATE TABLE IF NOT EXISTS processing(owner_id TEXT PRIMARY KEY,history_count INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL,last_processed_at REAL,error TEXT);
+            CREATE TABLE IF NOT EXISTS native_runs(id INTEGER PRIMARY KEY,owner_id TEXT NOT NULL,created_at REAL NOT NULL,source_input_sha256 TEXT,result TEXT NOT NULL,result_sha256 TEXT NOT NULL,UNIQUE(owner_id,result_sha256));
+            CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events BEGIN SELECT RAISE(ABORT,'events are append-only'); END;
+            CREATE TRIGGER IF NOT EXISTS history_no_delete BEFORE DELETE ON history BEGIN SELECT RAISE(ABORT,'history is append-only'); END;
+            ''')
+
+    @contextmanager
+    def connection(self, transaction=False):
+        if self.path.is_symlink() or self.base.is_symlink():raise StoreError('Percorso archivio non valido')
+        with self.lock:
+            db=sqlite3.connect(self.path,timeout=10,isolation_level=None)
+            db.row_factory=sqlite3.Row
+            try:
+                db.execute('PRAGMA journal_mode=DELETE');db.execute('PRAGMA synchronous=FULL')
+                if transaction:db.execute('BEGIN IMMEDIATE')
+                yield db
+                if transaction:db.commit()
+            except BaseException:
+                if transaction:db.rollback()
+                raise
+            finally:db.close()
+
+    def _settings(self,db,owner):
+        row=db.execute('SELECT value FROM settings WHERE owner_id=?',(owner,)).fetchone()
+        return json.loads(row['value']) if row else defaults()
+
+    def settings(self,owner):
+        with self.connection() as db:return self._settings(db,owner)
+
+    def update_settings(self,owner,value):
+        with self.connection(True) as db:
+            normalized=validate_settings(value,self._settings(db,owner))
+            db.execute('INSERT INTO settings(owner_id,value,revision) VALUES(?,?,1) ON CONFLICT(owner_id) DO UPDATE SET value=excluded.value,revision=revision+1',(owner,_json(normalized)))
+        return normalized
+
+    def set_ring(self,owner,logical_ring_id,key_hex):
+        try:key=bytes.fromhex(key_hex)
+        except (TypeError,ValueError):raise StoreError('Chiave anello non valida') from None
+        if len(key)!=16:raise StoreError('Chiave anello non valida')
+        with self.connection(True) as db:
+            db.execute('INSERT INTO ring_bindings VALUES(?,?,?) ON CONFLICT(owner_id) DO UPDATE SET logical_ring_id=excluded.logical_ring_id,encrypted_key=excluded.encrypted_key',
+                       (owner,_identity(logical_ring_id),self.encrypt(key.hex())))
+
+    def ring(self,owner,secret=False):
+        with self.connection() as db:
+            row=db.execute('SELECT * FROM ring_bindings WHERE owner_id=?',(owner,)).fetchone()
+            if not row:return None
+            result={'logical_ring_id':row['logical_ring_id'],'configured':True}
+            if secret:result['owner_key_hex']=self.decrypt(row['encrypted_key'])
+            return result
+
+    def create_pairing(self,owner):
+        code=secrets.token_urlsafe(32);expires=time.time()+600
+        with self.connection(True) as db:
+            db.execute('INSERT INTO pairings VALUES(?,?,?,0)',(hashlib.sha256(code.encode()).hexdigest(),owner,expires))
+        return {'pairing_code':code,'expires_at':expires}
+
+    def enroll(self,code,name):
+        digest=hashlib.sha256(str(code).encode()).hexdigest()
+        token=secrets.token_urlsafe(48);device=uuid.uuid4().hex
+        with self.connection(True) as db:
+            row=db.execute('SELECT * FROM pairings WHERE code_hash=?',(digest,)).fetchone()
+            if not row or row['used'] or row['expires_at']<time.time():raise StoreError('Codice scaduto o già utilizzato')
+            owner=row['owner_id'];db.execute('UPDATE pairings SET used=1 WHERE code_hash=?',(digest,))
+            db.execute('INSERT INTO devices VALUES(?,?,?,?,?,?,0)',(device,owner,str(name)[:120] or 'iPhone',hashlib.sha256(token.encode()).hexdigest(),time.time(),time.time()))
+        return {'owner_id':owner,'device_id':device,'access_token':token}
+
+    def authenticate(self,token):
+        with self.connection() as db:
+            row=db.execute('SELECT id,owner_id,name FROM devices WHERE token_hash=? AND revoked=0',(hashlib.sha256(token.encode()).hexdigest(),)).fetchone()
+            return dict(row) if row else None
+
+    def revoke(self,owner,device):
+        with self.connection(True) as db:
+            row=db.execute('UPDATE devices SET revoked=1 WHERE owner_id=? AND id=?',(owner,device))
+            if not row.rowcount:raise StoreError('Dispositivo non trovato')
+
+    def _point(self,db,owner,kind,t,value,source,identity,quality=None,metadata=None):
+        _finite(t);_finite(value, -1e12,1e12)
+        db.execute('INSERT OR IGNORE INTO points(owner_id,kind,t,value,source,quality,metadata,identity) VALUES(?,?,?,?,?,?,?,?)',
+                   (owner,kind,t,value,source,quality,_json(metadata or {}),identity))
+
+    def _history(self,db,owner,device,raw,t):
+        binding=db.execute('SELECT logical_ring_id FROM ring_bindings WHERE owner_id=?',(owner,)).fetchone()
+        ring=binding['logical_ring_id'] if binding else device
+        for frame in split_history_packet(raw):
+            item=describe_raw_record(frame);digest=hashlib.sha256(frame).hexdigest()
+            db.execute('INSERT OR IGNORE INTO history(owner_id,ring_id,raw_hex,digest,tag,cursor,received_at) VALUES(?,?,?,?,?,?,?)',
+                       (owner,ring,frame.hex(),digest,item['tag_raw'],item.get('timestamp_raw'),t))
+
+    def _project(self,db,owner,device,event):
+        payload=event['payload'];kind=event['kind'];stamp=event['captured_at'];identity=device+':'+event['event_id']
+        if kind in ('sensor_packet','ring_history'):
+            raw=bytes.fromhex(payload.get('raw_hex',''))
+            if not raw:return
+            if raw[0]>=0x41:self._history(db,owner,device,raw,stamp)
+            if len(raw)>=4 and raw[:1]==b'\x2f' and raw[2]==0x28 and raw[3]==2:
+                sample=parse_live(raw,tuple(payload.get('api_version',[2,0,0])))
+                if sample.bpm is not None:
+                    supported=20<=sample.bpm<=250
+                    self._point(db,owner,'heart_rate' if supported else 'heart_rate_outside_display',stamp,sample.bpm,'oura-ble',identity,
+                                metadata={'warnings':list(sample.warnings),'flags_raw':raw[4],'ibi_validity_raw':raw[9]>>4,'ibi_ms':sample.ibi_ms,
+                                          'within_display_range':supported,'display_range_is_not_physiological_validity':True})
+            elif len(raw)>=4 and raw[0]==47 and raw[2]==37 and raw[3]==3:
+                value=parse_exercise_latest(raw)
+                self._point(db,owner,'exercise',stamp,value['heart_rate_value_raw'],'oura-exercise-raw',identity,metadata=value)
+        elif kind=='workout':
+            session_id=_identity(payload.get('session_id'))
+            # Mobile background batches may finish out of order. Rebuild the
+            # projection from immutable events instead of losing an early end.
+            rows=db.execute("SELECT device_id,captured_at,payload FROM events WHERE owner_id=? AND kind='workout' AND json_extract(payload,'$.session_id')=? ORDER BY captured_at,sequence,id",(owner,session_id)).fetchall()
+            db.execute('DELETE FROM sessions WHERE owner_id=? AND id=?',(owner,session_id))
+            started=False
+            for row in rows:
+                value=json.loads(row['payload'])
+                if value.get('action')=='started':started=True
+                if started:self._workout(db,owner,row['device_id'],value,row['captured_at'])
+
+    def _workout(self,db,owner,device,p,stamp):
+        session_id=_identity(p.get('session_id'));action=p.get('action')
+        old=db.execute('SELECT * FROM sessions WHERE owner_id=? AND id=?',(owner,session_id)).fetchone()
+        if action=='started':
+            if old:return
+            settings=self._settings(db,owner)
+            cfg=validate_settings({'config':p.get('config_snapshot',settings['config'])},settings)['config']
+            profile=validate_settings({'profile':p.get('profile_snapshot',settings['profile'])},settings)['profile']
+            db.execute('INSERT INTO sessions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',(owner,session_id,str(p.get('activity_name') or cfg.get('activity_name') or 'Allenamento')[:120],
+                stamp,None,0,'active',int(p.get('auto_detected') is True),int(p.get('provisional') is True),_json(cfg),_json(profile),stamp,device))
+            return
+        if old is None:raise StoreError('Sessione non ancora ricevuta: inizio mancante')
+        if stamp<old['last_event_at']:
+            # The source event remains archived; stale controls cannot rewind a session.
+            return
+        active=_finite(p.get('active_seconds',old['active_seconds']))
+        if action in ('paused','resumed','ended','false_detection'):
+            status={'paused':'paused','resumed':'active','ended':'completed','false_detection':'rejected'}[action]
+            db.execute('UPDATE sessions SET status=?,ended_at=?,active_seconds=?,last_event_at=? WHERE owner_id=? AND id=?',
+                       (status,stamp if status in ('completed','rejected') else None,active,stamp,owner,session_id))
+        elif action in ('activity_updated','confirmed'):
+            name=str(p.get('activity_name') or old['activity_name'])[:120]
+            if 'active_seconds' not in p and old['status']=='active':active+=max(0,stamp-old['last_event_at'])
+            db.execute('UPDATE sessions SET activity_name=?,provisional=0,active_seconds=?,last_event_at=? WHERE owner_id=? AND id=?',(name,active,stamp,owner,session_id))
+
+    def append(self,owner,device,batch_id,events):
+        _identity(batch_id)
+        if not isinstance(events,list) or not 1<=len(events)<=1000:raise StoreError('Batch eventi non valido')
+        normalized=[]
+        for event in events:
+            if not isinstance(event,dict):raise StoreError('Evento non valido')
+            event_id=_identity(event.get('event_id'));seq=event.get('sequence')
+            if type(seq) is not int or not 0<=seq<2**63:raise StoreError('Sequenza non valida')
+            stamp=_finite(event.get('captured_at'))
+            kind=_identity(event.get('kind'));payload=event.get('payload')
+            if not isinstance(payload,dict):raise StoreError('Payload evento non valido')
+            if kind in ('sensor_packet','ring_history'):
+                raw_hex=payload.get('raw_hex')
+                if not isinstance(raw_hex,str) or len(raw_hex)>8192:raise StoreError('Pacchetto sensore non valido')
+                try:raw=bytes.fromhex(raw_hex)
+                except ValueError:raise StoreError('Pacchetto sensore non esadecimale') from None
+                if raw and (raw[0] in (0x24,0x25) or len(raw)>=3 and raw[0]==47 and raw[2] in (43,44,45,46,47)):
+                    raise StoreError('Un pacchetto di autenticazione non è un dato sensore')
+            value={**event,'event_id':event_id,'sequence':seq,'captured_at':stamp,'kind':kind,'payload':payload}
+            digest=hashlib.sha256(_json(value).encode()).hexdigest()
+            normalized.append((value,digest))
+        accepted=[];duplicates=0;received=time.time()
+        with self.connection(True) as db:
+            for event,digest in normalized:
+                previous=db.execute('SELECT digest,owner_id FROM events WHERE device_id=? AND event_id=?',(device,event['event_id'])).fetchone()
+                if previous:
+                    if previous['owner_id']!=owner or previous['digest']!=digest:raise ConflictError('Evento già ricevuto con contenuto diverso')
+                    duplicates+=1;accepted.append(event['event_id']);continue
+                row=db.execute('INSERT INTO events(owner_id,device_id,event_id,sequence,captured_at,received_at,kind,payload,digest) VALUES(?,?,?,?,?,?,?,?,?)',
+                               (owner,device,event['event_id'],event['sequence'],event['captured_at'],received,event['kind'],_json(event['payload']),digest))
+                # Unknown/invalid sensor values are retained even if decoding fails.
+                db.execute('SAVEPOINT projection')
+                try:self._project(db,owner,device,event)
+                except (OuraProtocolError,StoreError,ValueError,TypeError,KeyError,OverflowError) as exc:
+                    db.execute('ROLLBACK TO projection')
+                    db.execute('UPDATE events SET decode_error=? WHERE id=?',(type(exc).__name__,row.lastrowid))
+                finally:db.execute('RELEASE projection')
+                accepted.append(event['event_id'])
+            db.execute('UPDATE devices SET last_seen_at=? WHERE owner_id=? AND id=?',(received,owner,device))
+        return {'batch_id':batch_id,'accepted_event_ids':accepted,'duplicates':duplicates,'server_time':received}
+
+    def _sessions(self,db,owner,now):
+        output=[]
+        for row in db.execute('SELECT * FROM sessions WHERE owner_id=? ORDER BY started_at DESC LIMIT 300',(owner,)):
+            item=dict(row);cfg=json.loads(item.pop('config'));profile=json.loads(item.pop('profile'))
+            elapsed=item['active_seconds']
+            if item['status']=='active':elapsed+=max(0,now-item['last_event_at'])
+            item['active_seconds']=elapsed;item['config']=cfg;item['profile']=profile
+            item['auto_detected']=bool(item['auto_detected']);item['provisional']=bool(item['provisional'])
+            summary=db.execute("SELECT avg(value),max(value),count(*) FROM points WHERE owner_id=? AND kind='heart_rate' AND t>=? AND t<=?",(owner,item['started_at'],item['ended_at'] or now)).fetchone()
+            energy=energy_for_interval(0,elapsed,cfg,profile)
+            total=schedule(0,**{k:cfg[k] for k in ('work','rest','rounds','plan')})['total']
+            energy['unestimated_seconds']+=max(0,elapsed-total)
+            item['stats']={'average_bpm':summary[0],'max_bpm':summary[1],'samples':summary[2],**energy}
+            item['phase']=schedule(elapsed,**{k:cfg[k] for k in ('work','rest','rounds','plan')})
+            output.append(item)
+        return output
+
+    def state(self,owner):
+        now=time.time()
+        with self.connection() as db:
+            settings=self._settings(db,owner);latest={}
+            for kind in ('heart_rate','heart_rate_outside_display','spo2','temperature','motion','steps','respiratory_rate','exercise'):
+                row=db.execute('SELECT * FROM points WHERE owner_id=? AND kind=? AND t<=? ORDER BY t DESC,id DESC LIMIT 1',(owner,kind,now+5)).fetchone()
+                if row:
+                    metadata=json.loads(row['metadata']);item={'value':row['value'],'captured_at':row['t'],'utc_ms':row['t']*1000,'source':row['source'],'quality':row['quality'],**metadata}
+                    if kind=='heart_rate':item.update(bpm=row['value'],fresh=0<=now-row['t']<=8)
+                    latest[kind]=item
+            devices=[dict(row) for row in db.execute('SELECT id,name,created_at,last_seen_at,revoked FROM devices WHERE owner_id=? ORDER BY created_at',(owner,))]
+            events=db.execute('SELECT count(*),sum(decode_error IS NOT NULL) FROM events WHERE owner_id=?',(owner,)).fetchone()
+            history=db.execute('SELECT count(*) FROM history WHERE owner_id=?',(owner,)).fetchone()[0]
+            processing=db.execute('SELECT * FROM processing WHERE owner_id=?',(owner,)).fetchone()
+            sessions=self._sessions(db,owner,now)
+        return {'server_time':now,'settings':settings,'latest':latest,'devices':devices,'sessions':sessions,
+                'allowed_activities':ALLOWED_ACTIVITIES,
+                'active_session':next((s for s in sessions if s['status'] in ('active','paused')),None),
+                'weekly_occurrences':occurrences(settings['weekly_schedule'],now),
+                'composition':composition(settings['profile']),
+                'archive':{'events':events[0],'history_records':history,'decode_errors':events[1] or 0,
+                           'processing_status':processing['status'] if processing else 'In attesa di record storici',
+                           'processing_error':processing['error'] if processing else None},
+                'ring_binding':self.ring(owner,secret=False)}
+
+    def analysis(self,owner,session_id=None,start=None,end=None):
+        now=time.time();activity=None;workout_end=None
+        with self.connection() as db:
+            if session_id and session_id!='last24h':
+                session=db.execute('SELECT * FROM sessions WHERE owner_id=? AND id=?',(owner,session_id)).fetchone()
+                if not session:raise StoreError('Sessione non trovata')
+                start=session['started_at'];workout_end=session['ended_at'];end=min(now,(workout_end or now)+600);activity=session['activity_name']
+            else:
+                start=now-86400 if start is None else _finite(start)
+                end=now if end is None else _finite(end)
+            if end<start:raise StoreError('Intervallo grafico non valido')
+            rows=db.execute('SELECT kind,t,value,metadata FROM points WHERE owner_id=? AND t>=? AND t<=? ORDER BY t,id',(owner,start,end)).fetchall()
+        result={kind:[] for kind in ('heart_rate','spo2','temperature','motion','step_increments','respiratory_rate','heart_rate_outside_display')};quality=[]
+        for row in rows:
+            kind='step_increments' if row['kind']=='steps' else row['kind']
+            if kind not in result:continue
+            meta=json.loads(row['metadata'])
+            result[kind].append({'t':row['t'],'v':row['value'],**({'warnings':meta.get('warnings',[]),'flags_raw':meta.get('flags_raw')} if kind=='heart_rate' else {})})
+            if kind=='heart_rate' and meta.get('warnings'):quality.append({'t':row['t'],**meta})
+        heart=[p['v'] for p in result['heart_rate'] if workout_end is None or p['t']<=workout_end]
+        return {**result,'window_start':start,'window_end':end,'workout_end':workout_end,'activity_name':activity,
+                'steps_in_records':sum(p['v'] for p in result['step_increments']),'quality_events':quality,
+                'stats':{'average_bpm':sum(heart)/len(heart) if heart else None,'max_bpm':max(heart) if heart else None},
+                'acquisition_time_alignment':True,'interpolated':False}
+
+    def manual_session(self,owner,action,session_id=None,activity_name=None,**extra):
+        now=time.time();session_id=session_id or uuid.uuid4().hex
+        with self.connection() as db:
+            row=db.execute('SELECT * FROM sessions WHERE owner_id=? AND id=?',(owner,session_id)).fetchone()
+            if action!='start' and row is None:raise StoreError('Sessione non trovata')
+            if action=='start':
+                active=db.execute("SELECT id FROM sessions WHERE owner_id=? AND status IN ('active','paused')",(owner,)).fetchone()
+                if active:raise ConflictError('Una sessione è già attiva')
+            elapsed=row['active_seconds'] if row else 0
+            if row and row['status']=='active':elapsed+=max(0,now-row['last_event_at'])
+            settings=self._settings(db,owner)
+        mapped={'start':'started','pause':'paused','resume':'resumed','end':'ended','activity':'activity_updated'}
+        if action not in mapped:raise StoreError('Azione sessione non valida')
+        payload={'action':mapped[action],'session_id':session_id,'active_seconds':elapsed,'activity_name':activity_name,**extra}
+        if action=='start':payload.update(config_snapshot=settings['config'],profile_snapshot=settings['profile'])
+        self.append(owner,'server:'+owner,uuid.uuid4().hex,[{'event_id':uuid.uuid4().hex,'sequence':time.time_ns(),'captured_at':now,'kind':'workout','payload':payload}])
+        return self.state(owner)
+
+    def pending_owners(self):
+        with self.connection() as db:
+            return [row[0] for row in db.execute('SELECT h.owner_id FROM history h LEFT JOIN processing p ON p.owner_id=h.owner_id GROUP BY h.owner_id HAVING count(*)>coalesce(max(p.history_count),0)')]
+
+    def historical_records(self,owner):
+        with self.connection() as db:
+            return [dict(row) for row in db.execute('SELECT raw_hex,digest,tag,cursor FROM history WHERE owner_id=? ORDER BY cursor,id',(owner,))]
+
+    def publish_processed(self,owner,records,result):
+        success=result.get('status')=='ok' and result.get('process_true') is True and result.get('deinit_returned') is True
+        count=len(records);by_hash={row['digest']:row for row in records}
+        with self.connection(True) as db:
+            # Original native outputs and the checkpoint commit together. A full
+            # disk cannot acknowledge processing while losing rejected averages.
+            original=_json(result)
+            db.execute('INSERT OR IGNORE INTO native_runs(owner_id,created_at,source_input_sha256,result,result_sha256) VALUES(?,?,?,?,?)',
+                       (owner,time.time(),result.get('source_input_sha256'),original,hashlib.sha256(original.encode()).hexdigest()))
+            db.execute('INSERT INTO processing VALUES(?,?,?,?,?) ON CONFLICT(owner_id) DO UPDATE SET history_count=excluded.history_count,status=excluded.status,last_processed_at=excluded.last_processed_at,error=excluded.error',
+                       (owner,count if success else 0,'Storico elaborato' if success else 'Elaborazione da completare',time.time(),None if success else result.get('error',result.get('status','core non disponibile'))))
+            if not success:return
+            for row in result.get('spo2_outputs',[]):
+                value,quality,stamp=row.get('average_raw'),row.get('quality_raw'),row.get('timestamp_utc_ms_native')
+                # Original averages are retained, including those failing our display gate.
+                if type(value) not in (int,float) or type(quality) not in (int,float) or type(stamp) not in (int,float):continue
+                if row.get('data_type')==6 and math.isfinite(value) and math.isfinite(quality) and math.isfinite(stamp) and 85<=value<=100 and quality==1 and stamp>0:
+                    self._point(db,owner,'spo2',stamp/1000,value,'oura-ecore','ecore:'+str(stamp)+':'+str(value),quality,{'native':row})
+            for row in result.get('mapped_temperatures',[]):
+                value,stamp=row.get('field_1_celsius'),row.get('utc_ms')
+                if type(value) in (int,float) and math.isfinite(value) and value>0 and type(stamp) in (int,float) and stamp>0:
+                    self._point(db,owner,'temperature',stamp/1000,value,'oura-temperature-history',row['record_sha256'],metadata={'sensor_index':1,'core_body_temperature':False})
+            for row in result.get('mapped_sensor_records',[]):
+                record=by_hash.get(row['record_sha256'])
+                if not record:continue
+                try:
+                    raw=bytes.fromhex(record['raw_hex']);stamp=row['utc_ms']/1000
+                    if record['tag']==0x47:
+                        decoded=parse_motion_record(raw,utc_ms=row['utc_ms'])
+                        self._point(db,owner,'motion',stamp,decoded['motion_seconds'],'oura-motion-history',record['digest'],metadata=decoded)
+                    elif record['tag']==0x50:
+                        decoded=parse_activity_record(raw,utc_ms=row['utc_ms'])
+                        self._point(db,owner,'steps',stamp,decoded['step_count'],'oura-activity-history',record['digest'],metadata=decoded)
+                    elif record['tag']==0x62:
+                        decoded=decode_breathing_record(raw)
+                        if decoded.get('available'):
+                            self._point(db,owner,'respiratory_rate',stamp,decoded['average_breathing_rate_per_minute'],'oura-firmware-history',record['digest'],metadata=decoded)
+                except (OuraProtocolError,ValueError,TypeError,KeyError):continue

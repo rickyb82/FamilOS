@@ -54,7 +54,7 @@ def main():
    assert p.parts[0] not in ('data','private','.env','.git'),'Archivio contiene dati locali'
    member.uid=member.gid=0;member.uname=member.gname='root';t.extract(member,release)
  # Un nuovo layout richiede prima l'aggiornamento dell'adattatore Orbita.
- expected='4ec54eb75b7b0616d5c87f9a8fe6c85bff0da2ec0c161d8cf55bf57c64d2b7c4'
+ expected='50667110b105d47defee22447c64fd5c13466e0560556de3cec9ce994e071b58'
  assert hashlib.sha256((release/'docker-compose.yml').read_bytes()).hexdigest()==expected,'Compose upstream cambiato: serve adeguare integrazione Orbita prima di procedere'
  (saved/'compose.previous.json').write_bytes(oldcompose);(saved/'status.previous.json').write_bytes(oldstatus)
  for name,context,dockerfile in [('familos-backend',release,'backend/Dockerfile'),('familos-frontend',release/'frontend','Dockerfile'),('familos-sandbox',release/'sandbox','Dockerfile')]:
@@ -63,6 +63,10 @@ def main():
  # Browser isolato: adattamento esplicito del layout upstream verificato sopra.
  browser='familos-browser'
  run('docker','build','-t','orbita-familos-browser:'+rev[:12],str(release/'extras/browser'))
+ wellness='familos-homepulse-core'
+ if wellness in cfg['services']:
+  run('docker','build','-t','orbita-'+wellness+':'+rev[:12],str(release/'extras/homepulse-core'))
+  cfg['services'][wellness]['image']='orbita-'+wellness+':'+rev[:12]
  env=cfg['services']['familos-backend'].get('environment',{})
  if isinstance(env,list):env=dict(v.split('=',1) for v in env if '=' in v)
  token=env.get('BROWSER_WORKER_TOKEN') or secrets.token_hex(32)

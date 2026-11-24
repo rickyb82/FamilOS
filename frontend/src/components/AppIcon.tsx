@@ -5,10 +5,11 @@ import type { AppEntry } from '../lib/desktop'
 export default function AppIcon({app}:{app:AppEntry}) {
  const uid=useId().replace(/:/g,'')
  const id=app.id.replace(/^editor-/, '')
- const palette:Record<string,string[]>={chat:['#d08cff','#6844df'],files:['#ffe38b','#edaa24'],messages:['#8deb91','#19a65b'],browser:['#61e7ff','#2157ce'],projects:['#ffcb7c','#e97838'],wordcraft:['#6ebcff','#2454c8'],gridcraft:['#83e5b1','#16865b'],pdfcraft:['#ff9e9a','#d14166'],deckcraft:['#ffc974','#ed7d37'],ideacraft:['#ffe992','#dc9a26'],mailcraft:['#74d8ff','#386be1']}
+ const palette:Record<string,string[]>={chat:['#d08cff','#6844df'],files:['#ffe38b','#edaa24'],messages:['#8deb91','#19a65b'],browser:['#61e7ff','#2157ce'],projects:['#ffcb7c','#e97838'],wellness:['#d3eda0','#588961'],wordcraft:['#6ebcff','#2454c8'],gridcraft:['#83e5b1','#16865b'],pdfcraft:['#ff9e9a','#d14166'],deckcraft:['#ffc974','#ed7d37'],ideacraft:['#ffe992','#dc9a26'],mailcraft:['#74d8ff','#386be1']}
  const [top,bottom]=palette[id]||['#b8bdd5','#68718e']
  let glyph=<><path d="M18 12h21l9 9v31H18Z" fill="#fff"/><path d="M39 12v10h9M24 30h18M24 37h18M24 44h11" stroke={bottom}/></>
  if(id==='chat')glyph=<path d="m32 13 5 13 14 6-14 5-5 14-5-14-14-5 14-6Z"/>
+ if(id==='wellness')glyph=<><path d="M32 51 13 33C-1 18 19 4 32 19 45 4 65 18 51 33Z" fill="white" stroke="white"/><path d="M14 32h10l5-10 7 20 5-10h10" stroke={bottom} fill="none" strokeWidth="3"/></>
  if(id==='files'||id==='projects')glyph=<><path d="M9 22v-7h19l6 7h21v29H9Z" fill="#ffe7a2" stroke="#ffe7a2"/><path d="M9 26h46l-3 25H12Z" fill="#fff3c4" stroke="#fff8dc"/><path d="M13 28h38" stroke="#fff"/></>
  if(id==='messages')glyph=<path d="M52 30c0 11-9 18-20 18h-6l-11 5 3-10c-4-3-6-7-6-13 0-11 9-18 20-18s20 7 20 18Z" fill="white" stroke="white"/>
  if(id==='games')glyph=<><path d="M18 23h28c7 0 12 23 6 26-4 2-9-7-12-7H24c-3 0-8 9-12 7-6-3-1-26 6-26Z"/><path d="M22 29v10m-5-5h10" stroke={bottom}/><circle cx="42" cy="31" r="2" fill={bottom}/><circle cx="47" cy="37" r="2" fill={bottom}/></>

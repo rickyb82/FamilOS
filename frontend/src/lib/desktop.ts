@@ -7,7 +7,7 @@ export const WindowActivity = createContext(true)
 export const WindowCommands = createContext<{ close: () => void } | null>(null)
 export const useWindowActive = () => useContext(WindowActivity)
 
-export type AppEntry = { id: string; title: string; icon: string; iconUrl?:string; color: string; path: string; feature?: string; admin?: boolean; description?: string; appId?: string }
+export type AppEntry = { id: string; title: string; icon: string; iconUrl?:string; color: string; path: string; feature?: string; admin?: boolean; adultOnly?: boolean; description?: string; appId?: string }
 export const PRODUCTIVITY_APPS: AppEntry[] = [
   { id: 'wordcraft', appId: 'wordcraft', title: 'WordCraft', icon: 'W', color: 'blue', path: '/productivity/wordcraft', feature: 'wordcraft_web', description: 'Documenti, lettere e testi.' },
   { id: 'gridcraft', appId: 'gridcraft', title: 'GridCraft', icon: 'X', color: 'green', path: '/productivity/gridcraft', feature: 'gridcraft_web', description: 'Fogli di calcolo, tabelle e budget.' },
@@ -20,6 +20,7 @@ export const DESKTOP_APPS: AppEntry[] = [
   { id: 'chat', title: 'Emily', icon: '✳', color: 'lavender', path: '/' },
   { id: 'files', title: 'File', icon: '▰', color: 'blue', path: '/documents' },
   { id: 'projects', title: 'Progetti', icon: '◈', color: 'peach', path: '/projects' },
+  { id: 'wellness', title: 'Allenamento', icon: '♡', color: 'green', path: '/wellness', adultOnly: true, description: 'Il tuo trainer personale, i sensori Oura e la scheda sulla TV.' },
   { id: 'messages', title: 'Messaggi', icon: '☏', color: 'green', path: '/messages', feature: 'messaggi' },
   { id: 'history', title: 'Tutte le chat', icon: '◷', color: 'lavender', path: '/chats' },
   { id: 'games', title: 'Giochi', icon: '🎮', color: 'lavender', path: '/games', description: 'La cartella dei tuoi giochi, pronti da avviare.' },
@@ -32,7 +33,7 @@ export const DESKTOP_APPS: AppEntry[] = [
 ]
 
 export function desktopApps(me: Me): AppEntry[] {
-  const core = DESKTOP_APPS.filter(a => (!a.admin || me.user.role === 'admin') && (a.id !== 'parental' || me.user.role !== 'child') && (!a.feature || !!(me.features as any)?.[a.feature]))
+  const core = DESKTOP_APPS.filter(a => (!a.admin || me.user.role === 'admin') && (!a.adultOnly || me.user.role !== 'child') && (a.id !== 'parental' || me.user.role !== 'child') && (!a.feature || !!(me.features as any)?.[a.feature]))
   const productivity = PRODUCTIVITY_APPS.filter(a => me.user.role === 'admin' || me.features?.apps?.includes(a.appId!))
   return [...core.slice(0, 4), ...productivity, ...core.slice(4)]
 }

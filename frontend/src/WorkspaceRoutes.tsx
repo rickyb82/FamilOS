@@ -16,6 +16,7 @@ const Editor = lazy(() => import('./pages/Editor'))
 const Mail = lazy(() => import('./pages/Mail'))
 const Messages = lazy(() => import('./pages/Messages'))
 const Productivity = lazy(() => import('./pages/Productivity'))
+const Wellness = lazy(() => import('./pages/Wellness'))
 function EditorRoute() {
   const [params] = useSearchParams()
   return <Editor key={params.get('file') || ''} />
@@ -30,6 +31,7 @@ export function WorkspaceRoutes() {
         <Route path="/c/:id" element={<Chat />} />
         <Route path="/games" element={<Games />} />
         <Route path="/browser" element={<SafeBrowser />} />
+        {me.user.role !== 'child' && <Route path="/wellness" element={<Wellness />} />}
         {me.user.role !== "child" && <Route path="/parental" element={<ParentalControls />} />}
         <Route path="/installed/:appId" element={<InstalledApp />} />
         <Route path="/apps" element={<Productivity />} />

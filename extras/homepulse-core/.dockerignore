@@ -1,0 +1,9 @@
+private
+.runtime
+__pycache__
+*.so
+*.apk
+*.apkm
+*.ipa
+*.sqlite3*
+test_*.py

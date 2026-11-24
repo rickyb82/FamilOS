@@ -328,6 +328,7 @@ PUBLIC_PATHS = {
     "/api/auth/forgot", "/api/auth/reset", "/api/auth/passkey/options", "/api/auth/passkey/verify",
     "/api/auth/google/start", "/api/auth/google/callback", "/api/admin/email/google/callback",
     "/api/sync/pair", "/api/sync/login", "/.well-known/apple-app-site-association", "/.well-known/assetlinks.json",
+    "/api/wellness/v1/bridges/enroll",  # high-entropy, single-use pairing code
 }
 PRIVATE_ROUTES = [(method.upper(),path) for path,methods in app.openapi()["paths"].items()
                   if path not in PUBLIC_PATHS and not path.startswith("/api/admin/")

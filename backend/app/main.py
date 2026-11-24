@@ -66,9 +66,14 @@ async def lifespan(app: FastAPI):
     alerts = asyncio.create_task(worker())
     from .services.browser_reviews import worker_loop
     browser_checks = asyncio.create_task(worker_loop())
+    from .api.wellness import processing_loop
+    wellness_checks = asyncio.create_task(processing_loop())
     try:
         yield
     finally:
+        wellness_checks.cancel()
+        with suppress(asyncio.CancelledError):
+            await wellness_checks
         browser_checks.cancel()
         with suppress(asyncio.CancelledError):
             await browser_checks
@@ -102,7 +107,7 @@ app.middleware("http")(_activity.middleware)   # registro attivita' (Organizzazi
 @app.middleware("http")
 async def private_response_cache(request, call_next):
     response = await call_next(request)
-    if request.url.path.startswith(("/api/auth/", "/api/admin/", "/api/mail/")):
+    if request.url.path.startswith(("/api/auth/", "/api/admin/", "/api/mail/", "/api/wellness/")):
         response.headers["Cache-Control"] = "no-store, private"
     return response
 
@@ -117,6 +122,8 @@ app.include_router(browser_approvals.parent_router, prefix="/api")
 app.include_router(updates.router, prefix="/api")
 from .api import installed_apps
 app.include_router(installed_apps.router, prefix="/api")
+from .api import wellness
+app.include_router(wellness.router, prefix="/api")
 app.include_router(app_access.router, prefix="/api")
 app.include_router(branding.router, prefix="/api")
 app.include_router(education.router, prefix="/api")
