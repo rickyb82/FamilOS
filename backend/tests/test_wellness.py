@@ -296,3 +296,14 @@ async def test_browser_csrf_and_anonymous_access_remain_enforced(admin):
         assert (await client.get('/api/wellness/v1/state')).status_code==401
     response=await admin.put('/api/wellness/v1/settings',json={},headers={'X-Requested-With':'untrusted','Origin':'https://outside.example'})
     assert response.status_code==403
+
+
+@pytest.mark.asyncio
+async def test_pair_code_cannot_expose_binding_after_module_is_disabled(admin,monkeypatch):
+    from app.services.homepulse import module
+    pair=(await admin.post('/api/wellness/v1/bridges/pair')).json()
+    monkeypatch.setattr(module,'enabled',lambda:False)
+    async with make_client() as anonymous:
+        response=await anonymous.post('/api/wellness/v1/bridges/enroll',json={'pairing_code':pair['pairing_code'],'device_name':'synthetic'})
+    assert response.status_code==403
+    assert 'owner_key_hex' not in response.text

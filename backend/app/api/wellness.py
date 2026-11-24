@@ -107,11 +107,14 @@ async def pair(request:Request,ctx:AuthContext=Depends(require_adult)):
 
 @router.post('/bridges/enroll')
 async def enroll(body:Enrollment,request:Request,db:AsyncSession=Depends(get_db)):
+    from ..services.homepulse.module import enabled
+    from ..services.apps import app_enabled
+    if not enabled():raise HTTPException(403,'Modulo Allenamento non disponibile')
     pair_limiter.check(client_ip(request))
     try:result=await asyncio.to_thread(store().enroll,body.pairing_code,body.device_name)
     except StoreError as exc:raise _error(exc) from None
     user=await db.get(User,result['owner_id'])
-    if not user or not user.is_active or user.role==Role.child:
+    if not user or not user.is_active or user.role==Role.child or not app_enabled(user,'wellness'):
         await asyncio.to_thread(store().revoke,result['owner_id'],result['device_id'])
         raise HTTPException(403,'Profilo non disponibile')
     return {'device_id':result['device_id'],'access_token':result['access_token'],
