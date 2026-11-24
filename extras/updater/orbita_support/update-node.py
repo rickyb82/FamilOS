@@ -94,8 +94,12 @@ def main():
   for name in ('data','private','.env'):
    origin=saved/'previous-app'/name
    if origin.exists():
-    if origin.is_dir():shutil.copytree(origin,release/name,symlinks=True)
-    else:shutil.copy2(origin,release/name)
+    run('cp','-a','--',str(origin),str(release/name))  # Keep UID/GID, modes and symlinks of private runtime assets.
+    if name=='private':
+     previous=origin/'homepulse/libappecore-compat.so';copied=release/name/'homepulse/libappecore-compat.so'
+     if previous.is_file():
+      a=previous.stat();b=copied.stat()
+      assert (a.st_uid,a.st_gid,a.st_mode)==(b.st_uid,b.st_gid,b.st_mode),'Permessi libreria privata cambiati durante la copia'
   # Configurazioni locali dei servizi conservate.
   for name in ('mcp_servers.json','searxng/settings.yml'):
    origin=saved/'previous-app'/name

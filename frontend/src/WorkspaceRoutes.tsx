@@ -31,7 +31,7 @@ export function WorkspaceRoutes() {
         <Route path="/c/:id" element={<Chat />} />
         <Route path="/games" element={<Games />} />
         <Route path="/browser" element={<SafeBrowser />} />
-        {me.user.role !== 'child' && <Route path="/wellness" element={<Wellness />} />}
+        {me.user.role !== 'child' && me.features?.wellness && <Route path="/wellness" element={<Wellness />} />}
         {me.user.role !== "child" && <Route path="/parental" element={<ParentalControls />} />}
         <Route path="/installed/:appId" element={<InstalledApp />} />
         <Route path="/apps" element={<Productivity />} />

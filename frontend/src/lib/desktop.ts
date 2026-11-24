@@ -20,7 +20,7 @@ export const DESKTOP_APPS: AppEntry[] = [
   { id: 'chat', title: 'Emily', icon: '✳', color: 'lavender', path: '/' },
   { id: 'files', title: 'File', icon: '▰', color: 'blue', path: '/documents' },
   { id: 'projects', title: 'Progetti', icon: '◈', color: 'peach', path: '/projects' },
-  { id: 'wellness', title: 'Allenamento', icon: '♡', color: 'green', path: '/wellness', adultOnly: true, description: 'Il tuo trainer personale, i sensori Oura e la scheda sulla TV.' },
+  { id: 'wellness', feature: 'wellness', title: 'Allenamento', icon: '♡', color: 'green', path: '/wellness', adultOnly: true, description: 'Il tuo trainer personale, i sensori Oura e la scheda sulla TV.' },
   { id: 'messages', title: 'Messaggi', icon: '☏', color: 'green', path: '/messages', feature: 'messaggi' },
   { id: 'history', title: 'Tutte le chat', icon: '◷', color: 'lavender', path: '/chats' },
   { id: 'games', title: 'Giochi', icon: '🎮', color: 'lavender', path: '/games', description: 'La cartella dei tuoi giochi, pronti da avviare.' },

@@ -14,8 +14,8 @@ struct RootView:View {
             SettingsView().tabItem{Label("Impostazioni",systemImage:"slider.horizontal.3")}
         }.tint(.teal).preferredColorScheme(.dark)
         .onOpenURL{url in Task{await model.openPairingURL(url)}}
-        .task{await model.refresh();await model.requestBatteryNotifications()}
-        .onChange(of:scene){_,value in if value == .active{Task{await model.refresh()}}}
+        .task{model.api.setForeground(scene == .active);await model.refresh();await model.requestBatteryNotifications()}
+        .onChange(of:scene){_,value in model.api.setForeground(value == .active);if value == .active{Task{await model.refresh()}}}
         .alert("Home Pulse",isPresented:Binding(get:{model.message != nil},set:{if !$0{model.message=nil}})){Button("OK"){model.message=nil}}message:{Text(model.message ?? "")}
     }
 }
@@ -53,19 +53,14 @@ struct HomeView:View {
 }
 struct LiveCard:View{
     @EnvironmentObject var model:AppModel;@ObservedObject var ring:RingBridge
-    var body:some View{Card(title:model.hasFreshBPM ? "Battito live":"Battito · ultima lettura"){
-        HStack(alignment:.firstTextBaseline){Text(model.displayedBPM.map(String.init) ?? "—").foregroundStyle(model.hasFreshBPM ? Color.primary:Color.orange).font(.system(size:82,weight:.semibold,design:.rounded)).monospacedDigit();Text("BPM").font(.title3).foregroundStyle(.secondary);Spacer();Image(systemName:"heart.fill").foregroundStyle(.red).font(.title)}
-        if let age=model.heartSampleAge{
-            Text(model.hasFreshBPM ? "Lettura aggiornata · \(age) s fa":"Ultimo battito valido · \(age) s fa · in attesa di aggiornamento")
-                .font(.subheadline).foregroundStyle(model.hasFreshBPM ? Color.secondary:Color.orange)
-        }
+    var body:some View{Card(title:"Battito"){
+        HStack(alignment:.firstTextBaseline){Text(model.displayedBPM.map(String.init) ?? "—").foregroundStyle(Color.primary).font(.system(size:82,weight:.semibold,design:.rounded)).monospacedDigit();Text("BPM").font(.title3).foregroundStyle(.secondary);Spacer();Image(systemName:"heart.fill").foregroundStyle(.red).font(.title)}
         HStack{
             Label(model.batteryLevel.map{"Batteria anello: \($0)%"} ?? "Batteria anello: —",systemImage:(model.batteryLevel ?? 100)<=10 ? "battery.0percent":"battery.100percent")
                 .foregroundStyle((model.batteryLevel ?? 100)<=10 ? Color.orange:Color.secondary)
             Spacer()
             if let at=model.batteryAt{Text(at,style:.relative).font(.caption).foregroundStyle(.secondary)}
         }.font(.subheadline)
-        if model.displayedBPM==nil{Text("In attesa della prima lettura valida dell’anello.").font(.caption).foregroundStyle(.secondary)}
     }}
 }
 struct RingSettingsControls:View{
@@ -78,7 +73,8 @@ struct RingSettingsControls:View{
         ForEach(ring.devices,id:\.identifier){device in Button(device.name ?? "Anello Oura"){ring.connect(device)}.buttonStyle(.bordered)}
         if ring.ready{Button("Scarica storico"){Task{await ring.downloadHistory()}}.disabled(ring.busy)}
         DisclosureGroup("Qualità e origine"){
-            Text("Il numero resta l’ultimo battito valido ricevuto. Durante le interruzioni diventa arancione e indica la sua età; viene aggiunto al grafico soltanto quando arriva una nuova lettura valida. Il movimento resta un avviso. La temperatura live resta grezza.").font(.caption)
+            Text("Il numero resta l’ultimo battito valido ricevuto. Il grafico contiene soltanto nuove letture valide. Il movimento resta un avviso. La temperatura live resta grezza.").font(.caption)
+            if let age=model.heartSampleAge{Text("Ultimo battito valido ricevuto \(age) s fa").font(.caption)}
             if let flags=model.heartDisplay.flags,let validity=model.heartDisplay.ibiValidity,let state=model.heartDisplay.measurementState{
                 Text("Ultimo pacchetto · flags \(flags), validità IBI \(validity), stato \(state)").font(.caption.monospaced())
             }
@@ -212,7 +208,7 @@ struct WeeklyEditor:View{
 }
 struct SettingsView:View{
     @EnvironmentObject var model:AppModel
-    @State var code="";@State var server="https://familos.burrai.com/api/wellness/v1";@State var scanning=false
+    @State var code="";@State var server="https://familos.example/api/wellness/v1";@State var scanning=false
     var body:some View{NavigationStack{Form{
         Section("FamilOS"){
             if model.enrolled{Label(model.ownerName ?? "Dispositivo associato",systemImage:"checkmark.shield");Text(model.syncStatus).font(.caption)}else{
@@ -293,6 +289,19 @@ struct ServerSessionDetail:View{
             let points=AppModel.chartPoints(analysis[metric])
             if !points.isEmpty{Section(title){Chart(points){p in LineMark(x:.value("Ora",p.date),y:.value(title,p.value)).foregroundStyle(.teal)}.chartYScale(domain:.automatic(includesZero:false)).frame(height:180)}}
         }
+        if analysis["cardio"] != .null{Section("Fasce cardio"){
+            let cardio=analysis["cardio"]
+            if (cardio["target_seconds"].number ?? 0)>0{
+                ForEach([("inside_seconds","Dentro fascia"),("below_seconds","Sotto fascia"),("above_seconds","Sopra fascia"),("unknown_seconds","Senza misure")],id:\.0){key,label in
+                    HStack{Text(label);Spacer();Text((cardio[key].number ?? 0).durationText).monospacedDigit()}
+                }
+                ForEach(Array(cardio["phases"].array.enumerated()),id:\.offset){_,phase in
+                    VStack(alignment:.leading){Text(phase["name"].string ?? "Fase").font(.headline)
+                        Text("\(Int(phase["target_min"].number ?? 0))–\(Int(phase["target_max"].number ?? 0)) BPM · dentro \((phase["inside_seconds"].number ?? 0).durationText)")}
+                }
+            }else{Text("Nessuna fascia impostata nella scheda di questa sessione.")}
+            Text("Pause e vuoti del segnale sono esclusi dalle fasce.").font(.caption).foregroundStyle(.secondary)
+        }}
         if analysis == .null{Text("Grafici non ancora disponibili sul telefono").foregroundStyle(.secondary)}
     }.navigationTitle("Riepilogo").task{if let id=session["id"].string{analysis=await model.sessionAnalysis(id)}}}
 }

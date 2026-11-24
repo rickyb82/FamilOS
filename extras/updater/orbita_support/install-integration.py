@@ -13,6 +13,10 @@ def main():
 # ORBITA_MANAGED_ENTRY — gestione dello stack condiviso, nessun secondo Caddy.
 set -eu
 case "${1:-help}" in
+ allenamento)
+  if [ "$(id -u)" -eq 0 ]; then exec python3 /opt/orbita/apps/familos/extras/allenamento/setup.py "${2:-status}"; fi
+  exec sudo python3 /opt/orbita/apps/familos/extras/allenamento/setup.py "${2:-status}"
+  ;;
  productivity|wordcraft|gridcraft|pdfcraft|deckcraft|ideacraft|mailcraft)
   if [ "$(id -u)" -eq 0 ]; then exec python3 /opt/orbita/scripts/familos-productivity.py "$@"; fi
   exec sudo python3 /opt/orbita/scripts/familos-productivity.py "$@"

@@ -1,0 +1,15 @@
+{
+  "java_release": 17,
+  "toolchain": "Temurin21.0.13.1+2",
+  "compile_sdk": 36,
+  "compile_android_sources": "passed",
+  "protocol_assertions": 25,
+  "protocol_test": "passed",
+  "fixtures": "synthetic_only",
+  "radio_or_device_tests_performed": false,
+  "sha256": {
+    "app/src/main/java/com/familos/homepulse/OuraProtocol.java": "4a11e036b35d1fdc565a980797d4374333d4eaef5d89d85a0c4446026f8b5c7b",
+    "app/src/main/java/com/familos/homepulse/RingBle.java": "518dd82599c423f6b9041eefade67bed7185054a9368897b9b8af13018a658bd",
+    "tests/OuraProtocolTest.java": "14bf33c09e6a744bb19eb7fa192dd4dddac914f907bf13e2965c9105a949c22f"
+  }
+}

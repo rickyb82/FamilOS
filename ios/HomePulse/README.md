@@ -1,6 +1,6 @@
 # Home Pulse per iPhone
 
-App nativa SwiftUI, iOS 17 o successivi. Progetto Xcode senza dipendenze esterne, con SQLite, CoreBluetooth, CoreLocation, notifiche locali e grafici Swift Charts. Il server predefinito è `https://familos.burrai.com/api/wellness/v1`.
+App nativa SwiftUI, iOS 17 o successivi. Progetto Xcode senza dipendenze esterne, con SQLite, CoreBluetooth, CoreLocation, notifiche locali e grafici Swift Charts. Il server personale si configura con il QR di associazione; l’indirizzo mostrato prima dell’associazione è un esempio.
 
 ## Aprire e verificare
 
@@ -46,7 +46,7 @@ Gli eventi hanno UUID stabile, sequenza locale e ora di acquisizione. WAL e tran
 
 Una coda separata alimenta URLSession background, con ritentativi al ritorno della rete o dell’app in primo piano. La risposta server deve confermare il batch e gli ID specifici: vengono eliminati dalla coda soltanto gli ID accettati, mentre il journal rimane sul telefono. Un errore o una conferma parziale non cancella i campioni rimanenti.
 
-Il battito live richiede stato di misura e IBI dichiarato valido dal firmware; le segnalazioni di movimento restano avvisi e non scartano da sole l’IBI. Solo i valori tra 20 e 250 BPM alimentano visualizzazione, statistiche e rilevamento palestra; i valori fuori intervallo rimangono nel journal. L’ultimo battito valido resta visibile durante le interruzioni, con età del campione e indicazione arancione di attesa. Un pacchetto non valido, una connessione non pronta o un’età oltre otto secondi tolgono soltanto l’indicazione di misura aggiornata. I campioni mancanti non vengono ricreati nei grafici o nelle statistiche. Il campo age dell’anello resta grezzo perché l’unità non è provata.
+Il battito live richiede stato di misura e IBI dichiarato valido dal firmware; le segnalazioni di movimento restano avvisi e non scartano da sole l’IBI. Solo i valori tra 20 e 250 BPM alimentano visualizzazione, statistiche e rilevamento palestra; i valori fuori intervallo rimangono nel journal. L’ultimo battito valido resta visibile durante le interruzioni. La Home mostra soltanto il valore BPM e la batteria; età del campione e diagnostica sono disponibili nelle Impostazioni. I campioni mancanti non vengono ricreati nei grafici o nelle statistiche. Il campo age dell’anello resta grezzo perché l’unità non è provata.
 
 La temperatura storica usa il campo 1 dei record 0x46, convertito in °C secondo le evidenze del parser originale. È indicata come temperatura dell’anello: non temperatura interna. L’ora dei record grezzi rimane non risolta fino all’elaborazione nativa sul server. La temperatura live viene mostrata solo come raw.
 
@@ -73,3 +73,5 @@ La percentuale viene letta con `0c00`, risposta `0d03` con livello, progresso di
 Una notifica locale scatta alla prima lettura al 10% o meno, se autorizzata. Lo stato persistente evita avvisi ripetuti dopo la riapertura dell’app; una successiva lettura almeno al 20% riattiva l’avviso. La richiesta del permesso compare all’apertura; il comando nelle Impostazioni permette di ricontrollarlo. La notifica non richiede un servizio push remoto.
 
 Le connessioni Bluetooth pendenti vengono annullate dopo 30 secondi e riprovate automaticamente. L’ultimo errore resta visibile fino a una connessione riuscita; Scollega interrompe i tentativi. I cambiamenti di stato vengono archiviati come eventi `device_status` senza credenziali.
+
+Con l’app aperta i campioni vengono inviati con trasporto HTTP immediato, con priorità sui dati storici e conferma dei singoli UUID. In background resta la coda URLSession. I riepiloghi delle sessioni FamilOS includono i tempi nelle fasce scelte nella scheda.

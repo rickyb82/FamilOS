@@ -34,10 +34,10 @@ import UserNotifications
         gym.apply(settings.auto_detection)
         api.onStatus={[weak self] status in Task{@MainActor in self?.syncStatus=status}}
         api.onUpload={[weak self] in Task{@MainActor in self?.pending=self?.store.pendingCount ?? 0}}
-        api.onAcknowledged={[weak self] in Task{@MainActor in await self?.refresh()}}
+        api.onAcknowledged={[weak self] in Task{@MainActor in self?.pending=self?.store.pendingCount ?? 0}}
         ring.onLive={[weak self] value,time in self?.receive(value,at:time)}
         ring.onHistory={[weak self] _ in self?.metrics=self?.store.metrics() ?? HistoricalMetrics()}
-        ring.onJournal={[weak self] in self?.pending=self?.store.pendingCount ?? 0}
+        ring.onJournal={[weak self] in self?.pending=self?.store.pendingCount ?? 0;self?.api.upload()}
         gym.onCandidate={[weak self] id,date in self?.startWorkout(auto:true,id:id,at:date)}
         gym.onReply={[weak self] id,name,negative in self?.resolveCandidate(id:id,name:name,negative:negative)}
         gym.onRegion={[weak self] inside in self?.regionEvent(inside)}

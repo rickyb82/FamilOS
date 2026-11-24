@@ -391,12 +391,13 @@ class HomePulseStore:
                 'ring_binding':self.ring(owner,secret=False)}
 
     def analysis(self,owner,session_id=None,start=None,end=None):
-        now=time.time();activity=None;workout_end=None
+        now=time.time();activity=None;workout_end=None;cardio=None;workout_events=[];session=None
         with self.connection() as db:
             if session_id and session_id!='last24h':
                 session=db.execute('SELECT * FROM sessions WHERE owner_id=? AND id=?',(owner,session_id)).fetchone()
                 if not session:raise StoreError('Sessione non trovata')
                 start=session['started_at'];workout_end=session['ended_at'];end=min(now,(workout_end or now)+600);activity=session['activity_name']
+                workout_events=[{'captured_at':r['captured_at'],'sequence':r['sequence'],'payload':json.loads(r['payload'])} for r in db.execute("SELECT captured_at,sequence,payload FROM events WHERE owner_id=? AND kind='workout' AND json_extract(payload,'$.session_id')=? ORDER BY captured_at,sequence,id",(owner,session_id))]
             else:
                 start=now-86400 if start is None else _finite(start)
                 end=now if end is None else _finite(end)
@@ -409,8 +410,11 @@ class HomePulseStore:
             meta=json.loads(row['metadata'])
             result[kind].append({'t':row['t'],'v':row['value'],**({'warnings':meta.get('warnings',[]),'flags_raw':meta.get('flags_raw')} if kind=='heart_rate' else {})})
             if kind=='heart_rate' and meta.get('warnings'):quality.append({'t':row['t'],**meta})
+        if session is not None:
+            from .cardio import analyze
+            cardio=analyze(start,workout_end or now,json.loads(session['config']),workout_events,result['heart_rate'])
         heart=[p['v'] for p in result['heart_rate'] if workout_end is None or p['t']<=workout_end]
-        return {**result,'window_start':start,'window_end':end,'workout_end':workout_end,'activity_name':activity,
+        return {**result,'cardio':cardio,'window_start':start,'window_end':end,'workout_end':workout_end,'activity_name':activity,
                 'steps_in_records':sum(p['v'] for p in result['step_increments']),'quality_events':quality,
                 'stats':{'average_bpm':sum(heart)/len(heart) if heart else None,'max_bpm':max(heart) if heart else None},
                 'acquisition_time_alignment':True,'interpolated':False}

@@ -21,12 +21,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import get_settings
 from ..db import get_db,SessionLocal
 from ..models import User,Role
-from ..security.sessions import AuthContext,require_adult,require_auth,RateLimiter,client_ip
+from ..security.sessions import AuthContext,require_adult as base_require_adult,require_auth,RateLimiter,client_ip
 from ..services.settings_store import encrypt,decrypt
 from ..services.homepulse.store import HomePulseStore,StoreError,ConflictError,ALLOWED_ACTIVITIES
 
 router=APIRouter(prefix='/wellness/v1',tags=['wellness'])
 pair_limiter=RateLimiter(12,300)
+
+async def require_adult(ctx=Depends(base_require_adult)):
+    from ..services.homepulse.module import enabled
+    from ..services.apps import app_enabled
+    if not enabled():raise HTTPException(404,'Modulo Allenamento non installato')
+    if not app_enabled(ctx.user,'wellness'):raise HTTPException(403,'Allenamento non abilitato per questo profilo')
+    return ctx
+
 
 
 @lru_cache(maxsize=1)
@@ -49,12 +57,16 @@ class Batch(BaseModel):
 
 
 async def bridge(request:Request,db:AsyncSession=Depends(get_db)):
+    from ..services.homepulse.module import enabled
+    from ..services.apps import app_enabled
     header=request.headers.get('authorization','')
     if not header.startswith('Bearer ') or len(header)>300:raise HTTPException(401,'Collega l’iPhone dal tuo profilo FamilOS')
+    if not enabled():raise HTTPException(403,'Modulo Allenamento disattivato: dati da conservare nella coda')
     device=await asyncio.to_thread(store().authenticate,header[7:])
     if not device:raise HTTPException(401,'Collegamento iPhone scaduto o revocato')
     user=await db.get(User,device['owner_id'])
     if not user or not user.is_active or user.role==Role.child:raise HTTPException(403,'Profilo non disponibile')
+    if not app_enabled(user,'wellness'):raise HTTPException(403,'Allenamento non abilitato')
     return {**device,'owner_name':user.display_name}
 
 
@@ -159,9 +171,11 @@ async def stream(request:Request,ctx:AuthContext=Depends(require_adult)):
     async def generate():
         checked=time.monotonic()
         while not await request.is_disconnected():
+            from ..services.homepulse.module import enabled
+            if not enabled():return
             if time.monotonic()-checked>=10:
                 async with SessionLocal() as db:
-                    try:await require_auth(request,db)
+                    try:await require_adult(await require_auth(request,db))
                     except HTTPException:return
                 checked=time.monotonic()
             value=await asyncio.to_thread(store().state,ctx.user.id)
@@ -172,6 +186,8 @@ async def stream(request:Request,ctx:AuthContext=Depends(require_adult)):
 
 async def process_history_once():
     """Worker receives sensor records only, never user profiles or credentials."""
+    from ..services.homepulse.module import enabled
+    if not enabled():return
     url=os.getenv('HOME_PULSE_CORE_URL','http://homepulse-core:8081').rstrip('/')
     for owner in await asyncio.to_thread(store().pending_owners):
         records=await asyncio.to_thread(store().historical_records,owner)

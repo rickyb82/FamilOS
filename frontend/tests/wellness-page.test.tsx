@@ -32,7 +32,7 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 it('integrates the app for adults and blocks child rendering and requests', async () => {
-  expect(desktopApps({ user: { role: 'adult' } } as Me).some(app => app.id === 'wellness')).toBe(true)
+  expect(desktopApps({ user: { role: 'adult' }, features: {wellness:true} } as Me).some(app => app.id === 'wellness')).toBe(true)
   expect(desktopApps({ user: { role: 'child' } } as Me).some(app => app.id === 'wellness')).toBe(false)
   auth.role = 'child'
   render(<Wellness />)

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from ..models import Role, User
 
-APPS: list[dict] = [{'id': 'wordcraft',
+APPS: list[dict] = [{"id":"wellness","label":"Allenamento","app":"Allenamento","glyph":"♡","desc":"Oura, fasce cardio, scheda e statistiche personali"},{'id': 'wordcraft',
   'label': 'Documenti Word',
   'app': 'WordCraft',
   'glyph': 'W',
@@ -54,17 +54,19 @@ APPS: list[dict] = [{'id': 'wordcraft',
 CHILD_APP_IDS = {"wordcraft", "gridcraft", "pdfcraft", "deckcraft", "ideacraft", "messaggi"}
 
 APP_IDS = [a["id"] for a in APPS]
-PRODUCTIVITY_IDS = {"wordcraft", "gridcraft", "pdfcraft", "deckcraft", "ideacraft", "mailcraft", "messaggi", "archivio"}
+PRODUCTIVITY_IDS = {"wordcraft", "gridcraft", "pdfcraft", "deckcraft", "ideacraft", "mailcraft", "messaggi", "archivio", "wellness"}
 
 
 def available_app_ids() -> set[str]:
     from ..config import org_mode_on
-    return set(APP_IDS) if org_mode_on() else set(PRODUCTIVITY_IDS)
+    from .homepulse.module import enabled
+    available=set(APP_IDS) if org_mode_on() else set(PRODUCTIVITY_IDS)
+    return available if enabled() else available-{"wellness"}
 # software che non si abilitano da soli agli utenti "tutti" (User.apps = None): li vede il super amministratore e chi li ha
 # avuti esplicitamente nella scheda del membro (l'Intranet e' riservata ai super amministratori)
 OPT_IN = {a["id"] for a in APPS if a.get("opt_in")}
 # tool "nativi" (non mcp__) che appartengono a un'app
-NATIVE_TOOL_APP = {"write_document": "wordcraft", "write_spreadsheet": "gridcraft", "pdf_tool": "pdfcraft",
+NATIVE_TOOL_APP = {**{name:"wellness" for name in ("allenamento_stato","allenamento_scheda","allenamento_analisi","allenamento_controlla")},"write_document": "wordcraft", "write_spreadsheet": "gridcraft", "pdf_tool": "pdfcraft",
                    "write_presentation": "deckcraft", "mind_map": "ideacraft", "starlink_status": "starlink"}
 
 

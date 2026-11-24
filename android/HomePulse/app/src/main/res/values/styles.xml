@@ -1,0 +1,8 @@
+<resources>
+    <style name="HomePulseTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item><item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">#091216</item><item name="android:navigationBarColor">#091216</item>
+        <item name="android:windowBackground">#091216</item><item name="android:colorAccent">#00C6D4</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+</resources>

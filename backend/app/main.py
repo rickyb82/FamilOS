@@ -122,8 +122,9 @@ app.include_router(browser_approvals.parent_router, prefix="/api")
 app.include_router(updates.router, prefix="/api")
 from .api import installed_apps
 app.include_router(installed_apps.router, prefix="/api")
-from .api import wellness
+from .api import wellness, wellness_module
 app.include_router(wellness.router, prefix="/api")
+app.include_router(wellness_module.router, prefix="/api")
 app.include_router(app_access.router, prefix="/api")
 app.include_router(branding.router, prefix="/api")
 app.include_router(education.router, prefix="/api")

@@ -2,6 +2,45 @@ import XCTest
 @testable import HomePulse
 
 final class HomePulseTests:XCTestCase {
+    func testForegroundSendsExactDurableBatchAndAcknowledgesIt()async throws{
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer{try? FileManager.default.removeItem(at:folder)}
+        let store=try EventStore(url:folder.appendingPathComponent("network.sqlite"))
+        let event=try store.append(kind:"sensor_packet",payload:.object(["raw_hex":.string("2f0f280211020000e81300000000ac0d01")]))
+        let done=expectation(description:"immediate request ACK")
+        let config=URLSessionConfiguration.ephemeral;config.protocolClasses=[HomePulseHTTPFixture.self]
+        let session=URLSession(configuration:config)
+        defer{session.invalidateAndCancel();HomePulseHTTPFixture.reply=nil}
+        HomePulseHTTPFixture.reply={request in
+            XCTAssertEqual(request.url?.path,"/api/wellness/v1/bridges/events")
+            XCTAssertEqual(request.httpMethod,"POST");XCTAssertEqual(request.value(forHTTPHeaderField:"Authorization"),"Bearer synthetic-only")
+            var body=request.httpBody
+            if body==nil,let stream=request.httpBodyStream{stream.open();defer{stream.close()};var data=Data();var buffer=[UInt8](repeating:0,count:4096);while stream.hasBytesAvailable{let count=stream.read(&buffer,maxLength:buffer.count);if count<=0{break};data.append(contentsOf:buffer.prefix(count))};body=data}
+            let batch=try JSONDecoder().decode(EventBatch.self,from:XCTUnwrap(body))
+            XCTAssertEqual(batch.events.map{$0.event_id},[event.event_id]);XCTAssertEqual(batch.events[0].captured_at,event.captured_at)
+            return try JSONEncoder().encode(JSONValue.object(["batch_id":.string(batch.batch_id),"accepted_event_ids":.array([.string(event.event_id)])]))
+        }
+        let credentials=Credentials(device_id:"synthetic-device",access_token:"synthetic-only",server:URL(string:"https://synthetic.example/api/wellness/v1")!)
+        let api=WellnessAPI(store:store,folder:folder.appendingPathComponent("uploads"),transport:session,credentials:{credentials},monitorNetwork:false)
+        api.onAcknowledged={done.fulfill()};api.setForeground(true)
+        await fulfillment(of:[done],timeout:5)
+        XCTAssertEqual(store.pendingCount,0);XCTAssertEqual(store.journalCount,1)
+    }
+
+    func testImmediateBatchPrioritizesLiveAndPreservesHistoryForReplay()throws{
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer{try? FileManager.default.removeItem(at:folder)}
+        let store=try EventStore(url:folder.appendingPathComponent("live.sqlite"))
+        let old=try store.append(kind:"ring_history",payload:.object(["raw_hex":.string("410401000000")]),at:Date().addingTimeInterval(-60))
+        let live=try store.append(kind:"sensor_packet",payload:.object(["raw_hex":.string("2f0f280211020000e81300000000ac0d01")]))
+        let first=try XCTUnwrap(store.prepareBatch(limit:1,prioritizeLive:true))
+        XCTAssertEqual(first.events.map{$0.event_id},[live.event_id]);XCTAssertEqual(first.events[0].sequence,live.sequence)
+        XCTAssertEqual(try store.prepareBatch(prioritizeLive:true)?.batch_id,first.batch_id)
+        try store.acknowledge(batchID:first.batch_id,accepted:[live.event_id])
+        let remaining=try XCTUnwrap(store.prepareBatch(prioritizeLive:true))
+        XCTAssertEqual(remaining.events.map{$0.event_id},[old.event_id]);XCTAssertEqual(store.journalCount,2)
+    }
+
     func testDisplayRetainsActualHeartValueAcrossMotionInvalidPacketsAndSilence()throws{
         let good=Data(hex:"2f0f280211020000e81300000000ac0d01")!,start=Date(timeIntervalSince1970:1000)
         var display=HeartDisplayState()
@@ -218,4 +257,18 @@ final class OuraBatteryProtocolTests:XCTestCase {
         XCTAssertEqual(value.level,50);XCTAssertNil(value.isCharging)
         XCTAssertEqual(value.chargingProgressRaw,255);XCTAssertEqual(value.chargingRecommendationRaw,2)
     }
+}
+
+
+private final class HomePulseHTTPFixture:URLProtocol {
+    static var reply:((URLRequest)throws->Data)?
+    override class func canInit(with request:URLRequest)->Bool {request.url?.host == "synthetic.example"}
+    override class func canonicalRequest(for request:URLRequest)->URLRequest {request}
+    override func startLoading(){do{
+        guard let reply=Self.reply,let url=request.url else{throw URLError(.badServerResponse)}
+        let data=try reply(request)
+        client?.urlProtocol(self,didReceive:HTTPURLResponse(url:url,statusCode:200,httpVersion:"HTTP/1.1",headerFields:["Content-Type":"application/json"])!,cacheStoragePolicy:.notAllowed)
+        client?.urlProtocol(self,didLoad:data);client?.urlProtocolDidFinishLoading(self)
+    }catch{client?.urlProtocol(self,didFailWithError:error)}}
+    override func stopLoading(){}
 }

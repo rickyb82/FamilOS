@@ -39,7 +39,13 @@ export type WellnessState = {
   active_session?: WellnessSession | null
 }
 export type TimePoint = { t: number; v: number; warnings?: string[]; flags_raw?: number }
+export type CardioStats = {
+  target_seconds: number; below_seconds:number; inside_seconds:number; above_seconds:number; unknown_seconds:number
+  elapsed_active_seconds:number; unconfigured_seconds:number; coverage_fraction:number|null
+  phases:Array<{phase_index:number;name:string;target_min:number;target_max:number;target_seconds:number;below_seconds:number;inside_seconds:number;above_seconds:number;unknown_seconds:number;samples:number}>
+}
 export type WellnessAnalysis = {
+  cardio?:CardioStats|null;
   window_start: number; window_end: number; workout_end?: number | null; heart_rate: TimePoint[]
   respiratory_rate?: TimePoint[]; heart_rate_outside_display?: TimePoint[]; spo2: TimePoint[]; temperature: TimePoint[]; motion: TimePoint[]; step_increments: TimePoint[]
   steps_in_records?: number | null; quality_events?: unknown[]; activity_name?: string; stats?: SessionStats
@@ -126,9 +132,10 @@ export function heartQuality(heart: WellnessState['latest']['heart_rate'], now: 
   const valid = heart != null && Number.isFinite(heart.bpm) && heart.bpm >= 20 && heart.bpm <= 250 && captured != null
   const fresh = valid && now - captured! <= 8 && now - captured! >= -2
   const flags = heart?.flags_raw
-  const flagged = flags != null && !!(flags & (2 | 4 | 8 | 16 | 32))
+  const hasExplicitIbi = heart?.ibi_validity_raw != null
+  const flagged = !hasExplicitIbi && flags != null && !!(flags & (2 | 4 | 8 | 32))
   const invalidIbi = heart?.ibi_validity_raw != null && heart.ibi_validity_raw !== 1
-  return { fresh: !!fresh, reliable: !!fresh && !flagged && !invalidIbi && !(heart?.warnings?.length), captured, warnings: heart?.warnings || [] }
+  return { fresh: !!fresh, reliable: !!fresh && !flagged && !invalidIbi && (hasExplicitIbi || !(heart?.warnings?.some(warning => !/moviment|motion/i.test(warning)))), captured, warnings: heart?.warnings || [] }
 }
 export function chartSegments(values: TimePoint[], maxGap = 8): TimePoint[][] {
   const sorted = [...values].filter(p => Number.isFinite(p.t) && Number.isFinite(p.v)).sort((a, b) => a.t - b.t)

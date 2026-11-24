@@ -1,4 +1,5 @@
 import { useAuth } from '../lib/auth'
+import WellnessModule from './WellnessModule'
 import AppCatalog from "./AppCatalog"
 import { useEffect, useState } from 'react'
 import { get, post } from '../lib/api'
@@ -59,6 +60,7 @@ export default function AdminUpdates() {
   }
   return <section className="card stack">
     <h2>Aggiornamenti e app</h2>
+    <WellnessModule />
     {status?.catalog_enabled && <AppCatalog disabled={disabled} onChange={() => get<Status>("/admin/updates").then(setStatus).catch(e => setError(e.message))} />}
     <p>Le release si installano solo su richiesta dell’amministratore. Versione del sistema: <b>{status?.version || '—'}</b>.</p>
     {error && <p role="alert" className="error">{error}</p>}

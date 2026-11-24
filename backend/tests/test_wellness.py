@@ -19,6 +19,14 @@ def event(kind='sensor_packet',payload=None,stamp=None,identity=None):
             'kind':kind,'payload':payload if payload is not None else {'raw_hex':LIVE.hex(),'api_version':[2,0,0]}}
 
 
+@pytest.fixture(autouse=True)
+def installed_module(monkeypatch,tmp_path):
+    from app.services.homepulse import module
+    monkeypatch.setattr(module,'enabled',lambda:True)
+    isolated=HomePulseStore(tmp_path/'api-wellness',wellness.encrypt,wellness.decrypt)
+    monkeypatch.setattr(wellness,'store',lambda:isolated)
+
+
 @pytest.fixture
 def archive(tmp_path):
     return HomePulseStore(tmp_path/'homepulse')

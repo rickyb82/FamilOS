@@ -43,9 +43,11 @@ describe('wellness acquisition time and personal data', () => {
     const heart = { bpm: 120, captured_at: 100, source: 'gen3', ibi_validity_raw: 1 }
     expect(heartQuality(heart, 105).reliable).toBe(true)
     expect(heartQuality(heart, 109).reliable).toBe(false)
-    expect(heartQuality({ ...heart, flags_raw: 2 }, 105).reliable).toBe(false)
+    expect(heartQuality({ ...heart, flags_raw: 17, warnings: ['Movimento segnalato'] }, 105).reliable).toBe(true)
+    expect(heartQuality({ ...heart, flags_raw: 2 }, 105).reliable).toBe(true)
     expect(heartQuality({ ...heart, ibi_validity_raw: 0 }, 105).reliable).toBe(false)
-    expect(heartQuality({ ...heart, warnings: ['contact'] }, 105).reliable).toBe(false)
+    expect(heartQuality({ ...heart, warnings: ['contact'] }, 105).reliable).toBe(true)
+    expect(heartQuality({ ...heart, ibi_validity_raw: undefined, flags_raw: 2 }, 105).reliable).toBe(false)
     expect(heartQuality({ ...heart, bpm: 251 }, 105).reliable).toBe(false)
   })
   it('preserves incompatible declared composition while withholding derived lean mass and BMR', () => {

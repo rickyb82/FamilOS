@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     updater_socket: str = "/run/familos-updater/control.sock"
     browser_worker_url: str = "http://browser:8080"
     browser_worker_token: str = ""
+    wellness_enabled: bool = False  # Modulo Allenamento opzionale
     allow_code_execution: bool = False  # shared sandbox lacks per-job isolation; opt-in only
 
     # Esposizione / WebAuthn
