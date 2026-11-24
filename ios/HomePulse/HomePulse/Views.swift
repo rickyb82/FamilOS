@@ -234,8 +234,8 @@ struct SettingsView:View{
             Text(model.batteryLevel.map{"Ultima lettura: \($0)%"} ?? "In attesa della prima lettura")
             Text(model.batteryNotificationStatus).font(.caption)
             Button("Aggiorna batteria"){Task{await model.ring.refreshBattery()}}.disabled(!model.ring.ready || model.ring.busy)
-            Button("Abilita avviso al 10%"){Task{await model.requestBatteryNotifications()}}
-            Text("Un avviso al 10% o meno. Si riattiva dopo una lettura di ricarica almeno al 20%. Se l’anello è scollegato, livello e stato mostrati restano gli ultimi ricevuti.").font(.caption).foregroundStyle(.secondary)
+            Button("Abilita notifiche batteria"){Task{await model.requestBatteryNotifications()}}
+            Text("Un avviso quando la carica è completa e uno al 10% o meno. Si riattiva dopo una lettura di ricarica almeno al 20%. Se l’anello è scollegato, livello e stato mostrati restano gli ultimi ricevuti.").font(.caption).foregroundStyle(.secondary)
         }
         Section("Profilo · nessun valore presunto"){
             TextField("Peso (kg)",value:$model.settings.profile.weight_kg,format:.number).keyboardType(.decimalPad)

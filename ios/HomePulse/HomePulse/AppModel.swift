@@ -19,6 +19,7 @@ import UserNotifications
     var batteryChargeState:RingChargeState?{RingChargeState(progress:batteryChargingProgressRaw)}
     @Published var batteryNotificationStatus="Notifiche da autorizzare"
     private var batteryAlert=BatteryAlertState();private var batteryNotificationPending=false
+    private var batteryFullAlert=BatteryFullAlertState();private var batteryFullNotificationPending=false
     let store:EventStore;let api:WellnessAPI;let ring:RingBridge;let gym:GymDetection
     private var ticking:Task<Void,Never>?;private var refreshing=false
     init(store:EventStore,folder:URL){
@@ -45,6 +46,7 @@ import UserNotifications
         gym.onRegion={[weak self] inside in self?.regionEvent(inside)}
         if let snapshot=store.load(RingBatterySnapshot.self,key:"ringBattery.latest"){batteryLevel=snapshot.level;batteryAt=snapshot.at;batteryChargingProgressRaw=snapshot.chargingProgressRaw}
         batteryAlert=store.load(BatteryAlertState.self,key:"ringBattery.alert") ?? BatteryAlertState()
+        batteryFullAlert=store.load(BatteryFullAlertState.self,key:"ringBattery.fullAlert") ?? BatteryFullAlertState()
         ring.onBattery={[weak self] value,date in self?.receiveBattery(value.level,at:date,chargingProgressRaw:value.chargingProgressRaw)}
         Task{await refreshBatteryNotificationStatus()}
         pending=store.pendingCount
@@ -53,7 +55,7 @@ import UserNotifications
     }
     func refreshBatteryNotificationStatus()async{
         let permission=await UNUserNotificationCenter.current().notificationSettings()
-        batteryNotificationStatus=permission.authorizationStatus == .authorized || permission.authorizationStatus == .provisional ? "Avviso al 10% attivo":"Notifiche da autorizzare nelle impostazioni iPhone"
+        batteryNotificationStatus=permission.authorizationStatus == .authorized || permission.authorizationStatus == .provisional ? "Avvisi al 10% e a carica completa attivi":"Notifiche da autorizzare nelle impostazioni iPhone"
     }
     func requestBatteryNotifications()async{
         do{_ = try await UNUserNotificationCenter.current().requestAuthorization(options:[.alert,.sound]);await refreshBatteryNotificationStatus()
@@ -64,6 +66,7 @@ import UserNotifications
         guard (0...100).contains(level) else{return}
         batteryLevel=level;batteryAt=date;batteryChargingProgressRaw=chargingProgressRaw
         do{try store.save(RingBatterySnapshot(level:level,at:date,chargingProgressRaw:chargingProgressRaw),key:"ringBattery.latest")}catch{message="Livello batteria non salvato"}
+        notifyFullCharge(level:level,progress:chargingProgressRaw)
         if level>=20{_ = batteryAlert.observe(level);try? store.save(batteryAlert,key:"ringBattery.alert")}
         guard level<=10,batteryAlert.armed,!batteryNotificationPending else{return}
         batteryNotificationPending=true
@@ -77,6 +80,26 @@ import UserNotifications
             do{try await center.add(UNNotificationRequest(identifier:"homepulse.ring-battery-low",content:content,trigger:nil))
                 _ = batteryAlert.observe(latest);try store.save(batteryAlert,key:"ringBattery.alert")
             }catch{message="Avviso batteria non completato"}
+        }
+    }
+    private func notifyFullCharge(level:Int,progress:Int?){
+        guard RingChargeState(progress:progress) == .full else{
+            _ = batteryFullAlert.observe(level:level,progress:progress)
+            try? store.save(batteryFullAlert,key:"ringBattery.fullAlert")
+            return
+        }
+        guard batteryFullAlert.armed,!batteryFullNotificationPending else{return}
+        batteryFullNotificationPending=true
+        Task{defer{batteryFullNotificationPending=false}
+            let center=UNUserNotificationCenter.current(),permission=await center.notificationSettings()
+            guard permission.authorizationStatus == .authorized || permission.authorizationStatus == .provisional else{await refreshBatteryNotificationStatus();return}
+            guard batteryChargeState == .full,batteryFullAlert.armed,let latest=batteryLevel else{return}
+            let content=UNMutableNotificationContent();content.title="Oura completamente carico"
+            content.body="L’anello ha completato la carica. Puoi toglierlo dal caricatore e indossarlo.";content.sound = .default
+            do{try await center.add(UNNotificationRequest(identifier:"homepulse.ring-battery-full",content:content,trigger:nil))
+                _ = batteryFullAlert.observe(level:latest,progress:100)
+                try store.save(batteryFullAlert,key:"ringBattery.fullAlert")
+            }catch{message="Avviso di carica completa non completato"}
         }
     }
     var displayedBPM:Int?{heartDisplay.bpm}

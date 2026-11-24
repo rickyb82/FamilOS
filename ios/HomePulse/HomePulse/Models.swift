@@ -158,6 +158,19 @@ struct BatteryAlertState:Codable {
 }
 
 
+/// One completion alert until the ring is observed off the charger, or in a
+/// later charging cycle below 90%. A brief 99/100 fluctuation stays latched.
+struct BatteryFullAlertState:Codable {
+    var armed=true
+    mutating func observe(level:Int,progress:Int?)->Bool {
+        guard (0...100).contains(level),let state=RingChargeState(progress:progress) else{return false}
+        if state == .idle || state == .charging && level<=90{armed=true;return false}
+        guard state == .full,armed else{return false}
+        armed=false;return true
+    }
+}
+
+
 /// Retains an actual observation for display; invalid packets never renew its timestamp.
 struct HeartDisplayState {
     private(set) var bpm:Int?

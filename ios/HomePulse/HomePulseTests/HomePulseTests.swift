@@ -98,6 +98,28 @@ final class HomePulseTests:XCTestCase {
         var first=BatteryAlertState();XCTAssertTrue(first.observe(5))
     }
 
+    func testFullBatteryAlertOnceAcrossRestartAndChargeFluctuation()throws{
+        var alert=BatteryFullAlertState()
+        XCTAssertFalse(alert.observe(level:99,progress:99))
+        XCTAssertTrue(alert.observe(level:100,progress:100))
+        alert=try JSONDecoder().decode(BatteryFullAlertState.self,from:JSONEncoder().encode(alert))
+        XCTAssertFalse(alert.observe(level:100,progress:100))
+        XCTAssertFalse(alert.observe(level:99,progress:99))
+        XCTAssertFalse(alert.observe(level:100,progress:100))
+        XCTAssertFalse(alert.observe(level:99,progress:0))
+        XCTAssertTrue(alert.observe(level:100,progress:100))
+    }
+    func testFullBatteryAlertNeedsFirmwareCompletionAndRearmsAfterOfflineDischarge(){
+        var alert=BatteryFullAlertState()
+        XCTAssertFalse(alert.observe(level:100,progress:nil))
+        XCTAssertFalse(alert.observe(level:100,progress:255))
+        XCTAssertFalse(alert.observe(level:101,progress:100))
+        XCTAssertFalse(alert.observe(level:100,progress:0))
+        XCTAssertTrue(alert.observe(level:100,progress:100))
+        XCTAssertFalse(alert.observe(level:50,progress:50))
+        XCTAssertTrue(alert.observe(level:100,progress:100))
+    }
+
     func testLiveIBIWithMotionRemainsAcceptedAndFlagged()throws{
         let d=Data(hex:"2f0f280211020000e81300000000ac0d01")!
         let value=try OuraWire.live(d,api:[2,0,0])
