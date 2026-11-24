@@ -6,7 +6,8 @@ import UserNotifications
     @Published var settings:LocalSettings
     @Published var current:WorkoutSession?
     @Published var sessions:[WorkoutSession]=[];@Published var readings:[Reading]=[]
-    @Published var now=Date();@Published var bpm:Int?;@Published var sampleAt:Date?
+    @Published var now=Date();@Published var heartDisplay=HeartDisplayState()
+    var bpm:Int?{heartDisplay.bpm};var sampleAt:Date?{heartDisplay.capturedAt}
     @Published var warnings:[String]=[];@Published var temperatureRaw:Int?
     @Published var metrics=HistoricalMetrics();@Published var serverData:JSONValue = .null
     @Published var analysisData:JSONValue = .null
@@ -76,10 +77,14 @@ import UserNotifications
             }catch{message="Avviso batteria non completato"}
         }
     }
-    var displayedBPM:Int?{guard let sampleAt,now.timeIntervalSince(sampleAt)>=0,now.timeIntervalSince(sampleAt)<=8 else{return nil};return bpm}
-    private func receive(_ value:OuraLive,at date:Date){warnings=value.warnings;temperatureRaw=value.temperatureRaw
-        guard let hr=value.bpm else{bpm=nil;return}
-        guard OuraWire.displaySupported(hr) else{bpm=nil;warnings.append("Battito fuori intervallo di visualizzazione: pacchetto conservato");return};bpm=hr;sampleAt=date
+    var displayedBPM:Int?{heartDisplay.bpm}
+    var hasFreshBPM:Bool{ring.ready && heartDisplay.isFresh(at:now)}
+    var heartSampleAge:Int?{heartDisplay.ageSeconds(at:now)}
+    private func receive(_ value:OuraLive,at date:Date){now=date;warnings=value.warnings;temperatureRaw=value.temperatureRaw
+        guard heartDisplay.receive(value,at:date),let hr=heartDisplay.bpm else{
+            if let hr=value.bpm,!OuraWire.displaySupported(hr){warnings.append("Battito fuori intervallo di visualizzazione: pacchetto conservato")}
+            return
+        }
         let point=Reading(date:date,bpm:hr)
         do{try store.addReading(point);readings.append(point);if readings.count>1000{readings.removeFirst(readings.count-1000)}
             gym.accept(point,manualWorkout:current != nil)

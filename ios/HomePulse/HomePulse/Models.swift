@@ -147,3 +147,24 @@ struct BatteryAlertState:Codable {
         armed=false;return true
     }
 }
+
+
+/// Retains an actual observation for display; invalid packets never renew its timestamp.
+struct HeartDisplayState {
+    private(set) var bpm:Int?
+    private(set) var capturedAt:Date?
+    private(set) var latestPacketValid=false
+    private(set) var flags:Int?
+    private(set) var ibiValidity:Int?
+    private(set) var measurementState:Int?
+    mutating func receive(_ value:OuraLive,at date:Date)->Bool {
+        flags=value.flags;ibiValidity=value.validity;measurementState=value.state
+        guard let next=value.bpm,OuraWire.displaySupported(next) else{latestPacketValid=false;return false}
+        bpm=next;capturedAt=date;latestPacketValid=true;return true
+    }
+    func isFresh(at date:Date)->Bool {
+        guard latestPacketValid,let capturedAt else{return false}
+        let age=date.timeIntervalSince(capturedAt);return age>=0 && age<=8
+    }
+    func ageSeconds(at date:Date)->Int? {capturedAt.map{max(0,Int(date.timeIntervalSince($0)))}}
+}

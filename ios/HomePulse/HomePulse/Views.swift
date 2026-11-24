@@ -53,23 +53,35 @@ struct HomeView:View {
 }
 struct LiveCard:View{
     @EnvironmentObject var model:AppModel;@ObservedObject var ring:RingBridge
-    var body:some View{Card(title:"Battito live"){
-        HStack(alignment:.firstTextBaseline){Text(model.displayedBPM.map(String.init) ?? "—").font(.system(size:82,weight:.semibold,design:.rounded)).monospacedDigit();Text("BPM").font(.title3).foregroundStyle(.secondary);Spacer();Image(systemName:"heart.fill").foregroundStyle(.red).font(.title)}
+    var body:some View{Card(title:model.hasFreshBPM ? "Battito live":"Battito · ultima lettura"){
+        HStack(alignment:.firstTextBaseline){Text(model.displayedBPM.map(String.init) ?? "—").foregroundStyle(model.hasFreshBPM ? Color.primary:Color.orange).font(.system(size:82,weight:.semibold,design:.rounded)).monospacedDigit();Text("BPM").font(.title3).foregroundStyle(.secondary);Spacer();Image(systemName:"heart.fill").foregroundStyle(.red).font(.title)}
+        if let age=model.heartSampleAge{
+            Text(model.hasFreshBPM ? "Lettura aggiornata · \(age) s fa":"Ultimo battito valido · \(age) s fa · in attesa di aggiornamento")
+                .font(.subheadline).foregroundStyle(model.hasFreshBPM ? Color.secondary:Color.orange)
+        }
         HStack{
             Label(model.batteryLevel.map{"Batteria anello: \($0)%"} ?? "Batteria anello: —",systemImage:(model.batteryLevel ?? 100)<=10 ? "battery.0percent":"battery.100percent")
                 .foregroundStyle((model.batteryLevel ?? 100)<=10 ? Color.orange:Color.secondary)
             Spacer()
             if let at=model.batteryAt{Text(at,style:.relative).font(.caption).foregroundStyle(.secondary)}
         }.font(.subheadline)
+        if model.displayedBPM==nil{Text("In attesa della prima lettura valida dell’anello.").font(.caption).foregroundStyle(.secondary)}
+    }}
+}
+struct RingSettingsControls:View{
+    @EnvironmentObject var model:AppModel;@ObservedObject var ring:RingBridge
+    var body:some View{VStack(alignment:.leading,spacing:12){
         Label(ring.status,systemImage:ring.connected ? "antenna.radiowaves.left.and.right":"antenna.radiowaves.left.and.right.slash").font(.subheadline)
         if let error=ring.lastConnectionError{Text(error+" Ritento automaticamente; puoi premere Scollega per fermare i tentativi.").font(.caption).foregroundStyle(.orange)}
         ForEach(model.warnings,id:\.self){Text($0).font(.caption).foregroundStyle(.orange)}
-        if model.displayedBPM==nil{Text("Il valore appare solo con un IBI valido e recente.").font(.caption).foregroundStyle(.secondary)}
         HStack{Button("Cerca anello"){ring.scan()}.buttonStyle(.borderedProminent);if ring.connected || ring.status == "Connessione…"{Button("Scollega"){ring.disconnect()}.buttonStyle(.bordered)}}
         ForEach(ring.devices,id:\.identifier){device in Button(device.name ?? "Anello Oura"){ring.connect(device)}.buttonStyle(.bordered)}
         if ring.ready{Button("Scarica storico"){Task{await ring.downloadHistory()}}.disabled(ring.busy)}
         DisclosureGroup("Qualità e origine"){
-            Text("Bluetooth dell’anello · segnalazioni di movimento conservate. Il valore scompare dopo 8 secondi senza aggiornamento valido. La temperatura live resta grezza.").font(.caption)
+            Text("Il numero resta l’ultimo battito valido ricevuto. Durante le interruzioni diventa arancione e indica la sua età; viene aggiunto al grafico soltanto quando arriva una nuova lettura valida. Il movimento resta un avviso. La temperatura live resta grezza.").font(.caption)
+            if let flags=model.heartDisplay.flags,let validity=model.heartDisplay.ibiValidity,let state=model.heartDisplay.measurementState{
+                Text("Ultimo pacchetto · flags \(flags), validità IBI \(validity), stato \(state)").font(.caption.monospaced())
+            }
             if let raw=model.temperatureRaw{Text("Temperatura live raw: \(raw)").font(.caption.monospaced())}
         }.font(.caption)
     }}
@@ -210,6 +222,7 @@ struct SettingsView:View{
                 Button("Scansiona QR",systemImage:"qrcode.viewfinder"){scanning=true}
             }
         }
+        Section("Anello e Bluetooth"){RingSettingsControls(ring:model.ring)}
         Section("Batteria anello"){
             Text(model.batteryLevel.map{"Ultima lettura: \($0)%"} ?? "In attesa della prima lettura")
             Text(model.batteryNotificationStatus).font(.caption)

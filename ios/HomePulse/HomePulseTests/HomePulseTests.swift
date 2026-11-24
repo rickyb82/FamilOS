@@ -2,6 +2,28 @@ import XCTest
 @testable import HomePulse
 
 final class HomePulseTests:XCTestCase {
+    func testDisplayRetainsActualHeartValueAcrossMotionInvalidPacketsAndSilence()throws{
+        let good=Data(hex:"2f0f280211020000e81300000000ac0d01")!,start=Date(timeIntervalSince1970:1000)
+        var display=HeartDisplayState()
+        var invalid=good;invalid[9]=3
+        XCTAssertFalse(display.receive(try OuraWire.live(invalid,api:[2,0,0]),at:start))
+        XCTAssertNil(display.bpm);XCTAssertNil(display.capturedAt)
+        XCTAssertTrue(display.receive(try OuraWire.live(good,api:[2,0,0]),at:start))
+        XCTAssertTrue(display.isFresh(at:start));XCTAssertEqual(display.bpm,60)
+        XCTAssertFalse(display.receive(try OuraWire.live(invalid,api:[2,0,0]),at:start.addingTimeInterval(1)))
+        XCTAssertEqual(display.bpm,60);XCTAssertEqual(display.capturedAt,start)
+        XCTAssertFalse(display.isFresh(at:start.addingTimeInterval(1)))
+        XCTAssertEqual(display.ageSeconds(at:start.addingTimeInterval(30)),30)
+        XCTAssertEqual(display.bpm,60);XCTAssertFalse(display.isFresh(at:start.addingTimeInterval(30)))
+        XCTAssertTrue(display.receive(try OuraWire.live(good,api:[2,0,0]),at:start.addingTimeInterval(31)))
+        XCTAssertTrue(display.isFresh(at:start.addingTimeInterval(31)))
+        XCTAssertFalse(display.isFresh(at:start.addingTimeInterval(40)))
+        XCTAssertEqual(display.bpm,60);XCTAssertEqual(display.flags,17)
+        var outside=try OuraWire.live(good,api:[2,0,0]);outside.bpm=600
+        XCTAssertFalse(display.receive(outside,at:start.addingTimeInterval(41)))
+        XCTAssertEqual(display.bpm,60);XCTAssertEqual(display.capturedAt,start.addingTimeInterval(31))
+    }
+
     func testBatteryAlertThresholdHysteresisAndPersistence()throws{
         var alert=BatteryAlertState()
         XCTAssertFalse(alert.observe(11));XCTAssertTrue(alert.observe(10));XCTAssertFalse(alert.observe(9))
