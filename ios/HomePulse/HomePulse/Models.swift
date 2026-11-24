@@ -136,7 +136,16 @@ struct HistoricalMetrics {var temperatureC:Double?;var receivedAt:Date?;var moti
 // Identificativi verificati nel catalogo Android, non dedotti dal nome libero.
 enum ActivityCatalog { static let defaults:[(Int,String)]=[(65535,"Altro"),(14,"Camminata"),(12,"Corsa"),(5,"Ciclismo"),(8,"Pesi"),(10,"Pilates"),(15,"Yoga")] }
 
-struct RingBatterySnapshot:Codable {var level:Int;var at:Date}
+enum RingChargeState:String {
+    case idle,charging,full
+    init?(progress:Int?){
+        guard let progress,(0...100).contains(progress) else{return nil}
+        self=progress==0 ? .idle:(progress==100 ? .full:.charging)
+    }
+    var label:String{switch self{case .idle:return "Non in carica";case .charging:return "In carica";case .full:return "Carica completa"}}
+    var isCharging:Bool{self != .idle}
+}
+struct RingBatterySnapshot:Codable {var level:Int;var at:Date;var chargingProgressRaw:Int?=nil}
 /// One alert per discharge. Hysteresis prevents repeated alerts around 10%.
 struct BatteryAlertState:Codable {
     var armed=true

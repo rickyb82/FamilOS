@@ -8,7 +8,7 @@ struct OuraBattery:Equatable {
     var level:Int
     var chargingProgressRaw:Int
     var chargingRecommendationRaw:Int
-    var isCharging:Bool?{(0...100).contains(chargingProgressRaw) ? chargingProgressRaw>0:nil}
+    var isCharging:Bool?{RingChargeState(progress:chargingProgressRaw)?.isCharging}
 }
 enum OuraWire {
     static let service="98ed0001-a541-11e4-b6a0-0002a5d5c51b"

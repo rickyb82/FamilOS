@@ -55,7 +55,10 @@ struct HomeView:View {
 struct RingBatteryCard:View{
     @EnvironmentObject var model:AppModel
     var body:some View{HStack{
-        Label("Batteria Oura",systemImage:(model.batteryLevel ?? 100)<=10 ? "battery.0percent":"battery.100percent").font(.headline)
+        VStack(alignment:.leading,spacing:5){
+            Label("Batteria Oura",systemImage:model.batteryChargeState?.isCharging == true ? "battery.100percent.bolt":((model.batteryLevel ?? 100)<=10 ? "battery.0percent":"battery.100percent")).font(.headline)
+            if let state=model.batteryChargeState{Text(state.label).font(.subheadline).foregroundStyle(.secondary).accessibilityIdentifier("ring-battery-charge-state")}
+        }
         Spacer()
         Text(model.batteryLevel.map{"\($0)%"} ?? "—").font(.title.bold()).monospacedDigit()
             .foregroundStyle((model.batteryLevel ?? 100)<=10 ? Color.orange:Color.teal)
@@ -232,7 +235,7 @@ struct SettingsView:View{
             Text(model.batteryNotificationStatus).font(.caption)
             Button("Aggiorna batteria"){Task{await model.ring.refreshBattery()}}.disabled(!model.ring.ready || model.ring.busy)
             Button("Abilita avviso al 10%"){Task{await model.requestBatteryNotifications()}}
-            Text("Un avviso al 10% o meno. Si riattiva dopo una lettura di ricarica almeno al 20%. Se l’anello è scollegato, il livello mostrato resta l’ultimo ricevuto.").font(.caption).foregroundStyle(.secondary)
+            Text("Un avviso al 10% o meno. Si riattiva dopo una lettura di ricarica almeno al 20%. Se l’anello è scollegato, livello e stato mostrati restano gli ultimi ricevuti.").font(.caption).foregroundStyle(.secondary)
         }
         Section("Profilo · nessun valore presunto"){
             TextField("Peso (kg)",value:$model.settings.profile.weight_kg,format:.number).keyboardType(.decimalPad)

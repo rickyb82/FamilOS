@@ -10,9 +10,9 @@ import Combine
     @Published var exerciseRaw:JSONValue = .null
     @Published var batteryLevel:Int?;@Published var batteryAt:Date?
     @Published var batteryStatus="Batteria non ancora letta"
-    private let diagnosticsURL:URL?;private var batteryAttemptAt:Date?;private var batteryReplyHex:String?
+    private let diagnosticsURL:URL?;private var batteryAttemptAt:Date?;private var batteryReplyHex:String?;private var batteryChargingProgressRaw:Int?
     @Published var lastConnectionError:String?
-    var onBattery:((Int,Date)->Void)?
+    var onBattery:((OuraBattery,Date)->Void)?
     var onLive:((OuraLive,Date)->Void)?;var onHistory:((Data)->Void)?;var onJournal:(()->Void)?
     private var central:CBCentralManager!;private var peripheral:CBPeripheral?
     private var writeCharacteristic:CBCharacteristic?;private var notifyCharacteristic:CBCharacteristic?
@@ -99,7 +99,7 @@ import Combine
         let b=[UInt8](frame)
         if b.first==0x0d,ready {
             batteryReplyHex=Data(frame.prefix(5)).hex
-            do{let value=try OuraWire.battery(frame);let at=Date();batteryLevel=value.level;batteryAt=at;batteryStatus="Batteria ricevuta: \(value.level)%";onBattery?(value.level,at)}
+            do{let value=try OuraWire.battery(frame);let at=Date();batteryLevel=value.level;batteryAt=at;batteryChargingProgressRaw=value.chargingProgressRaw;batteryStatus="Batteria ricevuta: \(value.level)%";onBattery?(value,at)}
             catch{batteryStatus=error.localizedDescription}
             writeBatteryDiagnostic()
         }
@@ -147,7 +147,7 @@ import Combine
             try OuraWire.ack(await exchange(Data([0x2f,3,0x26,2,2]),tag:0x2f,extended:0x27),extended:0x27,feature:2)
             ready=true;status="Collegato · attendi un IBI valido"
             nextBatteryAt=Date().addingTimeInterval(60)
-            do{try await batteryRead();nextBatteryAt=Date().addingTimeInterval(300)}catch{status="Lettura batteria rinviata"}
+            do{try await batteryRead();nextBatteryAt=Date().addingTimeInterval(15)}catch{status="Lettura batteria rinviata"}
             let more=try await historyPages(maxPages:32);nextHistoryAt=Date().addingTimeInterval(more ? 2:60)
         }catch{status=error.localizedDescription}
     }
@@ -181,14 +181,14 @@ import Combine
         if batteryDue{nextBatteryAt=now.addingTimeInterval(60)}
         busy=true
         Task{defer{busy=false}
-            if batteryDue{do{try await batteryRead();nextBatteryAt=Date().addingTimeInterval(300)}catch{status="Lettura batteria rinviata"}}
+            if batteryDue{do{try await batteryRead();nextBatteryAt=Date().addingTimeInterval(15)}catch{status="Lettura batteria rinviata"}}
             if exerciseDue{do{try await exerciseRead()}catch{status="Lettura cardio attività rinviata"}}
             if historyDue{do{let more=try await historyPages(maxPages:32);nextHistoryAt=Date().addingTimeInterval(more ? 2:60)}catch{status=error.localizedDescription}}
         }
     }
     func refreshBattery()async{
         guard ready,!busy else{return};busy=true;defer{busy=false}
-        do{try await batteryRead();nextBatteryAt=Date().addingTimeInterval(300)}catch{status="Lettura batteria da riprovare";nextBatteryAt=Date().addingTimeInterval(10)}
+        do{try await batteryRead();nextBatteryAt=Date().addingTimeInterval(15)}catch{status="Lettura batteria da riprovare";nextBatteryAt=Date().addingTimeInterval(10)}
     }
     private func batteryRead()async throws{
         batteryAttemptAt=Date();batteryStatus="Lettura batteria in corso…";writeBatteryDiagnostic()
@@ -202,6 +202,7 @@ import Combine
         if let batteryAttemptAt{value["attempt_at"]=batteryAttemptAt.timeIntervalSince1970}
         if let batteryReplyHex{value["battery_reply_hex"]=batteryReplyHex}
         if let batteryLevel{value["battery_percentage"]=batteryLevel}
+        if let batteryChargingProgressRaw{value["charging_progress_raw"]=batteryChargingProgressRaw}
         if let data=try? JSONSerialization.data(withJSONObject:value){try? data.write(to:diagnosticsURL,options:[.atomic,.completeFileProtectionUntilFirstUserAuthentication])}
     }
     func readExercise()async{guard ready,!busy else{return};busy=true;defer{busy=false};do{try await exerciseRead();nextExerciseAt=Date().addingTimeInterval(60)}catch{status=error.localizedDescription}}

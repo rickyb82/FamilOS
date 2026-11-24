@@ -277,6 +277,16 @@ final class OuraBatteryProtocolTests:XCTestCase {
             XCTAssertThrowsError(try OuraWire.battery(Data(hex:hex)!))
         }
     }
+    func testChargeStateUsesRingProgressAndLegacySnapshotStaysUnknown()throws{
+        XCTAssertEqual(RingChargeState(progress:0),.idle)
+        XCTAssertEqual(RingChargeState(progress:1),.charging)
+        XCTAssertEqual(RingChargeState(progress:99),.charging)
+        XCTAssertEqual(RingChargeState(progress:100),.full)
+        XCTAssertNil(RingChargeState(progress:255));XCTAssertNil(RingChargeState(progress:nil))
+        let data=Data("{\"level\":51,\"at\":0}".utf8)
+        let old=try JSONDecoder().decode(RingBatterySnapshot.self,from:data)
+        XCTAssertEqual(old.level,51);XCTAssertNil(old.chargingProgressRaw)
+    }
     func testBatteryExtendedGen3PayloadRetainsPercentage(){
         XCTAssertEqual(try OuraWire.battery(Data(hex:"0d06330000000000")!).level,51)
         XCTAssertEqual(try OuraWire.battery(Data(hex:"0d040a000100")!).level,10)

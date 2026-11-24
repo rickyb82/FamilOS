@@ -15,6 +15,8 @@ import UserNotifications
     @Published var ownerName:String?;@Published var enrolled=false;@Published var pending=0
     @Published var allowedActivities:[(Int,String)]=ActivityCatalog.defaults
     @Published var batteryLevel:Int?;@Published var batteryAt:Date?
+    @Published var batteryChargingProgressRaw:Int?
+    var batteryChargeState:RingChargeState?{RingChargeState(progress:batteryChargingProgressRaw)}
     @Published var batteryNotificationStatus="Notifiche da autorizzare"
     private var batteryAlert=BatteryAlertState();private var batteryNotificationPending=false
     let store:EventStore;let api:WellnessAPI;let ring:RingBridge;let gym:GymDetection
@@ -41,9 +43,9 @@ import UserNotifications
         gym.onCandidate={[weak self] id,date in self?.startWorkout(auto:true,id:id,at:date)}
         gym.onReply={[weak self] id,name,negative in self?.resolveCandidate(id:id,name:name,negative:negative)}
         gym.onRegion={[weak self] inside in self?.regionEvent(inside)}
-        if let snapshot=store.load(RingBatterySnapshot.self,key:"ringBattery.latest"){batteryLevel=snapshot.level;batteryAt=snapshot.at}
+        if let snapshot=store.load(RingBatterySnapshot.self,key:"ringBattery.latest"){batteryLevel=snapshot.level;batteryAt=snapshot.at;batteryChargingProgressRaw=snapshot.chargingProgressRaw}
         batteryAlert=store.load(BatteryAlertState.self,key:"ringBattery.alert") ?? BatteryAlertState()
-        ring.onBattery={[weak self] level,date in self?.receiveBattery(level,at:date)}
+        ring.onBattery={[weak self] value,date in self?.receiveBattery(value.level,at:date,chargingProgressRaw:value.chargingProgressRaw)}
         Task{await refreshBatteryNotificationStatus()}
         pending=store.pendingCount
         if current==nil,let id=gym.engine.state.candidateSessionID,let date=gym.engine.state.candidateAt{startWorkout(auto:true,id:id,at:date)}
@@ -55,13 +57,13 @@ import UserNotifications
     }
     func requestBatteryNotifications()async{
         do{_ = try await UNUserNotificationCenter.current().requestAuthorization(options:[.alert,.sound]);await refreshBatteryNotificationStatus()
-            if let level=batteryLevel,let date=batteryAt,Date().timeIntervalSince(date)<600{receiveBattery(level,at:date)}
+            if let level=batteryLevel,let date=batteryAt,Date().timeIntervalSince(date)<600{receiveBattery(level,at:date,chargingProgressRaw:batteryChargingProgressRaw)}
         }catch{message="Autorizzazione notifiche non completata"}
     }
-    private func receiveBattery(_ level:Int,at date:Date){
+    private func receiveBattery(_ level:Int,at date:Date,chargingProgressRaw:Int?){
         guard (0...100).contains(level) else{return}
-        batteryLevel=level;batteryAt=date
-        do{try store.save(RingBatterySnapshot(level:level,at:date),key:"ringBattery.latest")}catch{message="Livello batteria non salvato"}
+        batteryLevel=level;batteryAt=date;batteryChargingProgressRaw=chargingProgressRaw
+        do{try store.save(RingBatterySnapshot(level:level,at:date,chargingProgressRaw:chargingProgressRaw),key:"ringBattery.latest")}catch{message="Livello batteria non salvato"}
         if level>=20{_ = batteryAlert.observe(level);try? store.save(batteryAlert,key:"ringBattery.alert")}
         guard level<=10,batteryAlert.armed,!batteryNotificationPending else{return}
         batteryNotificationPending=true
