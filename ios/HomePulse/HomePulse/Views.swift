@@ -27,6 +27,7 @@ struct HomeView:View {
     @EnvironmentObject var model:AppModel
     var body:some View{NavigationStack{ScrollView{VStack(spacing:18){
         HStack{VStack(alignment:.leading){Text("Il tuo corpo, qui").font(.largeTitle.bold());Text(model.ownerName.map{"Ciao, \($0)"} ?? "Benvenuto in Home Pulse").foregroundStyle(.secondary)};Spacer();Image(systemName:"waveform.path.ecg").font(.largeTitle).foregroundStyle(.teal)}
+        RingBatteryCard()
         LiveCard(ring:model.ring)
         HStack(alignment:.top,spacing:12){
             Card(title:"Temperatura anello"){
@@ -51,16 +52,20 @@ struct HomeView:View {
     }.padding()}.navigationTitle("Home Pulse").navigationBarTitleDisplayMode(.inline).background(Color.black)}}
     func metric(_ title:String,_ value:String)->some View{VStack(alignment:.leading){Text(value).font(.title2.bold()).monospacedDigit();Text(title).font(.caption).foregroundStyle(.secondary)}}
 }
+struct RingBatteryCard:View{
+    @EnvironmentObject var model:AppModel
+    var body:some View{HStack{
+        Label("Batteria Oura",systemImage:(model.batteryLevel ?? 100)<=10 ? "battery.0percent":"battery.100percent").font(.headline)
+        Spacer()
+        Text(model.batteryLevel.map{"\($0)%"} ?? "—").font(.title.bold()).monospacedDigit()
+            .foregroundStyle((model.batteryLevel ?? 100)<=10 ? Color.orange:Color.teal)
+            .accessibilityIdentifier("ring-battery-percentage")
+    }.padding(20).background(.white.opacity(0.055),in:RoundedRectangle(cornerRadius:24))}
+}
 struct LiveCard:View{
     @EnvironmentObject var model:AppModel;@ObservedObject var ring:RingBridge
     var body:some View{Card(title:"Battito"){
         HStack(alignment:.firstTextBaseline){Text(model.displayedBPM.map(String.init) ?? "—").foregroundStyle(Color.primary).font(.system(size:82,weight:.semibold,design:.rounded)).monospacedDigit();Text("BPM").font(.title3).foregroundStyle(.secondary);Spacer();Image(systemName:"heart.fill").foregroundStyle(.red).font(.title)}
-        HStack{
-            Label(model.batteryLevel.map{"Batteria anello: \($0)%"} ?? "Batteria anello: —",systemImage:(model.batteryLevel ?? 100)<=10 ? "battery.0percent":"battery.100percent")
-                .foregroundStyle((model.batteryLevel ?? 100)<=10 ? Color.orange:Color.secondary)
-            Spacer()
-            if let at=model.batteryAt{Text(at,style:.relative).font(.caption).foregroundStyle(.secondary)}
-        }.font(.subheadline)
     }}
 }
 struct RingSettingsControls:View{
@@ -97,6 +102,8 @@ struct PulseChart:View{
 struct WorkoutView:View{
     @EnvironmentObject var model:AppModel;@State private var activity=""
     var body:some View{NavigationStack{ScrollView{VStack(spacing:18){
+        RingBatteryCard()
+        LiveCard(ring:model.ring)
         if let session=model.current{
             let elapsed=session.elapsed(at:model.now),position=WorkoutEngine.position(elapsed:elapsed,config:session.config)
             Card(title:session.provisional ? "Sessione rilevata · da confermare":"Sessione attiva"){
@@ -211,7 +218,7 @@ struct SettingsView:View{
     @State var code="";@State var server="https://familos.example/api/wellness/v1";@State var scanning=false
     var body:some View{NavigationStack{Form{
         Section("FamilOS"){
-            if model.enrolled{Label(model.ownerName ?? "Dispositivo associato",systemImage:"checkmark.shield");Text(model.syncStatus).font(.caption)}else{
+            if model.enrolled{Label(model.ownerName ?? "Dispositivo associato",systemImage:"checkmark.shield");Text(model.syncStatus).font(.caption);Text(model.uploadStatus).font(.caption)}else{
                 TextField("Indirizzo server",text:$server).textInputAutocapitalization(.never).keyboardType(.URL)
                 TextField("Codice o link di associazione",text:$code).textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive()
                 Button("Associa questo iPhone"){Task{if let url=URL(string:code),url.scheme=="familos-homepulse"{await model.openPairingURL(url)}else{await model.enroll(code:code,server:server)};code=""}}
@@ -222,6 +229,7 @@ struct SettingsView:View{
         Section("Batteria anello"){
             Text(model.batteryLevel.map{"Ultima lettura: \($0)%"} ?? "In attesa della prima lettura")
             Text(model.batteryNotificationStatus).font(.caption)
+            Button("Aggiorna batteria"){Task{await model.ring.refreshBattery()}}.disabled(!model.ring.ready || model.ring.busy)
             Button("Abilita avviso al 10%"){Task{await model.requestBatteryNotifications()}}
             Text("Un avviso al 10% o meno. Si riattiva dopo una lettura di ricarica almeno al 20%. Se l’anello è scollegato, il livello mostrato resta l’ultimo ricevuto.").font(.caption).foregroundStyle(.secondary)
         }

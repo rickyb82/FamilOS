@@ -27,6 +27,31 @@ final class HomePulseTests:XCTestCase {
         XCTAssertEqual(store.pendingCount,0);XCTAssertEqual(store.journalCount,1)
     }
 
+    func testBluetoothWakeSendsExactBatchWithoutForeground()async throws{
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer{try? FileManager.default.removeItem(at:folder)}
+        let store=try EventStore(url:folder.appendingPathComponent("network.sqlite"))
+        let event=try store.append(kind:"sensor_packet",payload:.object(["raw_hex":.string("2f0f280211020000e81300000000ac0d01")]))
+        let done=expectation(description:"immediate request ACK")
+        let config=URLSessionConfiguration.ephemeral;config.protocolClasses=[HomePulseHTTPFixture.self]
+        let session=URLSession(configuration:config)
+        defer{session.invalidateAndCancel();HomePulseHTTPFixture.reply=nil}
+        HomePulseHTTPFixture.reply={request in
+            XCTAssertEqual(request.url?.path,"/api/wellness/v1/bridges/events")
+            XCTAssertEqual(request.httpMethod,"POST");XCTAssertEqual(request.value(forHTTPHeaderField:"Authorization"),"Bearer synthetic-only")
+            var body=request.httpBody
+            if body==nil,let stream=request.httpBodyStream{stream.open();defer{stream.close()};var data=Data();var buffer=[UInt8](repeating:0,count:4096);while stream.hasBytesAvailable{let count=stream.read(&buffer,maxLength:buffer.count);if count<=0{break};data.append(contentsOf:buffer.prefix(count))};body=data}
+            let batch=try JSONDecoder().decode(EventBatch.self,from:XCTUnwrap(body))
+            XCTAssertEqual(batch.events.map{$0.event_id},[event.event_id]);XCTAssertEqual(batch.events[0].captured_at,event.captured_at)
+            return try JSONEncoder().encode(JSONValue.object(["batch_id":.string(batch.batch_id),"accepted_event_ids":.array([.string(event.event_id)])]))
+        }
+        let credentials=Credentials(device_id:"synthetic-device",access_token:"synthetic-only",server:URL(string:"https://synthetic.example/api/wellness/v1")!)
+        let api=WellnessAPI(store:store,folder:folder.appendingPathComponent("uploads"),transport:session,credentials:{credentials},monitorNetwork:false)
+        api.onAcknowledged={done.fulfill()};api.noteBluetoothActivity()
+        await fulfillment(of:[done],timeout:5)
+        XCTAssertEqual(store.pendingCount,0);XCTAssertEqual(store.journalCount,1)
+    }
+
     func testImmediateBatchPrioritizesLiveAndPreservesHistoryForReplay()throws{
         let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer{try? FileManager.default.removeItem(at:folder)}

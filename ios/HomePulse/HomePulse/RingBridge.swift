@@ -178,6 +178,10 @@ import Combine
             if historyDue{do{let more=try await historyPages(maxPages:32);nextHistoryAt=Date().addingTimeInterval(more ? 2:60)}catch{status=error.localizedDescription}}
         }
     }
+    func refreshBattery()async{
+        guard ready,!busy else{return};busy=true;defer{busy=false}
+        do{try await batteryRead();nextBatteryAt=Date().addingTimeInterval(300)}catch{status="Lettura batteria da riprovare";nextBatteryAt=Date().addingTimeInterval(10)}
+    }
     private func batteryRead()async throws{
         let value=try OuraWire.battery(await exchange(Data([0x0c,0]),tag:0x0d,seconds:8))
         let at=Date();batteryLevel=value.level;batteryAt=at;onBattery?(value.level,at)

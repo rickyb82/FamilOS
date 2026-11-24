@@ -23,7 +23,7 @@ Non accettano un proprietario alternativo. I dati sono disponibili esclusivament
 
 ## Trasporto live
 
-Con Home Pulse aperta, i frame sono prima salvati nel journal e poi inviati con una sessione HTTP immediata, con cadenza di invio non superiore a circa un batch al secondo. I campioni recenti hanno precedenza sullo storico ancora da inviare; UUID, sequenze e timestamp originali non cambiano. L’ACK rimuove solo i riferimenti della coda, mai il journal. In background si usa URLSession background. Il ritorno in primo piano riprende lo stesso batch durevole, con deduplicazione lato server. L’aggiornamento della dashboard interroga lo stato ogni secondo e i grafici ogni cinque secondi. La latenza effettiva dipende dalla rete e dalla disponibilità di nuove misure valide.
+Con Home Pulse aperta, i frame sono prima salvati nel journal e poi inviati con una sessione HTTP immediata, con cadenza di invio non superiore a circa un batch al secondo. I campioni recenti hanno precedenza sullo storico ancora da inviare; UUID, sequenze e timestamp originali non cambiano. L’ACK rimuove solo i riferimenti della coda, mai il journal. Anche a schermo bloccato una nuova notifica Bluetooth apre una finestra breve per l’invio HTTP immediato; un task di completamento protegge soltanto la singola richiesta. In assenza di eventi live, URLSession background conserva la sincronizzazione differita e durevole. Il ritorno in primo piano riprende lo stesso batch durevole, con deduplicazione lato server. L’aggiornamento della dashboard interroga lo stato ogni secondo e i grafici ogni cinque secondi. La latenza effettiva dipende dalla rete e dalla disponibilità di nuove misure valide.
 
 ## Orbita
 

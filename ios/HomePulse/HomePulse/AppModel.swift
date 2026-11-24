@@ -11,7 +11,7 @@ import UserNotifications
     @Published var warnings:[String]=[];@Published var temperatureRaw:Int?
     @Published var metrics=HistoricalMetrics();@Published var serverData:JSONValue = .null
     @Published var analysisData:JSONValue = .null
-    @Published var syncStatus="Offline pronto";@Published var message:String?
+    @Published var uploadStatus="Invio in attesa";@Published var syncStatus="Offline pronto";@Published var message:String?
     @Published var ownerName:String?;@Published var enrolled=false;@Published var pending=0
     @Published var allowedActivities:[(Int,String)]=ActivityCatalog.defaults
     @Published var batteryLevel:Int?;@Published var batteryAt:Date?
@@ -32,10 +32,10 @@ import UserNotifications
         ownerName=store.load(String.self,key:"ownerName")
         if let logical=store.load(String.self,key:"logicalRing"){ring.configure(logicalRing:logical)}
         gym.apply(settings.auto_detection)
-        api.onStatus={[weak self] status in Task{@MainActor in self?.syncStatus=status}}
+        api.onStatus={[weak self] status in Task{@MainActor in self?.uploadStatus=status}}
         api.onUpload={[weak self] in Task{@MainActor in self?.pending=self?.store.pendingCount ?? 0}}
         api.onAcknowledged={[weak self] in Task{@MainActor in self?.pending=self?.store.pendingCount ?? 0}}
-        ring.onLive={[weak self] value,time in self?.receive(value,at:time)}
+        ring.onLive={[weak self] value,time in self?.api.noteBluetoothActivity();self?.receive(value,at:time)}
         ring.onHistory={[weak self] _ in self?.metrics=self?.store.metrics() ?? HistoricalMetrics()}
         ring.onJournal={[weak self] in self?.pending=self?.store.pendingCount ?? 0;self?.api.upload()}
         gym.onCandidate={[weak self] id,date in self?.startWorkout(auto:true,id:id,at:date)}
