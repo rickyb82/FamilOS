@@ -1,13 +1,15 @@
 import ctypes as C
+from collections import Counter
 import hashlib
 import http.client
 import json
 import os
+import struct
 from pathlib import Path
 import subprocess
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, mock_open, patch
 from types import SimpleNamespace
 
 import prepare_native
@@ -16,6 +18,157 @@ import service
 import worker
 
 ROW = '6f050100000060'
+
+
+class SleepOutputTests(unittest.TestCase):
+    def fixture(self, *, phases=b'1234', phases5=b'2', duration=120, summary=True):
+        header = C.create_string_buffer(200)
+        phase30 = C.create_string_buffer(phases)
+        phase5 = C.create_string_buffer(phases5)
+        metrics = C.create_string_buffer(44)
+        for offset, value in ((0, 1700000000), (0x18, 1700000000),
+                              (0x28, 1700000000 + duration)):
+            struct.pack_into('<q', header, offset, value)
+        for offset, value in ((8, 60), (0x10, 7), (0x20, 60), (0x30, 60), (0x38, duration)):
+            struct.pack_into('<i', header, offset, value)
+        struct.pack_into('<Q', header, 0x60, C.addressof(phase5))
+        struct.pack_into('<Q', header, 0x68, C.addressof(phase30))
+        for offset, value in ((0, 30), (4, 30), (8, 30), (12, 30), (0x18, 255),
+                              (0x1c, 2), (0x20, 30), (0x24, 90), (0x28, 75)):
+            struct.pack_into('<i', metrics, offset, value)
+        if summary:
+            struct.pack_into('<Q', header, 0x40, C.addressof(metrics))
+        return header, phase30, phase5, metrics
+
+    def test_copies_borrowed_memory_units_and_optional_raw_metrics(self):
+        header, phase30, phase5, metrics = self.fixture()
+        callback, outputs, errors = worker._sleep_capture(Counter())
+        callback(None, C.addressof(header))
+        C.memset(C.addressof(header), 0, 200)
+        phase30.value = b'4444'
+        C.memset(C.addressof(metrics), 0, 44)
+        self.assertEqual(errors, [])
+        result = outputs[0]
+        self.assertEqual(result['bedtime_start_utc_seconds'], 1700000000)
+        self.assertEqual(result['bedtime_end_utc_seconds'], 1700000120)
+        self.assertEqual(result['bedtime_start_time_zone_minutes'], 60)
+        self.assertEqual(result['phases_30_seconds'], '1234')
+        self.assertEqual(result['summary2']['score_raw'], 255)  # No clamp or profile-validity promotion.
+        self.assertEqual(result['summary2']['deep_seconds'], 30)
+        self.assertFalse(result['published_as_valid_measurement'])
+        self.assertFalse(result['user_profile_used'])
+        self.assertEqual(result['native_version'], [3, 6, 2])
+        json.dumps(result, allow_nan=False)  # No addresses/ctypes escape the callback.
+
+    def test_null_optional_buffers_stay_unavailable_and_null_header_rejected(self):
+        header, *keepalive = self.fixture(summary=False)
+        for offset in (0x60, 0x68):
+            struct.pack_into('<Q', header, offset, 0)
+        result = worker._copy_sleep_output(C.addressof(header))
+        self.assertIsNone(result['summary2'])
+        self.assertIsNone(result['phases_30_seconds'])
+        self.assertIsNone(result['phases_5_minutes'])
+        callback, outputs, errors = worker._sleep_capture(Counter())
+        callback(None, None)
+        self.assertEqual(outputs, [])
+        self.assertEqual(errors, ['Null native sleep output'])
+
+    def test_phase_limits_ascii_and_period_bounds(self):
+        header, *keepalive = self.fixture(phases=b'1' * 1920, phases5=b'2' * 192, duration=57600)
+        self.assertEqual(len(worker._copy_sleep_output(C.addressof(header))['phases_30_seconds']), 1920)
+        for args in ({'phases': b'1' * 1921}, {'phases5': b'2' * 193},
+                     {'phases': b'12\xff4'}, {'phases': b'1204'},
+                     {'phases': b'1254'}, {'duration': 0}, {'duration': -30},
+                     {'duration': 57601}):
+            with self.subTest(args={key: len(value) if isinstance(value, bytes) else value for key, value in args.items()}):
+                header, *keepalive = self.fixture(**args)
+                with self.assertRaises(ValueError):
+                    worker._copy_sleep_output(C.addressof(header))
+        header, *keepalive = self.fixture()
+        struct.pack_into('<q', header, 0x28, 1700000000 + 57601)
+        with self.assertRaises(ValueError):
+            worker._copy_sleep_output(C.addressof(header))
+
+    def test_callback_and_diagnostic_counts_are_bounded(self):
+        header, *keepalive = self.fixture()
+        counts = Counter()
+        callback, outputs, errors = worker._sleep_capture(counts)
+        with patch.object(worker, 'MAX_SLEEP_OUTPUTS', 2):
+            for _ in range(25):
+                callback(None, C.addressof(header))
+        self.assertEqual(len(outputs), 2)
+        self.assertEqual(len(errors), worker.MAX_SLEEP_ERRORS)
+        self.assertEqual(counts['sleep_outputs_received'], 25)
+
+    def fake_calculate(self, *, process=True, mapping=True, invalid_sleep=False,
+                       deinit_error=False, invalid_on_deinit=False):
+        header, *keepalive = self.fixture(phases=b'9' if invalid_sleep else b'1234')
+        spo2 = worker.SpO2Prefix(kind=6, utc_ms=1700000000000, average=97, quality=1.0)
+        references = {}
+        core = SimpleNamespace()
+
+        def initialize(*args):
+            # Independent JNI contract: the fourth of six output slots is arg7.
+            references['sleep'] = C.cast(args[6], worker.SLEEP_CALLBACK)
+            return 0
+
+        def map_events(context, buffer, count, a, b, callback, missing, reset):
+            C.cast(missing, C.POINTER(C.c_int32)).contents.value = -1
+            for index in range(count if mapping else 0):
+                row = worker.Record20.from_buffer_copy(C.string_at(C.addressof(buffer) + index * 20, 20))
+                callback(None, 1700000000000, row)
+            return worker.TimePair(1, 1700000000000)
+
+        def process_events(*args):
+            references['sleep'](None, C.addressof(header))
+            references['spo2'](None, C.addressof(spo2))
+            return process
+
+        def deinit():
+            if invalid_on_deinit:
+                references['sleep'](None, None)
+            if deinit_error:
+                raise RuntimeError('synthetic deinit failure')
+
+        def get_feature(feature, result):
+            C.cast(result, C.POINTER(C.c_int)).contents.value = 1
+            return 0
+
+        for name, impl in {'ecore_get_version': lambda: worker.Version(3, 6, 2),
+                           'ecore_init': initialize, 'ecore_deinit': deinit,
+                           'ecore_set_spo2_handler': lambda cb: references.update(spo2=cb),
+                           'ecore_set_feature': lambda *args: 0,
+                           'ecore_get_feature': get_feature,
+                           'post_process_ring_events': map_events,
+                           'ecore_process_events': process_events}.items():
+            setattr(core, name, Mock(side_effect=impl))
+        with (patch('builtins.open', mock_open(read_data=b'synthetic pinned library')),
+             patch.object(worker, 'LIBRARY_SHA256', hashlib.sha256(b'synthetic pinned library').hexdigest()),
+             patch.object(worker.C, 'CDLL', return_value=core)):
+            return worker.calculate({'schema': 'standard-ring-events-raw-hex-v1', 'records': [ROW]})
+
+    def test_callback7_wiring_and_native_success_gates(self):
+        result = self.fake_calculate()
+        self.assertTrue(result['sleep_capture_complete'])
+        self.assertTrue(result['deinit_returned'])
+        self.assertEqual(result['sleep_outputs'][0]['sleep_period_id'], 7)
+        for options in ({'process': False}, {'mapping': False}):
+            result = self.fake_calculate(**options)
+            self.assertFalse(result['process_true'])
+            self.assertEqual(result['sleep_outputs'], [])
+            self.assertEqual(result['spo2_outputs'], [])
+        with self.assertRaisesRegex(RuntimeError, 'deinit failure'):
+            self.fake_calculate(deinit_error=True)
+
+    def test_bad_sleep_and_deinit_sleep_errors_preserve_other_native_outputs(self):
+        for options in ({'invalid_sleep': True}, {'invalid_on_deinit': True}):
+            result = self.fake_calculate(**options)
+            self.assertTrue(result['process_true'])
+            self.assertTrue(result['deinit_returned'])
+            self.assertFalse(result['sleep_capture_complete'])
+            self.assertEqual(result['sleep_outputs'], [])
+            self.assertTrue(result['sleep_callback_errors'])
+            self.assertEqual(result['spo2_outputs'][0]['average_raw'], 97)
 
 
 class ShapeTests(unittest.TestCase):
@@ -107,7 +260,8 @@ class ShapeTests(unittest.TestCase):
 
 
 class JobTests(unittest.TestCase):
-    def run_fake(self, *, success=True, mismatch=False, timeout=False):
+    def run_fake(self, *, success=True, mismatch=False, timeout=False, mapping=True,
+                 sleep_complete=True, deinit=True):
         observations = {}
 
         class Process:
@@ -122,7 +276,9 @@ class JobTests(unittest.TestCase):
                 self.destination = destination
                 observations['input_mode'] = source.stat().st_mode & 0o777
                 observations['job_mode'] = source.parent.stat().st_mode & 0o777
-                result = {'status': 'ok', 'process_true': success, 'deinit_returned': success,
+                result = {'status': 'ok', 'process_true': success, 'deinit_returned': success and deinit,
+                          'mapping': {'complete': mapping}, 'sleep_capture_complete': sleep_complete,
+                          'sleep_outputs': [{'bedtime_start_utc_seconds': 1700000000}],
                           'source_input_sha256': 'wrong' if mismatch else hashlib.sha256(source.read_bytes()).hexdigest(),
                           'input_record_count': 1, 'spo2_outputs': [{'average_raw': 999, 'quality_raw': 0.0}],
                           'mapped_temperatures': [{'utc_ms': 1}], 'mapped_sensor_records': [{'utc_ms': 1}]}
@@ -159,8 +315,21 @@ class JobTests(unittest.TestCase):
     def test_failure_removes_all_measurement_outputs(self):
         result, status, _ = self.run_fake(success=False)
         self.assertFalse(result['process_true'])
-        for field in ('spo2_outputs', 'mapped_temperatures', 'mapped_sensor_records'):
+        for field in ('spo2_outputs', 'mapped_temperatures', 'mapped_sensor_records', 'sleep_outputs'):
             self.assertEqual(result[field], [])
+
+    def test_sleep_forwarding_and_mapping_deinit_gates(self):
+        result, status, _ = self.run_fake()
+        self.assertEqual(result['sleep_outputs'], [{'bedtime_start_utc_seconds': 1700000000}])
+        for options in ({'mapping': False}, {'deinit': False}):
+            result, status, _ = self.run_fake(**options)
+            self.assertFalse(result['process_true'])
+            self.assertEqual(result['sleep_outputs'], [])
+            self.assertEqual(result['spo2_outputs'], [])
+        result, status, _ = self.run_fake(sleep_complete=False)
+        self.assertTrue(result['process_true'])
+        self.assertEqual(result['sleep_outputs'], [])
+        self.assertTrue(result['spo2_outputs'])
 
     def test_input_identity_mismatch_is_rejected(self):
         result, status, _ = self.run_fake(mismatch=True)

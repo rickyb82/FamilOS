@@ -51,10 +51,25 @@ export type WellnessAnalysis = {
   steps_in_records?: number | null; quality_events?: unknown[]; activity_name?: string; stats?: SessionStats
 }
 export type Pairing = { pairing_code: string; expires_at: WellnessDate; server_url: string; enrollment_uri: string; qr_png_data_url?: string | null }
+export type SleepPeriod = {
+  id: string; started_at: number; ended_at: number; time_zone_minutes: number; time_in_bed_seconds: number
+  total_sleep_seconds: number | null; stage_seconds: { awake: number; rem: number; light: number; deep: number } | null
+  latency_seconds: number | null; efficiency: number | null
+  phases_30_seconds: string | null; phases_5_minutes: string | null
+  source: 'oura-ecore'; native_version: [number, number, number]
+}
+export type WellnessSleep = {
+  server_time: number; window_start: number; window_end: number; periods: SleepPeriod[]
+  processing_status: string; last_processed_at: number | null
+}
 
 export const wellness = {
   state: () => get<WellnessState>(`${WELLNESS_API}/state`),
   analysis: (sessionId?: string) => get<WellnessAnalysis>(`${WELLNESS_API}/analysis${sessionId ? '?session_id=' + encodeURIComponent(sessionId) : ''}`),
+  sleep: (days = 14) => {
+    if (!Number.isInteger(days) || days < 1 || days > 90) return Promise.reject(new Error('Intervallo sonno non valido'))
+    return get<WellnessSleep>(`${WELLNESS_API}/sleep?days=${days}`)
+  },
   settings: (settings: Partial<WellnessSettings>) => put<WellnessState>(`${WELLNESS_API}/settings`, settings),
   session: (action: 'start' | 'pause' | 'resume' | 'end' | 'activity', values: Record<string, unknown> = {}) => post<WellnessState>(`${WELLNESS_API}/sessions`, { action, ...values }),
   pair: (device_name?: string) => post<Pairing>(`${WELLNESS_API}/bridges/pair`, device_name ? { device_name } : {}),

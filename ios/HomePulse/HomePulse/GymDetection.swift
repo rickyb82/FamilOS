@@ -3,12 +3,12 @@ import CoreLocation
 import UserNotifications
 import Combine
 
-struct Gym:Codable,Equatable {
+struct Gym:Codable,Equatable,Sendable {
     var id="serendip-prato";var name="Serendip Prato"
     var address="Via Giuseppe Valentini 20, 59100 Prato, Italia"
     var latitude:Double?;var longitude:Double?;var radius_m:Double=150
 }
-struct AutoDetectionSettings:Codable,Equatable {
+struct AutoDetectionSettings:Codable,Equatable,Sendable {
     var enabled=true;var gym=Gym();var heart_rate_delta_bpm=15
     var sustain_seconds=30;var cooldown_seconds=3600
     init(){}
@@ -22,8 +22,8 @@ struct AutoDetectionSettings:Codable,Equatable {
         cooldown_seconds=(try? c.decode(Int.self,forKey:.cooldown_seconds)) ?? 3600
     }
 }
-struct TimedBPM:Codable,Equatable {var at:Date;var bpm:Int}
-struct DetectionState:Codable {
+struct TimedBPM:Codable,Equatable,Sendable {var at:Date;var bpm:Int}
+struct DetectionState:Codable,Sendable {
     var inside=false;var entry:Date?;var baseline:Double?;var baselineSamples:[TimedBPM]=[]
     var riseStart:Date?;var riseSamples=0;var lastGood:Date?;var cooldownUntil:Date?
     var candidateSessionID:UUID?;var candidateAt:Date?
@@ -72,8 +72,9 @@ struct GymDetectionEngine {
     var onCandidate:((UUID,Date)->Void)?;var onReply:((UUID,String?,Bool)->Void)?;var onRegion:((Bool)->Void)?
     private let manager=CLLocationManager();private let geocoder=CLGeocoder();private let store:EventStore
     private let center=UNUserNotificationCenter.current()
-    init(store:EventStore){self.store=store;super.init();manager.delegate=self;center.delegate=self
-        engine.state=store.load(DetectionState.self,key:"gymDetection") ?? DetectionState()
+    private var savedCoordinates:[String:[Double]]=[:]
+    init(store:EventStore,state:DetectionState,coordinates:[String:[Double]]){self.store=store;savedCoordinates=coordinates;super.init();manager.delegate=self;center.delegate=self
+        engine.state=state
         let input=UNTextInputNotificationAction(identifier:"activityName",title:"Scrivi attività",options:[],textInputButtonTitle:"Salva",textInputPlaceholder:"Che attività stai facendo?")
         let no=UNNotificationAction(identifier:"notWorkout",title:"Non mi alleno",options:[])
         center.setNotificationCategories([UNNotificationCategory(identifier:"gymCandidate",actions:[input,no],intentIdentifiers:[],options:[])])
@@ -81,7 +82,7 @@ struct GymDetectionEngine {
     }
     func apply(_ settings:AutoDetectionSettings){engine.settings=settings
         if let lat=settings.gym.latitude,let lon=settings.gym.longitude{location=CLLocationCoordinate2D(latitude:lat,longitude:lon)}
-        else if let saved=store.load([Double].self,key:"gymCoordinate.\(settings.gym.id)"),saved.count==2{location=CLLocationCoordinate2D(latitude:saved[0],longitude:saved[1])}
+        else if let saved=savedCoordinates[settings.gym.id],saved.count==2{location=CLLocationCoordinate2D(latitude:saved[0],longitude:saved[1])}
         else{location=nil}
         monitor()
     }
@@ -98,7 +99,8 @@ struct GymDetectionEngine {
     }
     func setCoordinate(_ coordinate:CLLocationCoordinate2D)throws{
         guard CLLocationCoordinate2DIsValid(coordinate) else{throw AppError.message("Coordinate non valide")}
-        location=coordinate;try store.save([coordinate.latitude,coordinate.longitude],key:"gymCoordinate.\(engine.settings.gym.id)");monitor()
+        location=coordinate;let values=[coordinate.latitude,coordinate.longitude],key="gymCoordinate.\(engine.settings.gym.id)";savedCoordinates[engine.settings.gym.id]=values
+        store.enqueue({try $0.save(values,key:key)},onError:{[weak self] _ in Task{@MainActor in self?.status="Posizione non salvata: riprova"}});monitor()
     }
     func monitor(){for region in manager.monitoredRegions where region.identifier.hasPrefix("homepulse.gym."){manager.stopMonitoring(for:region)}
         guard engine.settings.enabled,let location,CLLocationManager.isMonitoringAvailable(for:CLCircularRegion.self),manager.authorizationStatus == .authorizedAlways || manager.authorizationStatus == .authorizedWhenInUse else{return}
@@ -107,12 +109,15 @@ struct GymDetectionEngine {
         manager.startMonitoring(for:region);manager.requestState(for:region);status="Area palestra attiva"
     }
     var recent:[TimedBPM]=[]
-    func accept(_ reading:Reading,manualWorkout:Bool){let previous=engine;recent.append(TimedBPM(at:reading.date,bpm:reading.bpm));recent=recent.filter{reading.date.timeIntervalSince($0.at)<=120}
+    func accept(_ reading:Reading,manualWorkout:Bool){recent.append(TimedBPM(at:reading.date,bpm:reading.bpm));recent=recent.filter{reading.date.timeIntervalSince($0.at)<=120}
         let id=engine.ingest(TimedBPM(at:reading.date,bpm:reading.bpm),now:Date(),manualWorkout:manualWorkout)
-        do{try store.save(engine.state,key:"gymDetection")}catch{engine=previous;status="Rilevamento sospeso: stato locale non salvato";return};if let id{onCandidate?(id,engine.state.candidateAt ?? Date());notify(id)}
+        let state=engine.state
+        store.enqueue({[weak self] in try $0.save(state,key:"gymDetection")
+            if let id{Task{@MainActor [weak self] in guard let self,self.engine.state.candidateSessionID==id else{return};self.onCandidate?(id,state.candidateAt ?? reading.date);self.notify(id)}}
+        },onError:{[weak self] _ in Task{@MainActor in self?.status="Rilevamento sospeso: stato locale non salvato"}})
     }
     func resolve(){engine.resolve();let until=Date().addingTimeInterval(Double(engine.settings.cooldown_seconds));engine.state.cooldownUntil=max(until,engine.state.cooldownUntil ?? until);persist()}
-    private func persist(){try? store.save(engine.state,key:"gymDetection")}
+    private func persist(){let state=engine.state;store.enqueue({try $0.save(state,key:"gymDetection")},onError:{[weak self] _ in Task{@MainActor in self?.status="Stato palestra non salvato"}})}
     func notify(_ id:UUID){let c=UNMutableNotificationContent();c.title="Home Pulse";c.body=Self.prompt;c.sound = .default;c.categoryIdentifier="gymCandidate";c.userInfo=["session_id":id.uuidString]
         center.add(UNNotificationRequest(identifier:"gym-\(id.uuidString)",content:c,trigger:nil))
     }

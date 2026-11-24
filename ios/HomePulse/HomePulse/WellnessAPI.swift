@@ -5,10 +5,15 @@ import UIKit
 final class WellnessAPI:NSObject,URLSessionDataDelegate,URLSessionTaskDelegate,@unchecked Sendable {
     let store:EventStore
     var onStatus:((String)->Void)?;var onUpload:(()->Void)?;var onAcknowledged:(()->Void)?
-    var backgroundCompletion:(()->Void)?
+    @MainActor private var backgroundCompletion:(()->Void)?
+    @MainActor private var backgroundEventsFinished=false
     private var bodies:[Int:Data]=[:];private var preparing=false;private var foreground=false
     private var nextForegroundAt:TimeInterval=0;private var retryWork:DispatchWorkItem?
     private var bluetoothLiveUntil:TimeInterval=0;private var lastHTTP:Int?
+    private var lastDiagnosticWrite:TimeInterval=0
+    private var fastNetwork=false
+    private var stopped=false
+    private let diagnosticQueue=DispatchQueue(label:"HomePulse.transport-diagnostics",qos:.utility)
     private let mutex=NSLock();private let monitor=NWPathMonitor()
     private let folder:URL
     private let transport:URLSession?;private let credentialsProvider:()->Credentials?;private let monitorNetwork:Bool
@@ -25,10 +30,22 @@ final class WellnessAPI:NSObject,URLSessionDataDelegate,URLSessionTaskDelegate,@
         let q=OperationQueue();q.maxConcurrentOperationCount=1
         return URLSession(configuration:c,delegate:self,delegateQueue:q)
     }()
-    init(store:EventStore,folder:URL,transport:URLSession?=nil,credentials:(()->Credentials?)?=nil,monitorNetwork:Bool=true){self.store=store;self.folder=folder;self.transport=transport;self.credentialsProvider=credentials ?? {SecureStore.credentials()};self.monitorNetwork=monitorNetwork;super.init()
-        monitor.pathUpdateHandler={[weak self] path in if path.status == .satisfied {self?.upload()}}
+    init(store:EventStore,folder:URL,transport:URLSession?=nil,credentials:(()->Credentials?)?=nil,monitorNetwork:Bool=true,fastNetwork:Bool=false){self.store=store;self.folder=folder;self.transport=transport;self.credentialsProvider=credentials ?? {SecureStore.credentials()};self.monitorNetwork=monitorNetwork;self.fastNetwork=fastNetwork;super.init()
+        monitor.pathUpdateHandler={[weak self] path in
+            guard let self else{return}
+            self.mutex.lock();self.fastNetwork=(path.usesInterfaceType(.wifi) || path.usesInterfaceType(.wiredEthernet)) && !path.isConstrained;self.mutex.unlock()
+            if path.status == .satisfied{self.upload()}
+        }
         if monitorNetwork{monitor.start(queue:DispatchQueue(label:"HomePulse.network"));_ = background}
     }
+    deinit{monitor.cancel();retryWork?.cancel()}
+    #if DEBUG
+    private func stopTestRetries(){mutex.lock();stopped=true;retryWork?.cancel();mutex.unlock()}
+    func stopForTesting()async{
+        stopTestRetries()
+        await withCheckedContinuation{continuation in diagnosticQueue.async{continuation.resume()}}
+    }
+    #endif
     static func base(_ url:URL)throws->URL {
         guard url.scheme=="https",url.host != nil,url.user==nil,url.password==nil else{throw AppError.message("Serve un indirizzo server HTTPS valido")}
         guard var c=URLComponents(url:url,resolvingAgainstBaseURL:false) else{throw AppError.message("Indirizzo server non valido")}
@@ -66,8 +83,10 @@ final class WellnessAPI:NSObject,URLSessionDataDelegate,URLSessionTaskDelegate,@
         upload()
     }
     private var useImmediateTransport:Bool{mutex.lock();defer{mutex.unlock()};return foreground || Date().timeIntervalSince1970<bluetoothLiveUntil}
+    private var batchLimit:Int{mutex.lock();defer{mutex.unlock()};return fastNetwork ? 500:128}
+    private var acknowledgedDelay:Double{mutex.lock();defer{mutex.unlock()};return fastNetwork ? 0:1}
     func upload(){
-        mutex.lock();let immediate=foreground || Date().timeIntervalSince1970<bluetoothLiveUntil;if preparing || immediate && Date().timeIntervalSince1970<nextForegroundAt{mutex.unlock();return};preparing=true;if immediate{nextForegroundAt=Date().timeIntervalSince1970+1};mutex.unlock()
+        mutex.lock();let immediate=foreground || Date().timeIntervalSince1970<bluetoothLiveUntil;if stopped || preparing || immediate && Date().timeIntervalSince1970<nextForegroundAt{mutex.unlock();return};preparing=true;mutex.unlock()
         guard let credentials=credentialsProvider() else{finishPreparation();return}
         if immediate{uploadForeground(credentials);return}
         background.getAllTasks{[weak self] tasks in
@@ -76,7 +95,7 @@ final class WellnessAPI:NSObject,URLSessionDataDelegate,URLSessionTaskDelegate,@
             defer{self.finishPreparation()}
             guard tasks.isEmpty else{return}
             do {
-                guard let batch=try self.store.prepareBatch(limit:500) else {self.status("Sincronizzato");return}
+                guard let batch=try self.store.prepareBatch(limit:self.batchLimit) else {self.status("Sincronizzato");return}
                 try FileManager.default.createDirectory(at:self.folder,withIntermediateDirectories:true)
                 let file=self.folder.appendingPathComponent(batch.batch_id+".json")
                 try JSONEncoder().encode(batch).write(to:file,options:[.atomic,.completeFileProtectionUntilFirstUserAuthentication])
@@ -91,14 +110,15 @@ final class WellnessAPI:NSObject,URLSessionDataDelegate,URLSessionTaskDelegate,@
         return r
     }
     private func uploadForeground(_ credentials:Credentials){
-        DispatchQueue.main.async{[weak self] in self?.startImmediateUpload(credentials)}
+        Task{@MainActor [weak self] in await self?.startImmediateUpload(credentials)}
     }
-    @MainActor private func startImmediateUpload(_ credentials:Credentials){
+    @MainActor private func startImmediateUpload(_ credentials:Credentials)async{
+        let execution=ShortBackgroundExecution(name:"HomePulse live upload")
         do{
-            guard let batch=try store.prepareBatch(limit:500,prioritizeLive:true) else{finishPreparation();status("Live collegato a FamilOS");retry(after:1);return}
-            let bytes=try JSONEncoder().encode(batch)
+            let limit=batchLimit
+            guard let batch=try await store.perform({try $0.prepareBatch(limit:limit,prioritizeLive:true)}) else{execution.finish();finishPreparation();status("Live collegato a FamilOS");retry(after:2);return}
+            let bytes=try await Task.detached(priority:.utility){try JSONEncoder().encode(batch)}.value
             var request=try eventRequest(credentials);request.httpBody=bytes
-            let execution=ShortBackgroundExecution(name:"HomePulse live upload")
             let task=live.dataTask(with:request){[weak self] data,response,error in
                 defer{Task{@MainActor in execution.finish()}}
                 guard let self else{return};var delay=3.0
@@ -109,26 +129,32 @@ final class WellnessAPI:NSObject,URLSessionDataDelegate,URLSessionTaskDelegate,@
                     guard (200...299).contains(http.statusCode) else{self.status("Invio rifiutato dal server: HTTP \(http.statusCode)",http:http.statusCode);return}
                     guard let data else{throw AppError.message("Conferma server assente")}
                     let partial=try self.accept(data,batch:batch.batch_id)
-                    delay=partial ? 10:1
+                    delay=partial ? 10:self.acknowledgedDelay
                 }catch{self.status("Offline: eventi live conservati sul telefono")}
             }
             task.priority=URLSessionTask.highPriority;task.resume()
-        }catch{finishPreparation();status("Invio live rinviato: coda locale intatta");retry(after:3)}
+        }catch{execution.finish();finishPreparation();status("Invio live rinviato: coda locale intatta");retry(after:3)}
     }
     private func retry(after delay:Double){
-        mutex.lock();if foreground || Date().timeIntervalSince1970<bluetoothLiveUntil{nextForegroundAt=Date().timeIntervalSince1970+delay}
+        mutex.lock();guard !stopped else{mutex.unlock();return};if foreground || Date().timeIntervalSince1970<bluetoothLiveUntil{nextForegroundAt=Date().timeIntervalSince1970+delay}
         retryWork?.cancel();let work=DispatchWorkItem{[weak self] in self?.upload()};retryWork=work;mutex.unlock()
         DispatchQueue.global().asyncAfter(deadline:.now()+delay,execute:work)
     }
     private func status(_ message:String,http:Int?=nil){
-        mutex.lock();if let http{lastHTTP=http}
-        let code=lastHTTP,active=foreground;mutex.unlock()
+        mutex.lock();guard !stopped else{mutex.unlock();return};if let http{lastHTTP=http}
+        let code=lastHTTP,active=foreground,now=Date().timeIntervalSince1970
+        let writeDiagnostic=now-lastDiagnosticWrite>=5 || (http != nil && !(200...299).contains(http!))
+        if writeDiagnostic{lastDiagnosticWrite=now};mutex.unlock()
         onStatus?(message)
+        guard writeDiagnostic else{return}
         // Strictly technical diagnostics: no sensor values, IDs or credentials.
-        var value:[String:Any]=["status":message,"foreground":active,"journal_events":store.journalCount,"pending_events":store.pendingCount,"at":Date().timeIntervalSince1970]
-        if let code{value["last_http_status"]=code}
         let path=folder.deletingLastPathComponent().appendingPathComponent("transport-status.json")
-        if let data=try? JSONSerialization.data(withJSONObject:value){try? data.write(to:path,options:[.atomic,.completeFileProtectionUntilFirstUserAuthentication])}
+        let store=store
+        diagnosticQueue.async{
+            var value:[String:Any]=["status":message,"foreground":active,"journal_events":store.journalCount,"pending_events":store.pendingCount,"at":Date().timeIntervalSince1970]
+            if let code{value["last_http_status"]=code}
+            if let data=try? JSONSerialization.data(withJSONObject:value){try? data.write(to:path,options:[.atomic,.completeFileProtectionUntilFirstUserAuthentication])}
+        }
     }
     private func finishPreparation(){mutex.lock();preparing=false;mutex.unlock()}
     @discardableResult private func accept(_ data:Data,batch:String)throws->Bool{
@@ -152,7 +178,15 @@ final class WellnessAPI:NSObject,URLSessionDataDelegate,URLSessionTaskDelegate,@
         do{let partial=try accept(data,batch:batch);retry(after:partial ? 10:0.1)}
         catch{status("Conferma non verificabile: nessun dato eliminato");onUpload?();retry(after:10)}
     }
-    func urlSessionDidFinishEvents(forBackgroundURLSession session:URLSession){DispatchQueue.main.async{[weak self] in self?.backgroundCompletion?();self?.backgroundCompletion=nil}}
+    @MainActor func attachBackgroundCompletion(_ completion:@escaping()->Void){
+        if backgroundEventsFinished{backgroundEventsFinished=false;completion()}
+        else{backgroundCompletion=completion}
+    }
+    func urlSessionDidFinishEvents(forBackgroundURLSession session:URLSession){Task{@MainActor [weak self] in
+        guard let self else{return}
+        if let completion=backgroundCompletion{backgroundCompletion=nil;completion()}
+        else{backgroundEventsFinished=true}
+    }}
 }
 
 

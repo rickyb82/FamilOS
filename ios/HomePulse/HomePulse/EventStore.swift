@@ -5,6 +5,7 @@ import CryptoKit
 final class EventStore: @unchecked Sendable {
     private var db:OpaquePointer?
     private let lock=NSRecursiveLock()
+    private let ioQueue=DispatchQueue(label:"HomePulse.archive",qos:.userInitiated)
     private let transient=unsafeBitCast(-1,to:sqlite3_destructor_type.self)
     init(url:URL) throws {
         try FileManager.default.createDirectory(at:url.deletingLastPathComponent(),withIntermediateDirectories:true,attributes:[.protectionKey:FileProtectionType.completeUntilFirstUserAuthentication])
@@ -12,6 +13,17 @@ final class EventStore: @unchecked Sendable {
         try run("PRAGMA journal_mode=WAL");try run("PRAGMA synchronous=FULL");try run("PRAGMA foreign_keys=ON")
         try run("CREATE TABLE IF NOT EXISTS journal(sequence INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT UNIQUE NOT NULL,captured_at REAL NOT NULL,kind TEXT NOT NULL,payload BLOB NOT NULL)")
         try run("CREATE TABLE IF NOT EXISTS outbox(event_id TEXT PRIMARY KEY REFERENCES journal(event_id),batch_id TEXT)")
+        let columns=try statement("PRAGMA table_info(outbox)")
+        var hasSequence=false
+        while sqlite3_step(columns)==SQLITE_ROW{if text(columns,1)=="journal_sequence"{hasSequence=true}}
+        sqlite3_finalize(columns)
+        if !hasSequence{try run("ALTER TABLE outbox ADD COLUMN journal_sequence INTEGER")}
+        try run("UPDATE outbox SET journal_sequence=(SELECT sequence FROM journal WHERE journal.event_id=outbox.event_id) WHERE journal_sequence IS NULL")
+        try run("CREATE INDEX IF NOT EXISTS outbox_pending_order ON outbox(batch_id,journal_sequence,event_id)")
+        try run("CREATE INDEX IF NOT EXISTS journal_recent_upload ON journal(kind,captured_at,event_id)")
+        try run("DROP INDEX IF EXISTS outbox_pending")
+        try run("DROP INDEX IF EXISTS journal_upload_metadata")
+        try run("CREATE TRIGGER IF NOT EXISTS outbox_legacy_sequence AFTER INSERT ON outbox WHEN NEW.journal_sequence IS NULL BEGIN UPDATE outbox SET journal_sequence=(SELECT sequence FROM journal WHERE event_id=NEW.event_id) WHERE event_id=NEW.event_id; END")
         try run("CREATE TABLE IF NOT EXISTS batches(batch_id TEXT PRIMARY KEY,body BLOB NOT NULL)")
         try run("CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY,value BLOB NOT NULL)")
         try run("CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY,body BLOB NOT NULL)")
@@ -20,6 +32,17 @@ final class EventStore: @unchecked Sendable {
         try? FileManager.default.setAttributes([.protectionKey:FileProtectionType.completeUntilFirstUserAuthentication],ofItemAtPath:url.path)
     }
     deinit {sqlite3_close(db)}
+    func perform<T:Sendable>(_ operation:@escaping @Sendable(EventStore)throws->T)async throws->T{
+        try await withCheckedThrowingContinuation{continuation in
+            ioQueue.async{do{continuation.resume(returning:try operation(self))}catch{continuation.resume(throwing:error)}}
+        }
+    }
+    func enqueue(_ operation:@escaping @Sendable(EventStore)throws->Void,onError:(@Sendable(Error)->Void)?=nil){
+        ioQueue.async{do{try operation(self)}catch{onError?(error)}}
+    }
+    #if DEBUG
+    func holdArchiveForUITest(seconds:TimeInterval,onStart:()->Void={}){guarded{onStart();Thread.sleep(forTimeInterval:seconds)}}
+    #endif
     private func guarded<T>(_ body:() throws->T) rethrows->T {lock.lock();defer{lock.unlock()};return try body()}
     private func statement(_ sql:String) throws->OpaquePointer {
         var s:OpaquePointer?;guard sqlite3_prepare_v2(db,sql,-1,&s,nil)==SQLITE_OK,let s else {throw AppError.message("Operazione archivio non riuscita")};return s
@@ -41,7 +64,7 @@ final class EventStore: @unchecked Sendable {
         let id=eventID.uuidString,s=try statement("INSERT INTO journal(event_id,captured_at,kind,payload) VALUES(?,?,?,?)");defer{sqlite3_finalize(s)}
         bind(id,s,1);sqlite3_bind_double(s,2,at.timeIntervalSince1970);bind(kind,s,3);bind(try JSONEncoder().encode(payload),s,4);try done(s)
         let seq=sqlite3_last_insert_rowid(db)
-        let q=try statement("INSERT INTO outbox(event_id) VALUES(?)");defer{sqlite3_finalize(q)};bind(id,q,1);try done(q)
+        let q=try statement("INSERT INTO outbox(event_id,journal_sequence) VALUES(?,?)");defer{sqlite3_finalize(q)};bind(id,q,1);sqlite3_bind_int64(q,2,seq);try done(q)
         return StoredEvent(event_id:id,sequence:seq,captured_at:at.timeIntervalSince1970,kind:kind,payload:payload)
     }
     func save<T:Encodable>(_ value:T,key:String) throws {try guarded{try put(try JSONEncoder().encode(value),key:key)}}
@@ -56,11 +79,11 @@ final class EventStore: @unchecked Sendable {
         }}
     }
     var pendingWorkoutCount:Int{guarded{(try? count("SELECT count(*) FROM outbox o JOIN journal j USING(event_id) WHERE j.kind='workout'")) ?? Int.max}}
-    func reconcileSessions(_ sessions:[WorkoutSession],active:WorkoutSession?)throws{
+    @discardableResult func reconcileSessions(_ sessions:[WorkoutSession],active:WorkoutSession?)throws->Bool{
         try guarded{try transaction{
-            guard try count("SELECT count(*) FROM outbox o JOIN journal j USING(event_id) WHERE j.kind='workout'")==0 else{return}
+            guard try count("SELECT count(*) FROM outbox o JOIN journal j USING(event_id) WHERE j.kind='workout'")==0 else{return false}
             for session in sessions{let s=try statement("INSERT OR REPLACE INTO sessions(id,body) VALUES(?,?)");defer{sqlite3_finalize(s)};bind(session.id.uuidString,s,1);bind(try JSONEncoder().encode(session),s,2);try done(s)}
-            try put(try JSONEncoder().encode(active),key:"activeWorkout")
+            try put(try JSONEncoder().encode(active),key:"activeWorkout");return true
         }}
     }
     func sessions()->[WorkoutSession] {guarded{do{let s=try statement("SELECT body FROM sessions ORDER BY rowid DESC LIMIT 300");defer{sqlite3_finalize(s)};var a:[WorkoutSession]=[];while sqlite3_step(s)==SQLITE_ROW{if let v=try? JSONDecoder().decode(WorkoutSession.self,from:data(s,0)){a.append(v)}};return a.sorted{$0.startedAt>$1.startedAt}}catch{return []}}}
@@ -72,10 +95,29 @@ final class EventStore: @unchecked Sendable {
     func prepareBatch(limit:Int=100,prioritizeLive:Bool=false) throws->EventBatch? {try guarded{try transaction{
         let old=try statement("SELECT body FROM batches ORDER BY rowid LIMIT 1");defer{sqlite3_finalize(old)}
         if sqlite3_step(old)==SQLITE_ROW{return try JSONDecoder().decode(EventBatch.self,from:data(old,0))}
-        let order=prioritizeLive ? "CASE WHEN j.kind='sensor_packet' AND j.captured_at>=\(Date().timeIntervalSince1970-8) THEN 0 WHEN j.kind='workout' THEN 1 ELSE 2 END,j.sequence":"j.sequence"
-        let s=try statement("SELECT j.event_id,j.sequence,j.captured_at,j.kind,j.payload FROM journal j JOIN outbox o USING(event_id) WHERE o.batch_id IS NULL ORDER BY \(order) LIMIT ?");defer{sqlite3_finalize(s)};sqlite3_bind_int(s,1,Int32(max(1,min(500,limit))))
+        let bound=max(1,min(500,limit));var ids:[String]=[];var seen=Set<String>()
+        func selectIDs(_ sql:String,after:Double?=nil)throws{
+            guard ids.count<bound else{return}
+            let s=try statement(sql);defer{sqlite3_finalize(s)}
+            if let after{sqlite3_bind_double(s,1,after)}
+            sqlite3_bind_int(s,after==nil ? 1:2,Int32(bound))
+            var status=sqlite3_step(s)
+            while status==SQLITE_ROW{let id=text(s,0);if ids.count<bound,seen.insert(id).inserted{ids.append(id)};status=sqlite3_step(s)}
+            guard status==SQLITE_DONE else{throw AppError.message("Lettura della coda non riuscita: dati conservati")}
+        }
+        if prioritizeLive{
+            try selectIDs("SELECT j.event_id FROM journal j INDEXED BY journal_recent_upload JOIN outbox o ON o.event_id=j.event_id WHERE j.kind='sensor_packet' AND j.captured_at>=? AND o.batch_id IS NULL ORDER BY j.sequence LIMIT ?",after:Date().timeIntervalSince1970-8)
+            try selectIDs("SELECT j.event_id FROM journal j INDEXED BY journal_recent_upload JOIN outbox o ON o.event_id=j.event_id WHERE j.kind='workout' AND o.batch_id IS NULL ORDER BY j.sequence LIMIT ?")
+        }
+        // FIFO comes straight from the pending index: no repeated sorting or
+        // scanning of the backlog, and payloads are read only for selected IDs.
+        try selectIDs("SELECT event_id FROM outbox INDEXED BY outbox_pending_order WHERE batch_id IS NULL ORDER BY journal_sequence LIMIT ?")
+        let s=try statement("SELECT event_id,sequence,captured_at,kind,payload FROM journal WHERE event_id=?");defer{sqlite3_finalize(s)}
         var events:[StoredEvent]=[]
-        while sqlite3_step(s)==SQLITE_ROW {events.append(StoredEvent(event_id:text(s,0),sequence:sqlite3_column_int64(s,1),captured_at:sqlite3_column_double(s,2),kind:text(s,3),payload:try JSONDecoder().decode(JSONValue.self,from:data(s,4))))}
+        for id in ids{sqlite3_reset(s);sqlite3_clear_bindings(s);bind(id,s,1)
+            guard sqlite3_step(s)==SQLITE_ROW else{throw AppError.message("Evento in coda non leggibile: archivio conservato")}
+            events.append(StoredEvent(event_id:text(s,0),sequence:sqlite3_column_int64(s,1),captured_at:sqlite3_column_double(s,2),kind:text(s,3),payload:try JSONDecoder().decode(JSONValue.self,from:data(s,4))))
+        }
         guard !events.isEmpty else{return nil};let batch=EventBatch(batch_id:UUID().uuidString,events:events)
         let b=try statement("INSERT INTO batches(batch_id,body) VALUES(?,?)");defer{sqlite3_finalize(b)};bind(batch.batch_id,b,1);bind(try JSONEncoder().encode(batch),b,2);try done(b)
         for e in events {let q=try statement("UPDATE outbox SET batch_id=? WHERE event_id=?");bind(batch.batch_id,q,1);bind(e.event_id,q,2);try done(q);sqlite3_finalize(q)}
@@ -91,12 +133,34 @@ final class EventStore: @unchecked Sendable {
         let b=try statement("DELETE FROM batches WHERE batch_id=?");defer{sqlite3_finalize(b)};bind(batchID,b,1);try done(b)
         return expected.isSubset(of:Set(accepted))
     }}}
+    func ingestPackets(_ frames:[Data],api:[Int],ring:String?,at:Date,opaque:Data?=nil)throws{
+        try guarded{try transaction{
+            for frame in frames where !OuraWire.sensitive(frame){
+                if (try? OuraWire.cursor(frame)) != nil{
+                    try archiveFrames([frame],api:api,ring:ring,at:at)
+                }else{
+                    var payload:[String:JSONValue]=["raw_hex":.string(frame.hex),"api_version":.array(api.map{.number(Double($0))})]
+                    if let ring{payload["logical_ring_id"] = .string(ring)}
+                    _=try insert(kind:"sensor_packet",payload:.object(payload),at:at,eventID:UUID())
+                }
+            }
+            if let opaque{
+                var payload:[String:JSONValue]=["raw_hex":.string(opaque.hex),"api_version":.array(api.map{.number(Double($0))}),"transport_unparsed":.bool(true)]
+                if let ring{payload["logical_ring_id"] = .string(ring)}
+                _=try insert(kind:"sensor_packet",payload:.object(payload),at:at,eventID:UUID())
+            }
+        }}
+    }
     func archiveHistory(frames:[Data],nextCursor:UInt32,key:String,api:[Int],ring:String?) throws {try guarded{try transaction{
+        try archiveFrames(frames,api:api,ring:ring,at:Date())
+        try put(try JSONEncoder().encode(nextCursor),key:key)
+    }}}
+    private func archiveFrames(_ frames:[Data],api:[Int],ring:String?,at:Date)throws{
         for frame in frames {
             let bytes=[UInt8](frame)
             let digest=Data(SHA256.hash(data:Data((ring ?? "unknown").utf8)+frame)).hex
             let h=try statement("INSERT OR IGNORE INTO history_records(digest,ring,raw,received,steps,temp,motion) VALUES(?,?,?,?,?,?,?)")
-            bind(digest,h,1);bind(ring ?? "unknown",h,2);bind(frame,h,3);sqlite3_bind_double(h,4,Date().timeIntervalSince1970)
+            bind(digest,h,1);bind(ring ?? "unknown",h,2);bind(frame,h,3);sqlite3_bind_double(h,4,at.timeIntervalSince1970)
             if bytes.count>=7,bytes[0]==0x50 {sqlite3_bind_int(h,5,Int32(bytes[6]))}else{sqlite3_bind_null(h,5)}
             if (10...20).contains(bytes.count),bytes[0]==0x46,bytes.count%2==0 {let value=Int16(bitPattern:UInt16(bytes[6])|(UInt16(bytes[7])<<8));if value != Int16.min{sqlite3_bind_double(h,6,Double(value)/100)}else{sqlite3_bind_null(h,6)}}else{sqlite3_bind_null(h,6)}
             if (10...12).contains(bytes.count),bytes[0]==0x47 {sqlite3_bind_int(h,7,Int32(bytes[6]&31))}else{sqlite3_bind_null(h,7)}
@@ -106,10 +170,9 @@ final class EventStore: @unchecked Sendable {
             if let ring {p["logical_ring_id"] = .string(ring)}
             var identity=[UInt8](Data(SHA256.hash(data:Data(digest.utf8))).prefix(16));identity[6]=(identity[6]&15)|0x50;identity[8]=(identity[8]&63)|0x80
             let eventID=UUID(uuidString:NSUUID(uuidBytes:identity).uuidString)!
-            _=try insert(kind:"ring_history",payload:.object(p),at:Date(),eventID:eventID)
+            _=try insert(kind:"ring_history",payload:.object(p),at:at,eventID:eventID)
         }
-        try put(try JSONEncoder().encode(nextCursor),key:key)
-    }}}
+    }
     func metrics()->HistoricalMetrics {guarded{do{
         var result=HistoricalMetrics()
         let a=try statement("SELECT temp,received FROM history_records WHERE temp IS NOT NULL ORDER BY rowid DESC LIMIT 1");defer{sqlite3_finalize(a)}

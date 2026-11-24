@@ -9,10 +9,13 @@ struct RootView:View {
         TabView{
             HomeView().tabItem{Label("Home",systemImage:"heart.fill")}
             WorkoutView().tabItem{Label("Allenamento",systemImage:"figure.strengthtraining.traditional")}
+            SleepView().tabItem{Label("Sonno",systemImage:"bed.double.fill")}
             DiaryView().tabItem{Label("Diario",systemImage:"chart.xyaxis.line")}
-            CalendarView().tabItem{Label("Calendario",systemImage:"calendar")}
             SettingsView().tabItem{Label("Impostazioni",systemImage:"slider.horizontal.3")}
         }.tint(.teal).preferredColorScheme(.dark)
+        #if DEBUG
+        .overlay(alignment:.top){if model.archiveTestStall{Text("Archivio di prova occupato").font(.caption2).allowsHitTesting(false).accessibilityIdentifier("archive-stall-active")}}
+        #endif
         .onOpenURL{url in Task{await model.openPairingURL(url)}}
         .task{model.ring.setForeground(scene == .active);model.api.setForeground(scene == .active);await model.refresh();await model.requestBatteryNotifications()}
         .onChange(of:scene){_,value in model.ring.setForeground(value == .active);model.api.setForeground(value == .active);if value == .active{Task{await model.refresh()}}}
@@ -95,7 +98,7 @@ struct SyncCard:View{
     @EnvironmentObject var model:AppModel
     var body:some View{Card(title:"FamilOS"){
         HStack{Image(systemName:model.enrolled ? "checkmark.icloud":"icloud.slash").foregroundStyle(.teal);Text(model.syncStatus);Spacer()}
-        Text("\(model.pending) eventi in coda · \(model.store.journalCount) conservati sul telefono").font(.caption).foregroundStyle(.secondary)
+        Text("\(model.pending) eventi in coda · \(model.journalCount) conservati sul telefono").font(.caption).foregroundStyle(.secondary)
         Button("Sincronizza ora"){Task{await model.refresh();model.api.upload()}}.disabled(!model.enrolled)
     }}
 }
@@ -135,6 +138,7 @@ struct WorkoutView:View{
         Card(title:"La tua scheda"){
             ForEach(Array(model.settings.config.phases.enumerated()),id:\.offset){i,p in HStack{Text("\(i+1)").foregroundStyle(.teal);Text(p.name);Spacer();Text(Double(p.duration).durationText).monospacedDigit();if let met=p.met{Text("\(met,specifier:"%.1f") MET").font(.caption).foregroundStyle(.secondary)}}}
             NavigationLink("Modifica fasi e ripetizioni"){PlanEditor()}
+            NavigationLink("Calendario allenamenti"){CalendarView()}
         }
         Card(title:"Cardio durante l’attività"){
             if !model.allowedActivities.isEmpty{
@@ -148,6 +152,45 @@ struct WorkoutView:View{
             Button("Arresta registrazione cardio"){Task{await model.ring.stopSport()}}.disabled(!model.ring.ready || model.ring.busy)
         }
     }.padding()}.navigationTitle("Allenamento")}}
+}
+struct SleepView:View {
+    @EnvironmentObject var model:AppModel;@State private var selectedID:String?
+    var periods:[SleepPeriod]{model.sleepData["periods"].array.compactMap{SleepPeriod($0)}.sorted{$0.start>$1.start}}
+    var body:some View{NavigationStack{ScrollView{VStack(spacing:18){
+        if !model.enrolled{
+            ContentUnavailableView("Associa FamilOS",systemImage:"bed.double",description:Text("Il sonno viene elaborato sul server dai record dell’anello."))
+        }else if periods.isEmpty{
+            if model.refreshingSleep{ProgressView("Aggiornamento sonno…")}
+            else{ContentUnavailableView("Nessun periodo disponibile",systemImage:"bed.double",description:Text("I periodi compariranno dopo la sincronizzazione e l’elaborazione dello storico dell’anello."))}
+        }else{
+            let period=periods.first{$0.id==selectedID} ?? periods[0]
+            Card(title:"Ultime due settimane"){
+                Picker("Periodo",selection:Binding(get:{period.id},set:{selectedID=$0})){
+                    ForEach(periods){item in Text(item.clock(item.start)).tag(item.id)}
+                }
+            }
+            Card(title:"\(period.clock(period.start)) → \(period.clock(period.end))"){
+                HStack{sleepMetric("Sonno totale",period.total);Spacer();sleepMetric("A letto",period.timeInBed)}
+                if let efficiency=period.efficiency{Text("Efficienza \(efficiency,specifier:"%.0f")%").font(.subheadline).foregroundStyle(.secondary)}
+                if let latency=period.latency{Text("Addormentamento: \(latency.durationText)").font(.subheadline).foregroundStyle(.secondary)}
+            }
+            if !period.stages.isEmpty{Card(title:"Fasi del sonno"){
+                ForEach([("awake","Sveglio"),("rem","REM"),("light","Leggero"),("deep","Profondo")],id:\.0){key,name in
+                    HStack{Text(name);Spacer();Text(period.stages[key].map{$0.durationText} ?? "—").monospacedDigit()}
+                }
+            }}
+            if !period.phaseRuns.isEmpty{Card(title:"Sequenza delle fasi"){
+                Chart(period.phaseRuns){run in
+                    BarMark(xStart:.value("Minuti",Double(run.start)/60),xEnd:.value("Minuti",Double(run.end)/60),y:.value("Fase",run.stage))
+                        .foregroundStyle(by:.value("Fase",run.stage))
+                }.chartLegend(.hidden).chartXAxisLabel("Minuti nella sequenza registrata").frame(height:170)
+                Text("Sequenza a intervalli di \(period.phaseStep) secondi. La copertura può essere parziale rispetto al periodo a letto.").font(.caption).foregroundStyle(.secondary)
+            }}
+        }
+        if !model.sleepStatus.isEmpty{Text(model.sleepStatus).font(.caption).foregroundStyle(.secondary)}
+        Button("Aggiorna sonno"){Task{await model.refreshSleep()}}.buttonStyle(.bordered).disabled(!model.enrolled || model.refreshingSleep)
+    }.padding()}.navigationTitle("Sonno").refreshable{await model.refreshSleep()}.task{await model.refreshSleep()}}}
+    func sleepMetric(_ name:String,_ seconds:Double?)->some View{VStack(alignment:.leading){Text(seconds.map{$0.durationText} ?? "—").font(.title.bold()).monospacedDigit();Text(name).font(.caption).foregroundStyle(.secondary)}}
 }
 struct EnergyCard:View{
     let session:WorkoutSession;let elapsed:Double

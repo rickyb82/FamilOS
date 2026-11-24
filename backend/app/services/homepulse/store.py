@@ -28,6 +28,7 @@ from .activity import parse_exercise_latest
 from .motion import parse_motion_record, parse_activity_record
 from .breathing import decode_breathing_record
 from .workout import validate_profile, validate_plan, composition, schedule, energy_for_interval
+from .sleep import normalize_period, merge_period, verified_run, MAX_PERIODS_PER_RUN, NATIVE_ABI
 
 
 class StoreError(ValueError):
@@ -165,7 +166,10 @@ class HomePulseStore:
             CREATE INDEX IF NOT EXISTS points_owner_kind_time ON points(owner_id,kind,t,id);
             CREATE TABLE IF NOT EXISTS sessions(owner_id TEXT NOT NULL,id TEXT NOT NULL,activity_name TEXT,started_at REAL NOT NULL,ended_at REAL,active_seconds REAL NOT NULL,status TEXT NOT NULL,auto_detected INTEGER NOT NULL DEFAULT 0,provisional INTEGER NOT NULL DEFAULT 0,config TEXT NOT NULL,profile TEXT NOT NULL,last_event_at REAL NOT NULL,source TEXT NOT NULL,PRIMARY KEY(owner_id,id));
             CREATE TABLE IF NOT EXISTS processing(owner_id TEXT PRIMARY KEY,history_count INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL,last_processed_at REAL,error TEXT);
+            CREATE TABLE IF NOT EXISTS processing_features(owner_id TEXT NOT NULL,feature TEXT NOT NULL,PRIMARY KEY(owner_id,feature));
             CREATE TABLE IF NOT EXISTS native_runs(id INTEGER PRIMARY KEY,owner_id TEXT NOT NULL,created_at REAL NOT NULL,source_input_sha256 TEXT,result TEXT NOT NULL,result_sha256 TEXT NOT NULL,UNIQUE(owner_id,result_sha256));
+            CREATE TABLE IF NOT EXISTS sleep_periods(owner_id TEXT NOT NULL,started_at REAL NOT NULL,ended_at REAL NOT NULL,id TEXT NOT NULL,period TEXT NOT NULL,native_result_sha256 TEXT NOT NULL,updated_at REAL NOT NULL,PRIMARY KEY(owner_id,started_at));
+            CREATE INDEX IF NOT EXISTS sleep_owner_window ON sleep_periods(owner_id,ended_at,started_at);
             CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events BEGIN SELECT RAISE(ABORT,'events are append-only'); END;
             CREATE TRIGGER IF NOT EXISTS history_no_delete BEFORE DELETE ON history BEGIN SELECT RAISE(ABORT,'history is append-only'); END;
             ''')
@@ -390,6 +394,18 @@ class HomePulseStore:
                            'processing_error':processing['error'] if processing else None},
                 'ring_binding':self.ring(owner,secret=False)}
 
+    def sleep(self,owner,days=14):
+        if type(days) is not int or not 1<=days<=90:raise StoreError('Intervallo sonno non valido')
+        now=time.time();start=now-days*86400
+        with self.connection() as db:
+            periods=[json.loads(row['period']) for row in db.execute(
+                'SELECT period FROM sleep_periods WHERE owner_id=? AND ended_at>=? AND started_at<=? ORDER BY started_at DESC',
+                (owner,start,now))]
+            processing=db.execute('SELECT status,last_processed_at FROM processing WHERE owner_id=?',(owner,)).fetchone()
+        return {'server_time':now,'window_start':start,'window_end':now,'periods':periods,
+                'processing_status':processing['status'] if processing else 'In attesa di record storici',
+                'last_processed_at':processing['last_processed_at'] if processing else None}
+
     def analysis(self,owner,session_id=None,start=None,end=None):
         now=time.time();activity=None;workout_end=None;cardio=None;workout_events=[];session=None
         with self.connection() as db:
@@ -439,7 +455,12 @@ class HomePulseStore:
 
     def pending_owners(self):
         with self.connection() as db:
-            return [row[0] for row in db.execute('SELECT h.owner_id FROM history h LEFT JOIN processing p ON p.owner_id=h.owner_id GROUP BY h.owner_id HAVING count(*)>coalesce(max(p.history_count),0)')]
+            # Installing the sleep decoder must also replay an archive whose
+            # record count has not changed since the previous worker version.
+            return [row[0] for row in db.execute('''SELECT h.owner_id FROM history h
+                LEFT JOIN processing p ON p.owner_id=h.owner_id
+                LEFT JOIN processing_features f ON f.owner_id=h.owner_id AND f.feature=?
+                GROUP BY h.owner_id HAVING count(*)>coalesce(max(p.history_count),0) OR max(f.feature) IS NULL''', (NATIVE_ABI,))]
 
     def historical_records(self,owner):
         with self.connection() as db:
@@ -452,11 +473,26 @@ class HomePulseStore:
             # Original native outputs and the checkpoint commit together. A full
             # disk cannot acknowledge processing while losing rejected averages.
             original=_json(result)
+            result_digest=hashlib.sha256(original.encode()).hexdigest()
             db.execute('INSERT OR IGNORE INTO native_runs(owner_id,created_at,source_input_sha256,result,result_sha256) VALUES(?,?,?,?,?)',
-                       (owner,time.time(),result.get('source_input_sha256'),original,hashlib.sha256(original.encode()).hexdigest()))
+                       (owner,time.time(),result.get('source_input_sha256'),original,result_digest))
             db.execute('INSERT INTO processing VALUES(?,?,?,?,?) ON CONFLICT(owner_id) DO UPDATE SET history_count=excluded.history_count,status=excluded.status,last_processed_at=excluded.last_processed_at,error=excluded.error',
                        (owner,count if success else 0,'Storico elaborato' if success else 'Elaborazione da completare',time.time(),None if success else result.get('error',result.get('status','core non disponibile'))))
             if not success:return
+            if result.get('sleep_native_abi')==NATIVE_ABI:
+                # This is a decoder-attempt checkpoint. Failed/empty callbacks
+                # never erase valid periods and do not cause perpetual replay.
+                db.execute('INSERT OR IGNORE INTO processing_features VALUES(?,?)',(owner,NATIVE_ABI))
+            sleep_rows=result.get('sleep_outputs',[])
+            if verified_run(result) and isinstance(sleep_rows,list) and len(sleep_rows)<=MAX_PERIODS_PER_RUN:
+                for row in sleep_rows:
+                    try:period=normalize_period(owner,row,time.time())
+                    except (ValueError,TypeError,OverflowError):continue
+                    previous=db.execute('SELECT period FROM sleep_periods WHERE owner_id=? AND started_at=?',
+                                        (owner,period['started_at'])).fetchone()
+                    if previous:period=merge_period(json.loads(previous['period']),period)
+                    db.execute('INSERT INTO sleep_periods VALUES(?,?,?,?,?,?,?) ON CONFLICT(owner_id,started_at) DO UPDATE SET ended_at=excluded.ended_at,period=excluded.period,native_result_sha256=excluded.native_result_sha256,updated_at=excluded.updated_at',
+                               (owner,period['started_at'],period['ended_at'],period['id'],_json(period),result_digest,time.time()))
             for row in result.get('spo2_outputs',[]):
                 value,quality,stamp=row.get('average_raw'),row.get('quality_raw'),row.get('timestamp_utc_ms_native')
                 # Original averages are retained, including those failing our display gate.

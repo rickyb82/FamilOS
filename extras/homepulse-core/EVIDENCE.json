@@ -63,7 +63,62 @@
     "user_info_zero_bytes": 28,
     "synthetic_mac": true,
     "trace_disabled": true,
-    "no_internal_function_addresses_called": true
+    "no_internal_function_addresses_called": true,
+    "sleep_output": {
+      "callback_argument_one_based": 7,
+      "signature": "void(void* reference,s_sleep_output_t* output)",
+      "struct_bytes": 200,
+      "byte_order": "little",
+      "pointer_bytes": 8,
+      "source_original_sha256": "a4e8a213f87283cae183f70ab0ed17d0e30aa259868d757a1385189d1a43ca08",
+      "native_abi": "ecore-3.6.2-linux-x86_64-sleep-output-200-v1",
+      "sources": {
+        "callback": "JNI nativeInitialize0xbdbb6..0xbdbf9 installs0xbdf30, calls bridge0xc4ab0; ecore_cpp_init0xef6d3..0xef6db stores argument7",
+        "lifetime": "sleepinfo producer0x119210, callback0x11a41d..0x11a428 uses stack output rsp+0xc0",
+        "units": "sleep_final_process_bedtime_period_event0xf5edf..0xf5f69 divides AppEvent milliseconds by1000 and timezone seconds by60",
+        "phase_symbols": "JNI nativeGetSleepPhase*Symbol0xc0290/0xc02a0/0xc02b0/0xc02c0",
+        "epochs": "stateful producer0x119718..0x119738 divides duration by30; stateless0xf76b4..0xf76bf computes index*30",
+        "bounds": "stateful producer0x1192c5..0x1192d0 rejects >57600 seconds; JNI allocations0xc46aa..0xc46d8 are1921/193 bytes including NUL",
+        "field_mapping": "JNI bridge0xc4ad8..0xc4b35 and0xc51a6..0xc529a; SleepInfo.java constructor731..756",
+        "summary2": "JNI bridge0xc4df8..0xc4e3d; SleepInfo.java270..279"
+      },
+      "offsets": {
+        "timestamp_utc_seconds": 0,
+        "time_zone_minutes": 8,
+        "sleep_period_id": 16,
+        "bedtime_start_utc_seconds": 24,
+        "bedtime_start_time_zone_minutes": 32,
+        "bedtime_end_utc_seconds": 40,
+        "bedtime_end_time_zone_minutes": 48,
+        "time_in_bed_seconds": 56,
+        "alert_info_raw": 60,
+        "summary2_pointer": 64,
+        "phases_5_minutes_pointer": 96,
+        "phases_30_seconds_pointer": 104,
+        "is_longest_sleep_period_raw": 120
+      },
+      "phase_symbols": {
+        "1": "deep",
+        "2": "light",
+        "3": "REM",
+        "4": "awake"
+      },
+      "summary2_minimum_bytes": 44,
+      "summary2_int32_offsets": {
+        "wake_seconds": 0,
+        "rem_seconds": 4,
+        "light_seconds": 8,
+        "deep_seconds": 12,
+        "score_raw": 24,
+        "wake_up_count_raw": 28,
+        "latency_seconds": 32,
+        "total_sleep_seconds": 36,
+        "efficiency_raw": 40
+      },
+      "unknown_fields_ignored": true,
+      "borrowed_memory_copied_during_callback": true,
+      "raw_callback_appevent_emission_verified": false
+    }
   },
   "runtime": {
     "docker_engine": "29.8.1",
@@ -160,7 +215,7 @@
       "native_error": "[Errno 22] Native child seccomp could not be installed",
       "no_measurement_promoted": true
     },
-    "unit_tests_passed": 14,
+    "unit_tests_passed": 21,
     "original_apkm_extraction_hash_verified": true,
     "private_compose_config_validated": true,
     "owned_test_containers_remaining": 0,
@@ -185,7 +240,27 @@
       "no_persistent_service_installed": true,
       "library_sha256": "163e10037c93ef70bd939641e0d391441e74cb4dd339946cd0a5421b91703f21"
     },
-    "orbita_installer_mock_tests_passed": 14
+    "orbita_installer_mock_tests_passed": 14,
+    "sleep_capture_synthetic_host_tests": {
+      "test_command": "python3 -B -m unittest test_service.py",
+      "suite_tests_passed": 21,
+      "sleep_tests_passed": 7,
+      "native_elf_loaded": false,
+      "real_sensor_replayed": false,
+      "covers": [
+        "callback7 wiring",
+        "borrowed storage copied",
+        "UTC seconds and timezone minutes",
+        "nullable buffers and summary",
+        "unknown phase symbols and ASCII",
+        "16h and string limits",
+        "1024 callback cap and16 diagnostic cap",
+        "mapping/process/deinit success gates",
+        "sleep errors preserve other successful outputs",
+        "deinit-time callback errors"
+      ],
+      "native_sleep_runtime_yield_verified": false
+    }
   },
   "limits": {
     "input_records": 65536,
@@ -201,20 +276,28 @@
     "production_http_calculation_verified": true,
     "remote_server_changed": false,
     "remaining": "Native Ubuntu loopback HTTP with mandatory seccomp and synthetic data has succeeded. Persistent Orbita deployment, Docker readiness and owner bootstrap remain separate reviewed installer steps; no persistent service was installed by the witness.",
-    "persistent_production_deployment_verified": false
+    "persistent_production_deployment_verified": false,
+    "sleep_callback_count": 1024,
+    "sleep_period_seconds": 57600,
+    "sleep_phase_characters": {
+      "30_seconds": 1920,
+      "5_minutes": 192
+    },
+    "sleep_native_profile_validity_claimed": false,
+    "sleep_real_capture_yield_verified": false
   },
   "source_sha256": {
-    "worker.py": "8c11f9b90f70106ddb1c0a996fd48645288301b726129bacccb675e2fdbadacc",
+    "worker.py": "19ec1d612bee65d82066a5d143078cbe4a3491769eeb5b4658fa6b58d38fbcaa",
     "sandbox.py": "1376f28e7757a7eb743e08e0dd90e55d4679cc63d041755ceea52b002890108d",
-    "service.py": "9c4560cf6934ba598584e7fe0a4634f60936ade2684068330cff3e8d86cc5237",
+    "service.py": "104727225b6f7931eb3a86be1902b1a0ae48a8fcfc41a13c0ad5714a9fe03ae6",
     "prepare_native.py": "8561de5f0c6420f3f623d56846514e4e57b742005e3b7d9009ab17811e313739",
     "bionic_shim.c": "ce3f3a736135aaf0e521943f1b2d1df71d808930ff7181d6d54b5b018500fe09",
     "Dockerfile": "513a3e3106e0f2dfbfa84d15220e23da0c9e771de95e01ce601d005259a42960",
     "compose.private.yml": "c13e7b22b17714b133620b1c740e2bda64ab1e769308b7623911cd0f91761686",
     "synthetic_fixture.json": "df17304071cab238340bc36ab6c0adf481a0e7848edd3b51b42b9aa34d46286f",
-    "test_service.py": "ec1549d5573fc531370074d5614aed8fa79e2ccb86f5fcb09e3f425afb22d8d7",
-    "README.md": "d750a1c6b561b615b5c9357767d11139a43b8bab27475d21c4094363c964cd82",
+    "test_service.py": "82ef381594a7bd10e4384b7e614a0dabcd23cb2402bc5a41e2afacd0adb18e90",
+    "README.md": "0b6faa681d721c4d86384b3c6655c4ddab1ac3d50f59a680e7f9665bb520706b",
     "test_orbita_install.py": "cc08aaabc4fb606206dec668c367e37c137f9d917a36785a8bd942ad22b25e8c",
-    "../updater/orbita_support/wellness.py": "8425b3d1a448e20598d8de1432b2b6cb58b4f20c30a678117b695ce6fcc945cc"
+    "../updater/orbita_support/wellness.py": "5d7fe78a65900fa81fc68a22b055590da2e11e0dd37072a4c5045512b15e2126"
   }
 }

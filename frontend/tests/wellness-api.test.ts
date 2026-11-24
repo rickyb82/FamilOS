@@ -29,3 +29,16 @@ it('requests one-time pairing and encodes identifiers when revoking or selecting
   await wellness.analysis('session&a=other')
   expect(fetch.mock.calls[2][0]).toBe('/api/wellness/v1/analysis?session_id=session%26a%3Dother')
 })
+
+it('reads sleep only for the session owner with cookies and a bounded day window', async () => {
+  const fetch = vi.fn().mockImplementation(async () => new Response('{"periods":[]}', { status: 200 }))
+  vi.stubGlobal('fetch', fetch)
+  await wellness.sleep()
+  expect(fetch.mock.calls[0][0]).toBe('/api/wellness/v1/sleep?days=14')
+  expect(fetch.mock.calls[0][1]).toMatchObject({ credentials: 'include', headers: { 'X-Requested-With': 'FamilAI' } })
+  expect(fetch.mock.calls[0][1].body).toBeUndefined()
+  await wellness.sleep(90)
+  expect(fetch.mock.calls[1][0]).toBe('/api/wellness/v1/sleep?days=90')
+  for (const days of [0, 91, 1.5, Number.NaN]) await expect(wellness.sleep(days)).rejects.toThrow('Intervallo sonno non valido')
+  expect(fetch).toHaveBeenCalledTimes(2)
+})

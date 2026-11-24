@@ -12,7 +12,7 @@ import time
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter,Depends,HTTPException,Request,Response
+from fastapi import APIRouter,Depends,HTTPException,Query,Request,Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel,Field
 import qrcode
@@ -79,6 +79,11 @@ async def state(ctx:AuthContext=Depends(require_adult)):
 async def analysis(session_id:str|None=None,start:float|None=None,end:float|None=None,ctx:AuthContext=Depends(require_adult)):
     try:return await asyncio.to_thread(store().analysis,ctx.user.id,session_id,start,end)
     except StoreError as exc:raise _error(exc) from None
+
+
+@router.get('/sleep')
+async def sleep(days:int=Query(default=14,ge=1,le=90),ctx:AuthContext=Depends(require_adult)):
+    return await asyncio.to_thread(store().sleep,ctx.user.id,days)
 
 
 @router.put('/settings')
@@ -161,6 +166,11 @@ async def mobile_settings(body:dict,device:dict=Depends(bridge)):
 async def mobile_analysis(session_id:str|None=None,start:float|None=None,end:float|None=None,device:dict=Depends(bridge)):
     try:return await asyncio.to_thread(store().analysis,device['owner_id'],session_id,start,end)
     except StoreError as exc:raise _error(exc) from None
+
+
+@router.get('/mobile/sleep')
+async def mobile_sleep(days:int=Query(default=14,ge=1,le=90),device:dict=Depends(bridge)):
+    return await asyncio.to_thread(store().sleep,device['owner_id'],days)
 
 
 @router.post('/sessions')

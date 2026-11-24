@@ -8,10 +8,11 @@ import {
   type WeeklySlot, type WellnessAnalysis, type WellnessSession, type WellnessSettings, type WellnessState, type WorkoutConfig,
 } from '../lib/wellness'
 import './Wellness.css'
+import SleepPanel from './SleepPanel'
 
-type View = 'dashboard' | 'plan' | 'profile' | 'calendar' | 'devices'
+type View = 'dashboard' | 'sleep' | 'plan' | 'profile' | 'calendar' | 'devices'
 const VIEWS: Array<{ id: View; label: string; icon: string }> = [
-  { id: 'dashboard', label: 'Panoramica', icon: 'pulse' }, { id: 'plan', label: 'La mia scheda', icon: 'plan' },
+  { id: 'dashboard', label: 'Panoramica', icon: 'pulse' }, { id: 'sleep', label: 'Sonno', icon: 'moon' }, { id: 'plan', label: 'La mia scheda', icon: 'plan' },
   { id: 'profile', label: 'Profilo', icon: 'person' }, { id: 'calendar', label: 'Calendario', icon: 'calendar' },
   { id: 'devices', label: 'iPhone e anello', icon: 'phone' },
 ]
@@ -22,6 +23,7 @@ function Icon({ name, size = 20 }: { name: string; size?: number }) {
     person: <><circle cx="12" cy="7" r="4" /><path d="M4 21v-3a8 8 0 0 1 16 0v3" /></>,
     calendar: <><rect x="3" y="5" width="18" height="16" rx="3" /><path d="M7 2v6m10-6v6M3 11h18M8 15h1m6 0h1m-8 3h1" /></>,
     phone: <><rect x="6" y="2" width="12" height="20" rx="3" /><path d="M10 5h4m-3 14h2" /></>,
+    moon: <path d="M20.5 14A9 9 0 0 1 10 3.5 9 9 0 1 0 20.5 14Z" />,
     ring: <><ellipse cx="12" cy="12" rx="8" ry="9" /><ellipse cx="12" cy="12" rx="5" ry="6" /></>,
     play: <path d="m8 4 12 8-12 8Z" />, pause: <><path d="M8 5v14m8-14v14" /></>, stop: <rect x="5" y="5" width="14" height="14" rx="2" />,
     add: <path d="M12 4v16M4 12h16" />, close: <path d="m6 6 12 12M6 18 18 6" />,
@@ -61,7 +63,8 @@ function Modal({ title, children, onClose }: { title: string; children: ReactNod
 
 export default function Wellness() {
   const { me } = useAuth()
-  const allowed = !!me && me.user.role !== 'child'
+  const adult = !!me && me.user.role !== 'child' && !me.acting_as_child
+  const allowed = adult && me?.features?.wellness !== false
   const [state, setState] = useState<WellnessState | null>(null), [analysis, setAnalysis] = useState<WellnessAnalysis | null>(null)
   const [view, setView] = useState<View>('dashboard'), [selected, setSelected] = useState('')
   const [demo, setDemo] = useState(false), [clock, setClock] = useState(Date.now() / 1000), [tv, setTv] = useState(false)
@@ -132,7 +135,7 @@ export default function Wellness() {
     const command = action === 'start' && session?.provisional ? 'activity' : action
     await perform('session', () => wellness.session(command, { ...(session?.id ? { session_id: session.id } : {}), activity_name: activityName || config.activity_name || 'Allenamento' }))
   }
-  if (!allowed) return <div className="wellness wl-access" role="status"><Icon name="heart" size={36} /><h1>Uno spazio personale</h1><p>L’app Allenamento è disponibile nei profili adulti.</p></div>
+  if (!allowed) return <div className="wellness wl-access" role="status"><Icon name="heart" size={36} /><h1>Uno spazio personale</h1><p>{adult ? 'Allenamento non è abilitato per questo profilo.' : 'L’app Allenamento è disponibile nei profili adulti.'}</p></div>
   return <section ref={root} className={`wellness ${tv ? 'wl-tv' : ''}`} aria-label="Allenamento personale">
     <header className="wl-header"><div className="wl-brand"><span className="wl-brand-icon"><Icon name="pulse" size={23} /></span><div><span>FAMILOS</span><strong>Allenamento</strong></div></div><div className="wl-header-actions"><span className="wl-clock">{timeLabel(clock)}</span><Button onClick={changeDemo}>{demo ? 'Esci dalla demo' : 'Esplora demo'}</Button><Button icon="expand" onClick={toggleTv}>{tv ? 'Esci dalla vista TV' : 'Vista TV'}</Button></div></header>
     <nav className="wl-tabs" role="tablist" aria-label="Sezioni allenamento">{VIEWS.map(item => <button key={item.id} id={`wl-tab-${item.id}`} role="tab" aria-selected={view === item.id} aria-controls="wl-main-panel" onClick={() => setView(item.id)}><Icon name={item.icon} size={18} /><span>{item.label}</span></button>)}</nav>
@@ -153,7 +156,8 @@ export default function Wellness() {
         <div className="wl-bottom-grid"><section className="wl-card"><div className="wl-card-heading"><h2>Energia della sessione</h2><span>STIMA</span></div><div className="wl-energy"><div><strong>{valueLabel(energyValue(session?.stats, 'net_kcal'))}</strong><span>kcal attive</span></div><div><strong>{valueLabel(energyValue(session?.stats, 'gross_kcal'))}</strong><span>kcal totali</span></div></div><p className="wl-note">{session?.stats.estimated_seconds ? `${durationLabel(session.stats.estimated_seconds)} stimati${session.stats.unestimated_seconds ? ` · ${durationLabel(session.stats.unestimated_seconds)} senza stima` : ''}. ` : 'Nessun intervallo stimabile per ora. '}Stima da peso, durata e MET delle fasi. La massa magra informa la stima basale separata; non aumenta automaticamente la precisione del consumo durante lo sforzo.</p><button className="wl-text-button" onClick={() => setView('profile')}>Rivedi il tuo profilo</button></section><WeeklyPreview schedule={snapshot?.settings.weekly_schedule || []} onOpen={() => setView('calendar')} /><section className="wl-card wl-connect-card"><Icon name="phone" size={32} /><h2>{paired.length ? 'Il collegamento è tuo.' : 'Porta il tuo anello qui.'}</h2><p>{paired.length ? `${paired.length} ${paired.length === 1 ? 'iPhone associato' : 'dispositivi associati'}. Gestisci il collegamento e lo stato della sincronizzazione.` : 'Associa il tuo iPhone: legge il Gen3 e porta i dati in FamilOS, anche quando la dashboard è sulla TV.'}</p><Button onClick={() => setView('devices')}>{paired.length ? 'Gestisci dispositivi' : 'Collega iPhone'}</Button></section></div>
         <HistoryList sessions={snapshot?.sessions || []} selected={selected} onSelect={id => setSelected(id)} />
       </>}
-      {view !== 'dashboard' && view !== 'devices' && !snapshot && <div className="wl-card" role="status">Caricamento del tuo profilo…</div>}
+      {view === 'sleep' && <SleepPanel key={`${me?.user.id}:${demo}`} demo={demo} />}
+      {view !== 'dashboard' && view !== 'devices' && view !== 'sleep' && !snapshot && <div className="wl-card" role="status">Caricamento del tuo profilo…</div>}
       {view === 'plan' && snapshot && <PlanEditor key={demo ? 'demo' : 'personal'} config={personalConfig} disabled={demo || !!busy} onSave={async next => { const saved = await perform('settings', () => wellness.settings({ config: next })); if (saved) setNotice('Scheda salvata nel tuo profilo.'); return !!saved }} />}
       {view === 'profile' && snapshot && <ProfileEditor key={demo ? 'demo' : 'personal'} profile={snapshot.settings.profile} disabled={demo || !!busy} onSave={async profile => { const saved = await perform('settings', () => wellness.settings({ profile })); if (saved) setNotice('Profilo aggiornato.'); return !!saved }} />}
       {view === 'calendar' && snapshot && <CalendarEditor key={demo ? 'demo' : 'personal'} settings={snapshot.settings} disabled={demo || !!busy} onSave={async values => { const saved = await perform('settings', () => wellness.settings(values)); if (saved) setNotice('Calendario e preferenze salvati.'); return !!saved }} />}

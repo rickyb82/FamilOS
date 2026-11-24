@@ -1,8 +1,27 @@
 import Foundation
 import CommonCrypto
 
-struct OuraLive {
+struct OuraLive:Sendable {
     var bpm:Int?;var ibi:Int?;var flags:Int;var state:Int;var validity:Int;var age:Int;var temperatureRaw:Int;var warnings:[String]
+}
+
+struct PacketJournalDelivery:Sendable {
+    var frames:[Data];var at:Date;var error:String?;var storageFailed:Bool
+}
+final class PacketJournal:@unchecked Sendable {
+    private let queue=DispatchQueue(label:"HomePulse.bluetooth-archive",qos:.userInitiated)
+    private var framer=OuraFramer();private let store:EventStore
+    init(store:EventStore){self.store=store}
+    func reset(){queue.async{self.framer=OuraFramer()}}
+    func ingest(_ value:Data,at:Date,api:[Int],ring:String?,completion:@escaping @Sendable(PacketJournalDelivery)->Void){
+        queue.async{
+            var frames:[Data]=[],failure:String?
+            do{_ = try self.framer.consume(value){frames.append($0)}}catch{failure=error.localizedDescription}
+            do{try self.store.ingestPackets(frames,api:api,ring:ring,at:at,opaque:self.framer.opaqueRejected)}
+            catch{completion(PacketJournalDelivery(frames:[],at:at,error:"Archivio non scrivibile: acquisizione fermata",storageFailed:true));return}
+            completion(PacketJournalDelivery(frames:frames,at:at,error:failure,storageFailed:false))
+        }
+    }
 }
 struct OuraBattery:Equatable {
     var level:Int

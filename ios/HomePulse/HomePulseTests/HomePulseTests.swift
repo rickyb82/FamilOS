@@ -1,7 +1,117 @@
 import XCTest
+import SQLite3
 @testable import HomePulse
 
 final class HomePulseTests:XCTestCase {
+    func testLegacyOutboxMigrationKeepsUnacknowledgedBatchAndFIFO()throws{
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer{try? FileManager.default.removeItem(at:folder)}
+        try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true)
+        let url=folder.appendingPathComponent("legacy.sqlite")
+        var db:OpaquePointer?;XCTAssertEqual(sqlite3_open(url.path,&db),SQLITE_OK)
+        let payload:JSONValue = .object(["raw_hex":.string("410401000000")])
+        let events=(1...3).map{StoredEvent(event_id:UUID().uuidString,sequence:Int64($0),captured_at:Double(4-$0),kind:"ring_history",payload:payload)}
+        let batch=EventBatch(batch_id:UUID().uuidString,events:[events[0]])
+        func literal(_ bytes:Data)->String{"X'"+bytes.map{String(format:"%02x",$0)}.joined()+"'"}
+        var sql="CREATE TABLE journal(sequence INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT UNIQUE NOT NULL,captured_at REAL NOT NULL,kind TEXT NOT NULL,payload BLOB NOT NULL);CREATE TABLE outbox(event_id TEXT PRIMARY KEY REFERENCES journal(event_id),batch_id TEXT);CREATE TABLE batches(batch_id TEXT PRIMARY KEY,body BLOB NOT NULL);"
+        for event in events{sql+="INSERT INTO journal VALUES(\(event.sequence),'\(event.event_id)',\(event.captured_at),'ring_history',\(literal(try JSONEncoder().encode(payload))));INSERT INTO outbox VALUES('\(event.event_id)',\(event.sequence==1 ? "'\(batch.batch_id)'":"NULL"));"}
+        sql+="INSERT INTO batches VALUES('\(batch.batch_id)',\(literal(try JSONEncoder().encode(batch))));"
+        XCTAssertEqual(sqlite3_exec(db,sql,nil,nil,nil),SQLITE_OK);sqlite3_close(db)
+        let migrated=try EventStore(url:url)
+        XCTAssertEqual(migrated.pendingCount,3);XCTAssertEqual(migrated.journalCount,3)
+        let replay=try XCTUnwrap(migrated.prepareBatch(limit:500,prioritizeLive:true))
+        XCTAssertEqual(replay.batch_id,batch.batch_id);XCTAssertEqual(replay.events.map{$0.event_id},[events[0].event_id])
+        try migrated.acknowledge(batchID:batch.batch_id,accepted:[events[0].event_id])
+        XCTAssertEqual(try migrated.prepareBatch()?.events.map{$0.event_id},Array(events.dropFirst().map{$0.event_id}))
+    }
+    func testPacketJournalPersistsOrderedFramesOffMainAndDeduplicatesHistory()async throws{
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer{try? FileManager.default.removeItem(at:folder)}
+        let store=try EventStore(url:folder.appendingPathComponent("packets.sqlite")),journal=PacketJournal(store:store)
+        let history=Data(hex:"50050100000005")!,live=Data(hex:"2f0f280211020000e81300000000ac0d01")!,secret=Data(hex:"24020102")!
+        let first=Date(timeIntervalSince1970:1000),second=first.addingTimeInterval(1)
+        let done=expectation(description:"serial persisted deliveries");done.expectedFulfillmentCount=2
+        journal.ingest(history+live+secret,at:first,api:[2,0,0],ring:"synthetic-ring"){delivery in
+            XCTAssertFalse(Thread.isMainThread);XCTAssertFalse(delivery.storageFailed);XCTAssertEqual(delivery.at,first);XCTAssertEqual(delivery.frames,[history,live,secret]);done.fulfill()
+        }
+        journal.ingest(history,at:second,api:[2,0,0],ring:"synthetic-ring"){delivery in
+            XCTAssertFalse(Thread.isMainThread);XCTAssertFalse(delivery.storageFailed);XCTAssertEqual(delivery.at,second);done.fulfill()
+        }
+        await fulfillment(of:[done],timeout:5)
+        XCTAssertEqual(store.pendingCount,2);XCTAssertNil(store.load(UInt32.self,key:"cursor"))
+        let batch=try XCTUnwrap(store.prepareBatch())
+        XCTAssertEqual(batch.events.map{$0.kind},["ring_history","sensor_packet"])
+        XCTAssertEqual(batch.events.map{$0.captured_at},[first.timeIntervalSince1970,first.timeIntervalSince1970])
+        XCTAssertEqual(batch.events.map{$0.payload["raw_hex"].string},[history.hex,live.hex])
+        try store.archiveHistory(frames:[history],nextCursor:2,key:"cursor",api:[2,0,0],ring:"synthetic-ring")
+        XCTAssertEqual(store.pendingCount,2);XCTAssertEqual(store.metrics().steps,5);XCTAssertEqual(store.load(UInt32.self,key:"cursor"),2)
+    }
+    func testWiFiDrainsSuccessiveFullBatchesWithoutNewSensorCallbacks()async throws{
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer{try? FileManager.default.removeItem(at:folder)}
+        let store=try EventStore(url:folder.appendingPathComponent("wifi.sqlite"))
+        try store.ingestPackets(Array(repeating:Data(hex:"0d03320000")!,count:1001),api:[2,0,0],ring:nil,at:Date())
+        let done=expectation(description:"all Wi-Fi ACKs");done.expectedFulfillmentCount=3
+        let config=URLSessionConfiguration.ephemeral;config.protocolClasses=[HomePulseHTTPFixture.self]
+        let session=URLSession(configuration:config);defer{session.invalidateAndCancel();HomePulseHTTPFixture.reply=nil}
+        let lock=NSLock();var counts:[Int]=[];var seen=Set<String>()
+        HomePulseHTTPFixture.reply={request in
+            var body=request.httpBody
+            if body==nil,let stream=request.httpBodyStream{stream.open();defer{stream.close()};var data=Data(),buffer=[UInt8](repeating:0,count:4096);while stream.hasBytesAvailable{let n=stream.read(&buffer,maxLength:buffer.count);if n<=0{break};data.append(contentsOf:buffer.prefix(n))};body=data}
+            let batch=try JSONDecoder().decode(EventBatch.self,from:XCTUnwrap(body))
+            lock.lock();counts.append(batch.events.count);for event in batch.events{XCTAssertTrue(seen.insert(event.event_id).inserted)};lock.unlock()
+            return try JSONEncoder().encode(JSONValue.object(["batch_id":.string(batch.batch_id),"accepted_event_ids":.array(batch.events.map{.string($0.event_id)})]))
+        }
+        let credential=Credentials(device_id:"synthetic-device",access_token:"synthetic-only",server:URL(string:"https://synthetic.example/api/wellness/v1")!)
+        let api=WellnessAPI(store:store,folder:folder.appendingPathComponent("uploads"),transport:session,credentials:{credential},monitorNetwork:false,fastNetwork:true)
+        api.onAcknowledged={done.fulfill()};api.setForeground(true)
+        await fulfillment(of:[done],timeout:5)
+        await api.stopForTesting()
+        XCTAssertEqual(counts,[500,500,1]);XCTAssertEqual(seen.count,1001);XCTAssertEqual(store.pendingCount,0);XCTAssertEqual(store.journalCount,1001)
+    }
+    func testSleepPreservesNativeSummaryAndPartialRelativeSequence(){
+        let period=SleepPeriod(.object(["id":.string("synthetic-sleep"),"started_at":.number(1000),"ended_at":.number(4600),"time_in_bed_seconds":.number(3600),"total_sleep_seconds":.number(3000),"stage_seconds":.object(["deep":.number(600)]),"phases_30_seconds":.string("11234")]))
+        XCTAssertEqual(period?.total,3000);XCTAssertEqual(period?.stages["deep"],600)
+        XCTAssertEqual(period?.phaseRuns.count,4);XCTAssertEqual(period?.phaseRuns.last?.end,150)
+        XCTAssertEqual(period?.phaseRuns.first?.stage,"Profondo");XCTAssertNil(period?.efficiency)
+        XCTAssertNil(SleepPeriod(.object(["id":.string("invalid")])))
+    }
+    func testLargeBacklogSelectsLiveWithoutSortingPayloadsAndReplaysExactBatch()throws{
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer{try? FileManager.default.removeItem(at:folder)}
+        let url=folder.appendingPathComponent("backlog.sqlite"),store=try EventStore(url:url)
+        var db:OpaquePointer?;XCTAssertEqual(sqlite3_open(url.path,&db),SQLITE_OK)
+        defer{sqlite3_close(db)}
+        XCTAssertEqual(sqlite3_exec(db,"BEGIN",nil,nil,nil),SQLITE_OK)
+        var insert:OpaquePointer?,outbox:OpaquePointer?
+        XCTAssertEqual(sqlite3_prepare_v2(db,"INSERT INTO journal(event_id,captured_at,kind,payload) VALUES(?1,1,'ring_history',?2)",-1,&insert,nil),SQLITE_OK)
+        XCTAssertEqual(sqlite3_prepare_v2(db,"INSERT INTO outbox(event_id) VALUES(?1)",-1,&outbox,nil),SQLITE_OK)
+        defer{sqlite3_finalize(insert);sqlite3_finalize(outbox)}
+        let transient=unsafeBitCast(-1,to:sqlite3_destructor_type.self)
+        let payload=try JSONEncoder().encode(JSONValue.object(["raw_hex":.string(String(repeating:"ab",count:4096))]))
+        var ids:[String]=[]
+        for _ in 0..<2500{
+            let id=UUID().uuidString;ids.append(id);sqlite3_reset(insert);sqlite3_reset(outbox)
+            sqlite3_bind_text(insert,1,id,-1,transient)
+            _=payload.withUnsafeBytes{sqlite3_bind_blob(insert,2,$0.baseAddress,Int32(payload.count),transient)}
+            sqlite3_bind_text(outbox,1,id,-1,transient)
+            XCTAssertEqual(sqlite3_step(insert),SQLITE_DONE);XCTAssertEqual(sqlite3_step(outbox),SQLITE_DONE)
+        }
+        XCTAssertEqual(sqlite3_exec(db,"COMMIT",nil,nil,nil),SQLITE_OK)
+        let live=try store.append(kind:"sensor_packet",payload:.object(["raw_hex":.string("2f0f280211020000e81300000000ac0d01")]))
+        let started=Date(),batch=try XCTUnwrap(store.prepareBatch(limit:128,prioritizeLive:true))
+        XCTAssertLessThan(Date().timeIntervalSince(started),5,"Backlog preparation must stay below the iOS scene watchdog budget")
+        XCTAssertEqual(batch.events.count,128);XCTAssertEqual(batch.events.first?.event_id,live.event_id)
+        XCTAssertEqual(batch.events.dropFirst().map{$0.event_id},Array(ids.prefix(127)))
+        let encoder=JSONEncoder();encoder.outputFormatting = .sortedKeys
+        XCTAssertEqual(try encoder.encode(try store.prepareBatch()),try encoder.encode(Optional(batch)))
+        XCTAssertTrue(try store.acknowledge(batchID:batch.batch_id,accepted:batch.events.map{$0.event_id}))
+        XCTAssertEqual(store.pendingCount,2373);XCTAssertEqual(store.journalCount,2501)
+        let next=try XCTUnwrap(store.prepareBatch(limit:1))
+        XCTAssertEqual(next.events.first?.event_id,ids[127])
+        XCTAssertEqual(next.events.first?.payload["raw_hex"].string,String(repeating:"ab",count:4096))
+    }
+
     func testForegroundSendsExactDurableBatchAndAcknowledgesIt()async throws{
         let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer{try? FileManager.default.removeItem(at:folder)}
@@ -24,6 +134,7 @@ final class HomePulseTests:XCTestCase {
         let api=WellnessAPI(store:store,folder:folder.appendingPathComponent("uploads"),transport:session,credentials:{credentials},monitorNetwork:false)
         api.onAcknowledged={done.fulfill()};api.setForeground(true)
         await fulfillment(of:[done],timeout:5)
+        await api.stopForTesting()
         XCTAssertEqual(store.pendingCount,0);XCTAssertEqual(store.journalCount,1)
     }
 
@@ -49,6 +160,7 @@ final class HomePulseTests:XCTestCase {
         let api=WellnessAPI(store:store,folder:folder.appendingPathComponent("uploads"),transport:session,credentials:{credentials},monitorNetwork:false)
         api.onAcknowledged={done.fulfill()};api.noteBluetoothActivity()
         await fulfillment(of:[done],timeout:5)
+        await api.stopForTesting()
         XCTAssertEqual(store.pendingCount,0);XCTAssertEqual(store.journalCount,1)
     }
 

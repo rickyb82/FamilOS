@@ -25,7 +25,8 @@ def failure(status, message, *, digest=None, count=0):
     return {'status': status, 'error': message, 'process_true': False,
             'source_input_sha256': digest, 'input_record_count': count,
             'processed_record_count': 0, 'spo2_outputs': [], 'mapped_temperatures': [],
-            'mapped_sensor_records': [], 'deinit_returned': False,
+            'mapped_sensor_records': [], 'sleep_outputs': [], 'sleep_capture_complete': False,
+            'deinit_returned': False,
             'published_as_valid_measurement': False, 'medical_validation_claimed': False,
             'user_profile_used': False}
 
@@ -125,10 +126,16 @@ def process_records(value):
                 return answer, 502
             if result.get('source_input_sha256') != digest or result.get('input_record_count') != count:
                 return failure('result_mismatch', 'Native result/input identity mismatch', digest=digest, count=count), 502
-            if process.returncode != 0 or result.get('process_true') is not True or result.get('deinit_returned') is not True:
+            if (process.returncode != 0 or result.get('status') != 'ok'
+                    or result.get('process_true') is not True or result.get('deinit_returned') is not True
+                    or not isinstance(result.get('mapping'), dict) or result['mapping'].get('complete') is not True):
                 result['process_true'] = False
-                for key in ('spo2_outputs', 'mapped_temperatures', 'mapped_sensor_records'):
+                result['sleep_capture_complete'] = False
+                for key in ('spo2_outputs', 'mapped_temperatures', 'mapped_sensor_records', 'sleep_outputs'):
                     result[key] = []
+            elif result.get('sleep_capture_complete') is not True or result.get('sleep_callback_errors'):
+                result['sleep_outputs'] = []
+                result['sleep_capture_complete'] = False
             result['published_as_valid_measurement'] = False
             return result, 200 if process.returncode in (0, 2) else 502
     except (OSError, ValueError, subprocess.SubprocessError):

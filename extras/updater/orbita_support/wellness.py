@@ -214,6 +214,8 @@ try:
  assert result.get('process_true') is True and result.get('deinit_returned') is True
  assert result.get('version')==[3,6,2] and result.get('input_record_count')==16
  assert result.get('mapping',{}).get('complete') is True and result['mapping'].get('record_identity_verified') is True
+ assert result.get('sleep_native_abi')=='ecore-3.6.2-linux-x86_64-sleep-output-200-v1'
+ assert result.get('sleep_capture_complete') is True and isinstance(result.get('sleep_outputs'),list)
  print(json.dumps({'ok':True,'synthetic_records':16}))
 except Exception: print(json.dumps({'ok':False,'reason':'native_synthetic_probe'}));sys.exit(1)
 '''

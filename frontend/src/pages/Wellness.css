@@ -434,3 +434,72 @@
   .wl-pair-details .wl-button { align-self: center; }
 }
 @media (prefers-reduced-motion: reduce) { .wellness *, .wellness *::before, .wellness *::after { scroll-behavior: auto !important; transition: none !important; } }
+
+/* Sleep summaries and phase sequences keep their separate native durations. */
+.wl-sleep-window { min-width: 180px; font-size: 11px !important; }
+.wl-sleep-empty { padding: 42px; max-width: 850px; }
+.wl-sleep-empty h2 { margin-top: 10px; font-size: 24px; }
+.wl-sleep-empty p { margin-top: 12px; color: var(--wl-muted); font-size: 14px; line-height: 1.8; max-width: 650px; }
+.wl-sleep-empty small { display: block; color: var(--wl-muted); margin-top: 20px; }
+.wl-sleep-picker { display: flex; justify-content: space-between; gap: 20px; align-items: end; margin-bottom: 16px; }
+.wl-sleep-picker label { width: min(360px, 100%); font-size: 11px; }
+.wl-sleep-picker > span { color: var(--wl-muted); font-size: 11px; padding-bottom: 12px; }
+.wl-sleep-overview { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; background: radial-gradient(ellipse at 100% 0, #5d67932b, transparent 70%), var(--wl-panel); }
+.wl-sleep-overview h2 { margin-top: 10px; font-size: 23px; }
+.wl-sleep-bedtimes { display: flex; gap: 30px; align-items: center; margin-top: 25px; }
+.wl-sleep-bedtimes > div { display: flex; flex-direction: column; gap: 5px; }
+.wl-sleep-bedtimes span, .wl-sleep-bedtimes small { color: var(--wl-muted); font-size: 11px; }
+.wl-sleep-bedtimes strong { font-size: 29px; font-weight: 450; font-variant-numeric: tabular-nums; }
+.wl-sleep-totals { border-left: 1px solid var(--wl-border); padding-left: 35px; display: flex; flex-direction: column; justify-content: center; gap: 25px; }
+.wl-sleep-totals > div { display: flex; flex-direction: column; gap: 5px; }
+.wl-sleep-totals span { color: var(--wl-muted); font-size: 12px; }
+.wl-sleep-totals strong { font-size: clamp(28px, 3vw, 43px); font-weight: 430; letter-spacing: -.045em; }
+.wl-sleep-totals > div:last-child strong { color: #c3b4ed; }
+.wl-sleep-totals small { color: var(--wl-muted); font-size: 11px; }
+.wl-sleep-stages { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 15px; margin: 18px 0; }
+.wl-sleep-stages .wl-card { padding: 19px; }
+.wl-sleep-stages span { color: var(--wl-muted); display: flex; align-items: center; gap: 9px; font-size: 12px; }
+.wl-sleep-stages i { width: 7px; height: 7px; display: block; border-radius: 50%; }
+.wl-sleep-stages strong { display: block; font-size: 29px; font-weight: 430; letter-spacing: -.04em; margin: 13px 0 5px; }
+.wl-sleep-stages small { color: var(--wl-muted); font-size: 10px; }
+.wl-sleep-resolution { display: flex; gap: 3px; border: 1px solid var(--wl-border); padding: 3px; border-radius: 8px; }
+.wl-sleep-resolution button { border: 0; background: transparent; color: var(--wl-muted); border-radius: 5px; font-size: 11px; padding: 7px 13px; white-space: nowrap; }
+.wl-sleep-resolution button[aria-pressed=true] { color: var(--wl-text); background: #35463f; }
+.wl-sleep-chart { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 14px; margin-top: 25px; }
+.wl-sleep-chart-labels { height: 160px; display: grid; grid-template-rows: repeat(4, 1fr); align-items: center; color: var(--wl-muted); font-size: 11px; }
+.wl-sleep-chart-content { min-width: 0; }
+.wl-sleep-chart svg { display: block; width: 100%; height: 160px; overflow: hidden; }
+.wl-sleep-grid { fill: none; stroke: var(--wl-border); stroke-dasharray: 3 5; stroke-width: 1; }
+.wl-sleep-run { opacity: .95; }
+.wl-sleep-gap { stroke: #83908c; stroke-width: 1; stroke-dasharray: 3 3; opacity: .5; }
+.wl-sleep-axis { display: flex; justify-content: space-between; gap: 10px; margin-top: 9px; font-size: 10px; color: var(--wl-muted); }
+.wl-sleep-foot { display: flex; flex-wrap: wrap; gap: 14px 28px; font-size: 11px; color: var(--wl-muted); margin-top: 17px; }
+.wl-sleep-foot strong { color: var(--wl-text); font-weight: 500; margin-left: 8px; }
+.wl-sleep-foot > span:last-child { margin-left: auto; }
+@media (max-width: 800px) {
+  .wl-sleep-stages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .wl-sleep-overview { gap: 22px; }
+  .wl-sleep-totals { padding-left: 22px; }
+  .wl-sleep-overview h2 { font-size: 19px; }
+}
+@media (max-width: 560px) {
+  .wl-sleep-panel .wl-page-title { align-items: stretch; }
+  .wl-sleep-window { width: 100%; }
+  .wl-sleep-empty { padding: 25px; }
+  .wl-sleep-picker { flex-direction: column; align-items: stretch; gap: 7px; }
+  .wl-sleep-picker label { width: 100%; }
+  .wl-sleep-picker > span { padding-bottom: 0; }
+  .wl-sleep-overview { grid-template-columns: 1fr; }
+  .wl-sleep-totals { display: grid; grid-template-columns: 1fr 1fr; border: 0; border-top: 1px solid var(--wl-border); padding: 20px 0 0; gap: 18px; }
+  .wl-sleep-totals strong { font-size: 27px; }
+  .wl-sleep-stages { gap: 10px; }
+  .wl-sleep-stages .wl-card { padding: 15px; }
+  .wl-sleep-stages strong { font-size: 26px; }
+  .wl-sleep-phases .wl-card-heading { align-items: start; }
+  .wl-sleep-phases .wl-card-heading > div > p { font-size: 11px; }
+  .wl-sleep-resolution button { padding: 6px 8px; }
+  .wl-sleep-chart { grid-template-columns: 57px minmax(0, 1fr); gap: 8px; }
+  .wl-sleep-chart-labels { font-size: 10px; }
+  .wl-sleep-axis > span:nth-child(2) { display: none; }
+  .wl-sleep-foot > span:last-child { flex-basis: 100%; margin-left: 0; }
+}

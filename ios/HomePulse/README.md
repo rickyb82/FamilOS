@@ -84,3 +84,17 @@ Con l’app aperta i campioni vengono inviati con trasporto HTTP immediato, con 
 
 
 Con lo schermo spento, finché il firmware indica carica in corso o completa, l’app programma con `CBConnectPeripheralOptionStartDelayKey` un nuovo collegamento Bluetooth dopo 60 secondi. È il sistema a gestire la richiesta pendente e a risvegliare l’app al collegamento; non dipende da un timer Swift rimasto attivo. Ogni controllo autentica nuovamente il proprietario, legge batteria e storico e conserva cursori e credenziali. Al ritorno in primo piano il collegamento riprende subito. Una lettura non in carica termina questo ciclo e ripristina la connessione continua; Scollega interrompe anche i controlli pendenti. La consegna della notifica usa un task breve di completamento, che termina dopo la singola richiesta a iOS.
+
+## Interfaccia e archivio indipendenti
+
+Apertura dell’archivio, migrazioni, ricostruzione dei frame BLE, scritture e preparazione dei lotti avvengono fuori dal thread dell’interfaccia. Le viste usano contatori e riepiloghi in memoria. Gli allenamenti sono confermati in interfaccia dopo la scrittura durevole, senza bloccare la navigazione. Il test UI tiene intenzionalmente occupato per 15 secondi solo un archivio isolato e verifica che Home, Diario e Impostazioni continuino a rispondere.
+
+La coda usa un indice sulla sequenza originale: il recupero del lotto successivo non ordina ripetutamente tutti i payload pendenti. Un lotto già preparato viene riproposto con gli stessi UUID fino alla conferma. Su Wi-Fi o Ethernet non vincolati si inviano fino a 500 eventi per richiesta e si prosegue subito dopo la conferma completa; su altre reti il lotto è 128. Errori e conferme parziali conservano i record e introducono un’attesa prima del tentativo successivo. Lo storico riconosciuto è archiviato una sola volta per anello e contenuto; lo stesso record ricevuto di nuovo non crea altri eventi. Il cursore avanza solo dopo la convalida dell’intera pagina.
+
+I grafici server vengono preparati fuori dall’interfaccia e visualizzano al massimo 300 punti reali, conservando estremi e orari originali. Il contenuto completo resta nell’archivio e nelle statistiche.
+
+## Sonno
+
+La scheda Sonno legge `mobile/sleep?days=14` e conserva la risposta per consultazione offline. Mostra i periodi restituiti dal motore nativo, tempo a letto, sonno totale e riepiloghi delle fasi quando presenti. La sequenza delle fasi usa il passo nativo 30 secondi o 5 minuti e un asse relativo: non viene inventato l’allineamento assoluto di epoche parziali. Valori non restituiti restano assenti. Il calendario è raggiungibile da Allenamento → Calendario allenamenti.
+
+Il decoder è verificato sul contratto nativo e su fixture sintetiche. La disponibilità di periodi reali dopo l’aggiornamento del server deve essere verificata separatamente. La prova fisica della notifica di carica completa a schermo spento resta aperta: nella precedente prova il messaggio è arrivato solo all’apertura dell’app.

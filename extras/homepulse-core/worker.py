@@ -1,8 +1,8 @@
 """Offline ecore C ABI worker; launched only inside the restricted container.
 
 Uses the user's APK-derived private library. No JNI, RF, keys, profile or
-network. Only typed SpO2 averages and native-mapped temperature times leave
-this worker. This is not general Bionic compatibility or medical validation.
+network. Typed SpO2 averages, native sleep periods/stages and native-mapped
+sensor times leave this worker. This is not medical validation.
 """
 import argparse
 from collections import Counter
@@ -11,10 +11,90 @@ import hashlib
 import json
 import math
 import os
+import struct
 
 LIBRARY_SHA256 = '163e10037c93ef70bd939641e0d391441e74cb4dd339946cd0a5421b91703f21'
 MAX_RECORDS = 65536
 MAX_INPUT_BYTES = 4_000_000
+MAX_SLEEP_OUTPUTS = 1024
+MAX_SLEEP_ERRORS = 16
+SLEEP_OUTPUT_BYTES = 200
+SLEEP_ABI = 'ecore-3.6.2-linux-x86_64-sleep-output-200-v1'
+SLEEP_CALLBACK = C.CFUNCTYPE(None, C.c_void_p, C.c_void_p)
+
+
+def _bounded_sleep_string(address, max_chars):
+    if not address:
+        return None
+    value = bytearray()
+    # Native allocations include a terminator. Read incrementally so an early
+    # NUL never causes a bulk read past that allocation. All reads occur inside
+    # the native callback: the producer lends stack-backed storage.
+    for offset in range(max_chars + 1):
+        char = C.string_at(address + offset, 1)[0]
+        if char == 0:
+            return value.decode('ascii')
+        if char not in b'1234':
+            raise ValueError('Unknown native sleep phase symbol')
+        value.append(char)
+    raise ValueError('Native sleep phase string exceeds bound')
+
+
+def _copy_sleep_output(address):
+    """Copy the statically verified amd64 ABI during its callback only.
+
+    Addresses must come from the pinned native core, never request data.
+    Unknown fields/pointers and profile-dependent derived metrics are omitted.
+    """
+    if not address:
+        raise ValueError('Null native sleep output')
+    header = C.string_at(address, SLEEP_OUTPUT_BYTES)
+    i32 = lambda offset: struct.unpack_from('<i', header, offset)[0]
+    i64 = lambda offset: struct.unpack_from('<q', header, offset)[0]
+    pointer = lambda offset: struct.unpack_from('<Q', header, offset)[0]
+    start, end, duration = i64(0x18), i64(0x28), i32(0x38)
+    if not (0 < start < end and end - start <= 57600 and 0 < duration <= 57600):
+        raise ValueError('Native sleep period outside verified bounds')
+    summary = None
+    if pointer(0x40):
+        raw = C.string_at(pointer(0x40), 44)
+        fields = {'wake_seconds': 0, 'rem_seconds': 4, 'light_seconds': 8,
+                  'deep_seconds': 12, 'score_raw': 0x18, 'wake_up_count_raw': 0x1c,
+                  'latency_seconds': 0x20, 'total_sleep_seconds': 0x24,
+                  'efficiency_raw': 0x28}
+        summary = {name: struct.unpack_from('<i', raw, offset)[0]
+                   for name, offset in fields.items()}
+    return {'timestamp_utc_seconds': i64(0), 'time_zone_minutes': i32(8),
+            'sleep_period_id': i32(0x10), 'bedtime_start_utc_seconds': start,
+            'bedtime_start_time_zone_minutes': i32(0x20),
+            'bedtime_end_utc_seconds': end, 'bedtime_end_time_zone_minutes': i32(0x30),
+            'time_in_bed_seconds': duration, 'alert_info_raw': i32(0x3c),
+            'is_longest_sleep_period_raw': i32(0x78),
+            'phases_30_seconds': _bounded_sleep_string(pointer(0x68), 1920),
+            'phases_5_minutes': _bounded_sleep_string(pointer(0x60), 192),
+            'summary2': summary, 'native_version': [3, 6, 2], 'native_abi': SLEEP_ABI,
+            'user_profile_used': False, 'published_as_valid_measurement': False,
+            'medical_validation_claimed': False}
+
+
+def _sleep_capture(callback_counts):
+    """Own the callback lifetime and bounded copied results for one native job."""
+    outputs, errors = [], []
+
+    @SLEEP_CALLBACK
+    def capture(context, output):
+        callback_counts['sleep_outputs_received'] += 1
+        try:
+            if callback_counts['sleep_outputs_received'] > MAX_SLEEP_OUTPUTS:
+                raise ValueError('Native sleep callback count exceeds bound')
+            outputs.append(_copy_sleep_output(output))
+        except Exception as exc:
+            # Separate sleep diagnostics preserve valid unrelated sensor data.
+            # Diagnostics are fixed decoder messages, never pointer values.
+            if len(errors) < MAX_SLEEP_ERRORS:
+                errors.append(str(exc) if isinstance(exc, ValueError) else 'Native sleep decoding failed')
+
+    return capture, outputs, errors
 
 
 class Version(C.Structure):
@@ -77,6 +157,7 @@ def calculate(data, *, library_path='/native/libappecore-compat.so', source_inpu
     input_count = len(frames)
     mapped, spo2, callback_errors = [], [], []
     callback_counts = Counter()
+    capture_sleep, sleep_outputs, sleep_errors = _sleep_capture(callback_counts)
     initialized = False
     lib = C.CDLL(library_path, mode=os.RTLD_NOW | os.RTLD_LOCAL)
     lib.ecore_get_version.argtypes = []
@@ -128,7 +209,9 @@ def calculate(data, *, library_path='/native/libappecore-compat.so', source_inpu
     lib.ecore_deinit.restype = None
     result = None
     try:
-        init_result = lib.ecore_init(None, 0, mac, noop, noop, noop, noop, noop, noop, None, None, None)
+        # ABI evidence: argument7 is the sleep callback, after three raw outputs.
+        init_result = lib.ecore_init(None, 0, mac, noop, noop, noop,
+                                     C.cast(capture_sleep, C.c_void_p), noop, noop, None, None, None)
         if init_result < 0:
             raise RuntimeError('Native fresh initialization failed')
         initialized = True
@@ -214,6 +297,8 @@ def calculate(data, *, library_path='/native/libappecore-compat.so', source_inpu
                               'unresolved_count': max(0, len(frames) - mapping['mapped_count'])},
                   'excluded_metadata': excluded, 'callback_counts': dict(callback_counts),
                   'callback_errors': callback_errors,
+                  'sleep_outputs': [], 'sleep_callback_errors': sleep_errors,
+                  'sleep_capture_complete': False, 'sleep_native_abi': SLEEP_ABI,
                   'spo2_outputs': spo2 if process_result is True and not callback_errors else [],
                   'mapped_temperatures': temperatures,'mapped_sensor_records':sensor_times, 'deinit_returned': False,
                   'medical_validation_claimed': False, 'user_profile_used': False, 'published_as_valid_measurement': False, 'architecture': 'x86_64',
@@ -226,6 +311,20 @@ def calculate(data, *, library_path='/native/libappecore-compat.so', source_inpu
             lib.ecore_deinit()
             if result is not None:
                 result['deinit_returned'] = True
+    if result is not None:
+        # Deinit may itself invoke callbacks. Finalize only after it returns;
+        # failed process/mapping/global callbacks cannot release measurements.
+        success = (result['process_true'] and result['mapping']['complete']
+                   and result['deinit_returned'] and not callback_errors)
+        result['callback_counts'] = dict(callback_counts)
+        result['process_true'] = bool(success)
+        if not success:
+            for field in ('spo2_outputs', 'mapped_temperatures', 'mapped_sensor_records'):
+                result[field] = []
+            if result['status'] == 'ok':
+                result['status'] = 'native_processing_failed'
+        result['sleep_capture_complete'] = bool(success and not sleep_errors)
+        result['sleep_outputs'] = sleep_outputs if result['sleep_capture_complete'] else []
     return result
 
 
@@ -247,7 +346,8 @@ def main():
     except BaseException as exc:
         result = {'status': 'worker_error', 'process_true': False,
                   'error_type': type(exc).__name__, 'error': str(exc),
-                  'spo2_outputs': [], 'mapped_temperatures': [], 'mapped_sensor_records': [], 'deinit_returned': False, 'medical_validation_claimed': False}
+                  'spo2_outputs': [], 'sleep_outputs': [], 'sleep_capture_complete': False,
+                  'mapped_temperatures': [], 'mapped_sensor_records': [], 'deinit_returned': False, 'medical_validation_claimed': False}
     try:
         descriptor = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, 'w') as handle:
