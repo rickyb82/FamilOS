@@ -3,6 +3,16 @@ import SQLite3
 @testable import HomePulse
 
 final class HomePulseTests:XCTestCase {
+    func testReceiptMetadataIsBoundedWithoutLosingPendingEvents()throws{
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString);defer{try? FileManager.default.removeItem(at:folder)}
+        let path=folder.appendingPathComponent("synthetic.sqlite"),store=try EventStore(url:path)
+        var db:OpaquePointer?;XCTAssertEqual(sqlite3_open(path.path,&db),SQLITE_OK);defer{sqlite3_close(db)}
+        XCTAssertEqual(sqlite3_exec(db,"WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<9000) INSERT INTO history_receipts(digest,receipt_sequence) SELECT CAST(printf('%032d',i) AS BLOB),i FROM n",nil,nil,nil),SQLITE_OK)
+        _=try store.append(kind:"sensor_packet",payload:.object(["raw_hex":.string("00")]))
+        while try !store.retentionStep(){}
+        XCTAssertEqual(store.storageStatus(maintenanceComplete:true)["deduplication_hashes"].number,8192)
+        XCTAssertEqual(store.pendingCount,1);XCTAssertEqual(store.journalCount,1)
+    }
     func testLegacyHistoryPositionsSurviveMigrationAndDatabaseCompaction()throws{
         let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString);defer{try? FileManager.default.removeItem(at:folder)}
         try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true)

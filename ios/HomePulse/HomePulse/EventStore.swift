@@ -33,9 +33,14 @@ final class EventStore: @unchecked Sendable {
         try run("CREATE TABLE IF NOT EXISTS recorded_segments(token TEXT PRIMARY KEY,started REAL NOT NULL,through REAL NOT NULL,body BLOB NOT NULL)")
         try run("CREATE INDEX IF NOT EXISTS recorded_segments_time ON recorded_segments(started,through)")
         try run("INSERT OR IGNORE INTO recorded_segments(token,started,through,body) SELECT substr(key,17),json_extract(CAST(value AS TEXT),'$.startedAt'),json_extract(CAST(value AS TEXT),'$.availableUntil'),value FROM kv WHERE key LIKE 'recorded.result.%' AND json_valid(CAST(value AS TEXT))")
-        try run("CREATE TABLE IF NOT EXISTS history_receipts(digest BLOB PRIMARY KEY) WITHOUT ROWID")
+        try run("CREATE TABLE IF NOT EXISTS history_receipts(digest BLOB PRIMARY KEY,receipt_sequence INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID")
         try run("CREATE TABLE IF NOT EXISTS retention_state(name TEXT PRIMARY KEY,value INTEGER NOT NULL)")
         try run("INSERT OR IGNORE INTO retention_state VALUES('history.highwater',(SELECT coalesce(max(rowid),0) FROM history_records))")
+        let receiptColumns=try statement("PRAGMA table_info(history_receipts)");var receiptOrder=false
+        while sqlite3_step(receiptColumns)==SQLITE_ROW{if text(receiptColumns,1)=="receipt_sequence"{receiptOrder=true}};sqlite3_finalize(receiptColumns)
+        if !receiptOrder{try run("ALTER TABLE history_receipts ADD COLUMN receipt_sequence INTEGER NOT NULL DEFAULT 0")}
+        try run("CREATE INDEX IF NOT EXISTS receipt_order ON history_receipts(receipt_sequence DESC)")
+        try run("INSERT OR IGNORE INTO retention_state VALUES('receipt.sequence',0)")
         try run("CREATE TABLE IF NOT EXISTS recorded_receipts(token TEXT PRIMARY KEY,revision INTEGER NOT NULL,final INTEGER NOT NULL)")
         let historyColumns=try statement("PRAGMA table_info(history_records)");var hasSynced=false;var stableHistory=false
         while sqlite3_step(historyColumns)==SQLITE_ROW{if text(historyColumns,1)=="synced"{hasSynced=true};if text(historyColumns,1)=="id"{stableHistory=true}};sqlite3_finalize(historyColumns)
@@ -302,7 +307,8 @@ final class EventStore: @unchecked Sendable {
         if event.kind=="ring_history",let hex=event.payload["raw_hex"].string,let raw=Data(hex:hex){
             let ring=event.payload["logical_ring_id"].string ?? "unknown"
             let digest=Data(SHA256.hash(data:Data(ring.utf8)+raw))
-            let receipt=try statement("INSERT OR IGNORE INTO history_receipts VALUES(?)");defer{sqlite3_finalize(receipt)};bind(digest,receipt,1);try done(receipt)
+            try run("UPDATE retention_state SET value=value+1 WHERE name='receipt.sequence'")
+            let receipt=try statement("INSERT INTO history_receipts(digest,receipt_sequence) VALUES(?,(SELECT value FROM retention_state WHERE name='receipt.sequence')) ON CONFLICT(digest) DO UPDATE SET receipt_sequence=excluded.receipt_sequence");defer{sqlite3_finalize(receipt)};bind(digest,receipt,1);try done(receipt)
             let q=try statement("UPDATE history_records SET synced=1 WHERE digest=?");defer{sqlite3_finalize(q)};bind(digest.hex,q,1);try done(q)
         }else if event.kind=="recorded_cardio",let token=event.payload["token"].string,let revision=event.payload["revision"].number{
             let q=try statement("INSERT INTO recorded_receipts VALUES(?,?,?) ON CONFLICT(token) DO UPDATE SET revision=excluded.revision,final=excluded.final WHERE excluded.revision>=recorded_receipts.revision");defer{sqlite3_finalize(q)}
@@ -312,6 +318,7 @@ final class EventStore: @unchecked Sendable {
     private func pruneServerCopies()throws{
         // Keep the in-flight model window and its exact preceding time/reset
         // anchor. Everything else can be recovered from the authoritative server.
+        try run("DELETE FROM history_receipts WHERE digest IN (SELECT digest FROM history_receipts ORDER BY receipt_sequence DESC,digest LIMIT -1 OFFSET 8192)")
         let context=load(RecordedContext.self,key:"recorded.context"),latest=currentRecordedResult()
         let current=context?.token ?? ""
         let receipt=try statement("SELECT revision,final FROM recorded_receipts WHERE token=?");bind(current,receipt,1)
@@ -335,6 +342,7 @@ final class EventStore: @unchecked Sendable {
             result.points=[];let q=try statement("UPDATE recorded_segments SET body=? WHERE token=?");bind(try JSONEncoder().encode(result),q,1);bind(current,q,2);try done(q);sqlite3_finalize(q)
         }
         let q=try statement("DELETE FROM recorded_segments WHERE token!=? AND EXISTS(SELECT 1 FROM recorded_receipts r WHERE r.token=recorded_segments.token AND r.revision>=json_extract(CAST(body AS TEXT),'$.revision'))");bind(current,q,1);try done(q);sqlite3_finalize(q)
+        let receipts=try statement("DELETE FROM recorded_receipts WHERE token!=? AND NOT EXISTS(SELECT 1 FROM recorded_segments s WHERE s.token=recorded_receipts.token) AND NOT EXISTS(SELECT 1 FROM journal j JOIN outbox o USING(event_id) WHERE j.kind='recorded_cardio' AND json_extract(CAST(j.payload AS TEXT),'$.token')=recorded_receipts.token)");bind(current,receipts,1);try done(receipts);sqlite3_finalize(receipts)
         let sessions=try statement("SELECT id,body FROM sessions");var remove:[String]=[]
         while sqlite3_step(sessions)==SQLITE_ROW{
             let value=try JSONDecoder().decode(WorkoutSession.self,from:data(sessions,1))
