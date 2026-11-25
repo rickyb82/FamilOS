@@ -43,6 +43,7 @@ struct AppArchiveSnapshot:Sendable {
     @Published private(set) var changingWorkout=false
     #if DEBUG
     @Published var archiveTestStall=false
+    @Published var diagnosticTestStall=false
     #endif
     private var workoutRevision=0;private var persistedSettings:LocalSettings
     @Published var allowedActivities:[(Int,String)]=ActivityCatalog.defaults
@@ -55,9 +56,9 @@ struct AppArchiveSnapshot:Sendable {
     let store:EventStore;let api:WellnessAPI;let ring:RingBridge;let gym:GymDetection
     private var ticking:Task<Void,Never>?;private var refreshing=false
     private var refreshingArchive=false;private var archiveNeedsMetrics=false;private var lastArchiveRefresh=Date.distantPast
-    private let notificationDiagnosticsURL:URL
+    private let notificationDiagnostics:DiagnosticWriter
     init(store:EventStore,folder:URL,snapshot:AppArchiveSnapshot){
-        self.store=store;notificationDiagnosticsURL=folder.appendingPathComponent("notification-status.json")
+        self.store=store;notificationDiagnostics=DiagnosticWriter(url:folder.appendingPathComponent("notification-status.json"))
         settings=snapshot.settings;persistedSettings=snapshot.settings
         api=WellnessAPI(store:store,folder:folder.appendingPathComponent("uploads"))
         ring=RingBridge(store:store,diagnosticsURL:folder.appendingPathComponent("battery-status.json"));gym=GymDetection(store:store,state:snapshot.detection,coordinates:snapshot.coordinates)
@@ -148,9 +149,9 @@ struct AppArchiveSnapshot:Sendable {
         }
     }
     private func writeNotificationDiagnostic(_ status:String,permission:Int?=nil){
-        var value:[String:Any]=["at":Date().timeIntervalSince1970,"status":status,"full_alert_armed":batteryFullAlert.armed]
-        if let permission{value["authorization_status"]=permission}
-        if let data=try? JSONSerialization.data(withJSONObject:value){try? data.write(to:notificationDiagnosticsURL,options:[.atomic,.completeFileProtectionUntilFirstUserAuthentication])}
+        var value:[String:JSONValue]=["at":.number(Date().timeIntervalSince1970),"status":.string(status),"full_alert_armed":.bool(batteryFullAlert.armed)]
+        if let permission{value["authorization_status"] = .number(Double(permission))}
+        notificationDiagnostics.submit(.object(value))
     }
     var displayedBPM:Int?{heartBPM}
     var hasFreshBPM:Bool{ring.ready && heartDisplay.isFresh(at:now)}

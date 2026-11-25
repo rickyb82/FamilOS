@@ -3,6 +3,61 @@ import SQLite3
 @testable import HomePulse
 
 final class HomePulseTests:XCTestCase {
+    func testRejectedBluetoothAttemptsHaveBoundedBackoff(){
+        XCTAssertEqual((1...7).map{RingReconnectPolicy.delay(consecutiveFailures:$0)},[5,10,20,30,60,60,60])
+        XCTAssertEqual(RingReconnectPolicy.delay(consecutiveFailures:0),5)
+        XCTAssertEqual(RingReconnectPolicy.delay(consecutiveFailures:Int.max),60)
+    }
+    func testBlockedDiagnosticWriteDoesNotBlockMainAndCoalescesPendingSnapshots()async throws{
+        let entered=expectation(description:"diagnostic sink entered"),completed=expectation(description:"latest snapshot written")
+        let gate=DispatchSemaphore(value:0),captures=SnapshotWrites()
+        defer{gate.signal()}
+        let writer=DiagnosticWriter(url:URL(fileURLWithPath:"/synthetic-unused.json"),minimumInterval:0){data,_ in
+            XCTAssertFalse(Thread.isMainThread)
+            let value=try JSONDecoder().decode(JSONValue.self,from:data);captures.append(value)
+            if value["status"].string=="first"{entered.fulfill();XCTAssertEqual(gate.wait(timeout:.now()+5),.success)}
+            else{completed.fulfill()}
+        }
+        await MainActor.run{writer.submit(.object(["status":.string("first")]))}
+        await fulfillment(of:[entered],timeout:3)
+        let start=Date()
+        await MainActor.run{
+            writer.submit(.object(["status":.string("middle")]))
+            writer.submit(.object(["status":.string("latest")]))
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(start),0.5,"Main actor must not wait for the blocked file write")
+        gate.signal();await fulfillment(of:[completed],timeout:3)
+        XCTAssertEqual(captures.values.map{$0["status"].string},["first","latest"])
+    }
+    func testProtectedReplacementKeepsCompleteFileAndRejectsPendingSymlink()throws{
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true)
+        defer{try? FileManager.default.removeItem(at:folder)}
+        let file=folder.appendingPathComponent("snapshot.json"),pending=file.appendingPathExtension("pending"),other=folder.appendingPathComponent("other.json")
+        try ProtectedFileIO.replace(Data("first".utf8),at:file)
+        try ProtectedFileIO.replace(Data("complete replacement".utf8),at:file)
+        XCTAssertEqual(try Data(contentsOf:file),Data("complete replacement".utf8));XCTAssertFalse(FileManager.default.fileExists(atPath:pending.path))
+        let attrs=try FileManager.default.attributesOfItem(atPath:file.path)
+        XCTAssertEqual((attrs[.posixPermissions] as? NSNumber)?.intValue,0o600)
+        try ProtectedFileIO.replace(Data("untouched".utf8),at:other)
+        try FileManager.default.createSymbolicLink(at:pending,withDestinationURL:other)
+        XCTAssertThrowsError(try ProtectedFileIO.replace(Data("rejected".utf8),at:file))
+        XCTAssertEqual(try Data(contentsOf:other),Data("untouched".utf8));XCTAssertEqual(try Data(contentsOf:file),Data("complete replacement".utf8))
+    }
+    func testUnchangedKeyValueSnapshotDoesNotCommitAnotherDatabaseWrite()throws{
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer{try? FileManager.default.removeItem(at:folder)}
+        let url=folder.appendingPathComponent("snapshots.sqlite"),store=try EventStore(url:url)
+        try store.save(["b":2,"a":1],key:"technical-state")
+        var reader:OpaquePointer?;XCTAssertEqual(sqlite3_open(url.path,&reader),SQLITE_OK);defer{sqlite3_close(reader)}
+        func version()throws->Int32{
+            var statement:OpaquePointer?;XCTAssertEqual(sqlite3_prepare_v2(reader,"PRAGMA data_version",-1,&statement,nil),SQLITE_OK)
+            defer{sqlite3_finalize(statement)};XCTAssertEqual(sqlite3_step(statement),SQLITE_ROW);return sqlite3_column_int(statement,0)
+        }
+        let before=try version();try store.save(["a":1,"b":2],key:"technical-state");XCTAssertEqual(try version(),before)
+        try store.save(["a":3,"b":2],key:"technical-state");XCTAssertNotEqual(try version(),before)
+        XCTAssertEqual(store.load([String:Int].self,key:"technical-state"),["a":3,"b":2])
+    }
     func testSpO2AutomaticProtocolMatchesOriginalGen3AndKeepsRawResultSeparateFromMode()throws{
         XCTAssertEqual(OuraWire.spo2AutomaticParameters(capabilityVersion:1)?.hex,"2f0a29040164031e18000000")
         XCTAssertNil(OuraWire.spo2AutomaticParameters(capabilityVersion:3))
@@ -464,6 +519,11 @@ final class OuraBatteryProtocolTests:XCTestCase {
 }
 
 
+private final class SnapshotWrites:@unchecked Sendable {
+    private let lock=NSLock();private var snapshots:[JSONValue]=[]
+    func append(_ value:JSONValue){lock.lock();snapshots.append(value);lock.unlock()}
+    var values:[JSONValue]{lock.lock();defer{lock.unlock()};return snapshots}
+}
 private final class HomePulseHTTPFixture:URLProtocol {
     static var reply:((URLRequest)throws->Data)?
     override class func canInit(with request:URLRequest)->Bool {request.url?.host == "synthetic.example"}

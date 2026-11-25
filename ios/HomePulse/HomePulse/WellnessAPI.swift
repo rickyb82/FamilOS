@@ -99,7 +99,7 @@ final class WellnessAPI:NSObject,URLSessionDataDelegate,URLSessionTaskDelegate,@
                 guard let batch=try self.store.prepareBatch(limit:self.batchLimit) else {self.status("Sincronizzato");return}
                 try FileManager.default.createDirectory(at:self.folder,withIntermediateDirectories:true)
                 let file=self.folder.appendingPathComponent(batch.batch_id+".json")
-                try JSONEncoder().encode(batch).write(to:file,options:[.atomic,.completeFileProtectionUntilFirstUserAuthentication])
+                try ProtectedFileIO.replace(JSONEncoder().encode(batch),at:file)
                 let task=self.background.uploadTask(with:try self.eventRequest(credentials),fromFile:file)
                 task.taskDescription=batch.batch_id;task.resume();self.status("Invio di \(batch.events.count) eventi")
             } catch {self.status("Offline: eventi conservati sul telefono")}
@@ -163,7 +163,7 @@ final class WellnessAPI:NSObject,URLSessionDataDelegate,URLSessionTaskDelegate,@
             if let prepare{value["preparation_ms"]=prepare}
             if let request{value["request_ms"]=request}
             if let ack{value["acknowledgement_ms"]=ack}
-            if let data=try? JSONSerialization.data(withJSONObject:value){try? data.write(to:path,options:[.atomic,.completeFileProtectionUntilFirstUserAuthentication])}
+            if let data=try? JSONSerialization.data(withJSONObject:value){try? ProtectedFileIO.replace(data,at:path)}
         }
     }
     private func finishPreparation(){mutex.lock();preparing=false;mutex.unlock()}

@@ -23,7 +23,7 @@ struct AutoDetectionSettings:Codable,Equatable,Sendable {
     }
 }
 struct TimedBPM:Codable,Equatable,Sendable {var at:Date;var bpm:Int}
-struct DetectionState:Codable,Sendable {
+struct DetectionState:Codable,Equatable,Sendable {
     var inside=false;var entry:Date?;var baseline:Double?;var baselineSamples:[TimedBPM]=[]
     var riseStart:Date?;var riseSamples=0;var lastGood:Date?;var cooldownUntil:Date?
     var candidateSessionID:UUID?;var candidateAt:Date?
@@ -110,8 +110,9 @@ struct GymDetectionEngine {
     }
     var recent:[TimedBPM]=[]
     func accept(_ reading:Reading,manualWorkout:Bool){recent.append(TimedBPM(at:reading.date,bpm:reading.bpm));recent=recent.filter{reading.date.timeIntervalSince($0.at)<=120}
+        let previous=engine.state
         let id=engine.ingest(TimedBPM(at:reading.date,bpm:reading.bpm),now:Date(),manualWorkout:manualWorkout)
-        let state=engine.state
+        let state=engine.state;guard state != previous else{return}
         store.enqueue({[weak self] in try $0.save(state,key:"gymDetection")
             if let id{Task{@MainActor [weak self] in guard let self,self.engine.state.candidateSessionID==id else{return};self.onCandidate?(id,state.candidateAt ?? reading.date);self.notify(id)}}
         },onError:{[weak self] _ in Task{@MainActor in self?.status="Rilevamento sospeso: stato locale non salvato"}})

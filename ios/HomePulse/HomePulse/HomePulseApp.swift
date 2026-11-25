@@ -30,6 +30,15 @@ import UIKit
                     Task{@MainActor in model.archiveTestStall=false}
                 }
             }
+            if arguments.contains("--uitest-isolated-store"),arguments.contains("--uitest-diagnostic-stall"){
+                let writer=DiagnosticWriter(url:archive.1.appendingPathComponent("synthetic-diagnostic.json"),minimumInterval:0){data,url in
+                    Task{@MainActor in model.diagnosticTestStall=true}
+                    defer{Task{@MainActor in model.diagnosticTestStall=false}}
+                    Thread.sleep(forTimeInterval:15)
+                    try ProtectedFileIO.replace(data,at:url)
+                }
+                writer.submit(.object(["fixture":.bool(true)]))
+            }
             #endif
             return model
         }

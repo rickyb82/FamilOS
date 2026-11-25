@@ -107,3 +107,12 @@ Per il Gen3 con capability4 versione1/2, il ponte verifica la modalità SpO₂ e
 Il ciclo è una richiesta al firmware. Il software non crea percentuali a ogni minuto e non interpreta la modalità AUTOMATIC o l’ACK come prova di una nuova misura valida. I valori mostrati provengono dai record realmente elaborati, con data/ora di acquisizione. La coesistenza con HRlive e la disponibilità di misure diurne richiedono osservazione sul dispositivo.
 
 I contatori degli invii sono osservati solo dalle viste di sincronizzazione, senza invalidare l’intera schermata a ogni conferma. Il timer usa TimelineView nella sola scheda Allenamento; il grafico locale rappresenta fino a150 punti reali preservando estremi, orari e identità. Tutti i campioni restano archiviati. I callback UIKit e il ripristino Bluetooth inizializzano il ponte anche senza una scena visibile. La distribuzione personale usa la configurazione Release ottimizzata.
+
+
+## Protezione dai blocchi su diagnostica e riconnessione
+
+Le fotografie tecniche di batteria/notifiche usano una coda dedicata: attese su file e codifica non vengono eseguite dall’attore UI. Le richieste ravvicinate si accorpano nell’ultimo stato e le scritture sono distanziate di almeno5secondi. I file derivati sono sostituiti tramite un file temporaneo nella stessa directory, permessi0600, protezione dopo il primo sblocco e renamePOSIX; non si usa la ricerca Foundation della directory di sostituzione. Il journal sensori durevole resta il riferimento per i file di upload ricostruibili.
+
+Il test UI blocca intenzionalmente per15secondi una scrittura diagnostica in un archivio isolato, passa alla Home dell’iPhone, riattiva l’app e verifica la navigazione prima che la scrittura termini. Il salvataggio di uno stato chiave/valore invariato non modifica nuovamente SQLite; il rilevamento palestra non salva lo stato quando il motore non lo modifica.
+
+I callback di connessione rifiutata non rilanciano subito un’altra richiesta: i tentativi hanno attese5/10/20/30/60secondi e si annullano con Scollega. I controlli di carica pianificati mantengono il collegamento ritardato gestito dal sistema. Una connessione già pendente non viene duplicata e una disconnessione in corso deve terminare prima del tentativo seguente.

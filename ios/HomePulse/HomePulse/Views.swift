@@ -14,7 +14,10 @@ struct RootView:View {
             SettingsView().tabItem{Label("Impostazioni",systemImage:"slider.horizontal.3")}
         }.tint(.teal).preferredColorScheme(.dark)
         #if DEBUG
-        .overlay(alignment:.top){if model.archiveTestStall{Text("Archivio di prova occupato").font(.caption2).allowsHitTesting(false).accessibilityIdentifier("archive-stall-active")}}
+        .overlay(alignment:.top){VStack{
+            if model.archiveTestStall{Text("Archivio di prova occupato").font(.caption2).accessibilityIdentifier("archive-stall-active")}
+            if model.diagnosticTestStall{Text("Scrittura diagnostica di prova occupata").font(.caption2).accessibilityIdentifier("diagnostic-stall-active")}
+        }.allowsHitTesting(false)}
         #endif
         .onOpenURL{url in Task{await model.openPairingURL(url)}}
         .task{model.ring.setForeground(scene == .active);model.api.setForeground(scene == .active);await model.refresh();await model.requestBatteryNotifications()}
@@ -83,7 +86,7 @@ struct RingSettingsControls:View{
         Button("Controlla SpO₂ automatica"){Task{await ring.refreshSpO2()}}.disabled(!ring.ready || ring.busy)
         if let error=ring.lastConnectionError{Text(error+" Ritento automaticamente; puoi premere Scollega per fermare i tentativi.").font(.caption).foregroundStyle(.orange)}
         ForEach(model.warnings,id:\.self){Text($0).font(.caption).foregroundStyle(.orange)}
-        HStack{Button("Cerca anello"){ring.scan()}.buttonStyle(.borderedProminent);if ring.connected || ring.status == "Connessione…"{Button("Scollega"){ring.disconnect()}.buttonStyle(.bordered)}}
+        HStack{Button("Cerca anello"){ring.scan()}.buttonStyle(.borderedProminent);if ring.connected || ring.hasPendingConnection{Button("Scollega"){ring.disconnect()}.buttonStyle(.bordered)}}
         ForEach(ring.devices,id:\.identifier){device in Button(device.name ?? "Anello Oura"){ring.connect(device)}.buttonStyle(.bordered)}
         if ring.ready{Button("Scarica storico"){Task{await ring.downloadHistory()}}.disabled(ring.busy)}
         DisclosureGroup("Qualità e origine"){

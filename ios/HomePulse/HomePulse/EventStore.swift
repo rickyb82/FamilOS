@@ -67,8 +67,8 @@ final class EventStore: @unchecked Sendable {
         let q=try statement("INSERT INTO outbox(event_id,journal_sequence) VALUES(?,?)");defer{sqlite3_finalize(q)};bind(id,q,1);sqlite3_bind_int64(q,2,seq);try done(q)
         return StoredEvent(event_id:id,sequence:seq,captured_at:at.timeIntervalSince1970,kind:kind,payload:payload)
     }
-    func save<T:Encodable>(_ value:T,key:String) throws {try guarded{try put(try JSONEncoder().encode(value),key:key)}}
-    private func put(_ data:Data,key:String) throws {let s=try statement("INSERT OR REPLACE INTO kv(key,value) VALUES(?,?)");defer{sqlite3_finalize(s)};bind(key,s,1);bind(data,s,2);try done(s)}
+    func save<T:Encodable>(_ value:T,key:String) throws {let encoder=JSONEncoder();encoder.outputFormatting = .sortedKeys;let body=try encoder.encode(value);try guarded{try put(body,key:key)}}
+    private func put(_ data:Data,key:String) throws {let s=try statement("INSERT INTO kv(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE kv.value != excluded.value");defer{sqlite3_finalize(s)};bind(key,s,1);bind(data,s,2);try done(s)}
     func load<T:Decodable>(_ type:T.Type,key:String)->T? {guarded{do{let s=try statement("SELECT value FROM kv WHERE key=?");defer{sqlite3_finalize(s)};bind(key,s,1);guard sqlite3_step(s)==SQLITE_ROW else{return nil};return try JSONDecoder().decode(type,from:data(s,0))}catch{return nil}}}
     func workout(_ session:WorkoutSession,payload:JSONValue,active:Bool=true) throws {
         try guarded {try transaction {

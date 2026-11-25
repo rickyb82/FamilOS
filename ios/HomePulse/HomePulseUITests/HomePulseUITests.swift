@@ -1,6 +1,19 @@
 import XCTest
 
 final class HomePulseUITests:XCTestCase {
+    func testReopeningRemainsResponsiveWhileDiagnosticWriteIsBlocked(){
+        continueAfterFailure=false
+        let app=XCUIApplication();app.launchArguments=["--uitest-isolated-store","--uitest-diagnostic-stall"];app.launch()
+        XCTAssertTrue(app.staticTexts["diagnostic-stall-active"].waitForExistence(timeout:15))
+        let start=Date()
+        XCUIDevice.shared.press(.home);app.activate()
+        XCTAssertTrue(app.navigationBars["Home Pulse"].waitForExistence(timeout:3))
+        app.tabBars.buttons["Impostazioni"].tap();XCTAssertTrue(app.navigationBars["Impostazioni"].waitForExistence(timeout:2))
+        app.tabBars.buttons["Home"].tap();XCTAssertTrue(app.navigationBars["Home Pulse"].waitForExistence(timeout:2))
+        XCTAssertLessThan(Date().timeIntervalSince(start),12)
+        XCTAssertTrue(app.staticTexts["diagnostic-stall-active"].exists)
+        capture(app,"responsive-during-diagnostic-file-stall")
+    }
     func testNavigationRemainsResponsiveWhileArchiveIsLocked(){
         continueAfterFailure=false
         let app=XCUIApplication();app.launchArguments=["--uitest-isolated-store","--uitest-storage-stall"];app.launch()

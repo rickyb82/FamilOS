@@ -1,4 +1,60 @@
 import Foundation
+import Darwin
+
+enum ProtectedFileIO {
+    /// Derived upload files and technical snapshots can be rebuilt. Replace
+    /// them atomically in their own directory, without Foundation's replacement
+    /// directory search. The durable sensor journal remains separate.
+    static func replace(_ data:Data,at url:URL)throws{
+        let pending=url.appendingPathExtension("pending")
+        let descriptor=pending.withUnsafeFileSystemRepresentation{path in
+            path.map{Darwin.open($0,O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC|O_NOFOLLOW,0o600)} ?? -1
+        }
+        guard descriptor>=0 else{throw CocoaError(.fileWriteUnknown)}
+        var renamed=false
+        defer{Darwin.close(descriptor);if !renamed{_ = pending.withUnsafeFileSystemRepresentation{path in path.map{Darwin.unlink($0)} ?? -1}}}
+        try data.withUnsafeBytes{bytes in
+            var offset=0
+            while offset<bytes.count{
+                let count=Darwin.write(descriptor,bytes.baseAddress!.advanced(by:offset),bytes.count-offset)
+                if count<0 && errno==EINTR{continue}
+                guard count>0 else{throw CocoaError(.fileWriteUnknown)};offset+=count
+            }
+        }
+        try FileManager.default.setAttributes([.protectionKey:FileProtectionType.completeUntilFirstUserAuthentication],ofItemAtPath:pending.path)
+        let result=pending.withUnsafeFileSystemRepresentation{source in url.withUnsafeFileSystemRepresentation{destination in
+            guard let source,let destination else{return Int32(-1)}
+            return Darwin.rename(source,destination)
+        }}
+        guard result==0 else{throw CocoaError(.fileWriteUnknown)};renamed=true
+    }
+}
+
+/// Best-effort technical snapshots must never wait for storage on the UI actor.
+/// While a write is pending, retain only the most recent snapshot.
+final class DiagnosticWriter:@unchecked Sendable {
+    private let url:URL;private let minimumInterval:TimeInterval
+    private let queue=DispatchQueue(label:"HomePulse.diagnostic-writer",qos:.utility)
+    private let lock=NSLock();private var pending:JSONValue?;private var scheduled=false;private var nextWriteAt=0.0
+    private let writeFile:@Sendable(Data,URL)throws->Void
+    init(url:URL,minimumInterval:TimeInterval=5,writeFile:(@Sendable(Data,URL)throws->Void)?=nil){
+        self.url=url;self.minimumInterval=minimumInterval
+        self.writeFile=writeFile ?? {data,url in try ProtectedFileIO.replace(data,at:url)}
+    }
+    func submit(_ value:JSONValue){
+        lock.lock();pending=value
+        guard !scheduled else{lock.unlock();return}
+        scheduled=true;let delay=max(0,nextWriteAt-ProcessInfo.processInfo.systemUptime);lock.unlock()
+        queue.asyncAfter(deadline:.now()+delay){self.flush()}
+    }
+    private func flush(){
+        lock.lock();let value=pending;pending=nil;lock.unlock()
+        if let value,let data=try? JSONEncoder().encode(value){try? writeFile(data,url)}
+        lock.lock();nextWriteAt=ProcessInfo.processInfo.systemUptime+minimumInterval
+        let again=pending != nil;if !again{scheduled=false};lock.unlock()
+        if again{queue.asyncAfter(deadline:.now()+minimumInterval){self.flush()}}
+    }
+}
 
 // Il contratto conserva anche campi server nuovi senza perdere i pacchetti originali.
 enum JSONValue: Codable, Equatable, Sendable {
@@ -181,6 +237,11 @@ enum ChargeCheckPolicy {
     static func delay(foreground:Bool,desired:Bool,ready:Bool,busy:Bool,progress:Int?)->TimeInterval?{
         guard !foreground,desired,ready,!busy,RingChargeState(progress:progress)?.isCharging == true else{return nil}
         return 60
+    }
+}
+enum RingReconnectPolicy {
+    static func delay(consecutiveFailures:Int)->TimeInterval{
+        [5.0,10,20,30,60][max(1,min(5,consecutiveFailures))-1]
     }
 }
 struct RingBatterySnapshot:Codable, Sendable {var level:Int;var at:Date;var chargingProgressRaw:Int?=nil}
