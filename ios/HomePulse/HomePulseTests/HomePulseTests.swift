@@ -3,6 +3,27 @@ import SQLite3
 @testable import HomePulse
 
 final class HomePulseTests:XCTestCase {
+    func testSpO2AutomaticProtocolMatchesOriginalGen3AndKeepsRawResultSeparateFromMode()throws{
+        XCTAssertEqual(OuraWire.spo2AutomaticParameters(capabilityVersion:1)?.hex,"2f0a29040164031e18000000")
+        XCTAssertNil(OuraWire.spo2AutomaticParameters(capabilityVersion:3))
+        let automatic=try OuraWire.featureStatus(Data(hex:"2f06210401000200")!,feature:4)
+        XCTAssertEqual(automatic.mode,1);XCTAssertEqual(automatic.state,2);XCTAssertEqual(automatic.result,0)
+        let resultLowBattery=try OuraWire.featureStatus(Data(hex:"2f06210401000005")!,feature:4)
+        XCTAssertEqual(resultLowBattery.mode,1);XCTAssertEqual(resultLowBattery.result,5)
+        XCTAssertNoThrow(try OuraWire.ack(Data(hex:"2f032a0400")!,extended:0x2a,feature:4))
+        XCTAssertThrowsError(try OuraWire.ack(Data(hex:"2f032a0401")!,extended:0x2a,feature:4))
+        XCTAssertThrowsError(try OuraWire.featureStatus(Data(hex:"2f06210301000200")!,feature:4))
+        XCTAssertThrowsError(try OuraWire.featureStatus(Data(hex:"2f052104010002")!,feature:4))
+    }
+    func testDisplayReadingsBoundChartWorkWithoutInventingOrLosingExtrema(){
+        var source=(0..<5000).map{Reading(date:Date(timeIntervalSince1970:Double($0)),bpm:80)}
+        source[1234].bpm=240;source[3456].bpm=40
+        let shown=AppModel.displayReadings(source),ids=Set(source.map{$0.id})
+        XCTAssertLessThanOrEqual(shown.count,150);XCTAssertTrue(shown.allSatisfy{ids.contains($0.id)})
+        XCTAssertEqual(shown.first?.id,source.first?.id);XCTAssertEqual(shown.last?.id,source.last?.id)
+        XCTAssertEqual(shown.map{$0.bpm}.max(),240);XCTAssertEqual(shown.map{$0.bpm}.min(),40)
+        XCTAssertEqual(source.count,5000)
+    }
     func testLegacyOutboxMigrationKeepsUnacknowledgedBatchAndFIFO()throws{
         let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer{try? FileManager.default.removeItem(at:folder)}
@@ -50,7 +71,7 @@ final class HomePulseTests:XCTestCase {
         let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer{try? FileManager.default.removeItem(at:folder)}
         let store=try EventStore(url:folder.appendingPathComponent("wifi.sqlite"))
-        try store.ingestPackets(Array(repeating:Data(hex:"0d03320000")!,count:1001),api:[2,0,0],ring:nil,at:Date())
+        try store.ingestPackets(Array(repeating:Data(hex:"0d03320000")!,count:2001),api:[2,0,0],ring:nil,at:Date())
         let done=expectation(description:"all Wi-Fi ACKs");done.expectedFulfillmentCount=3
         let config=URLSessionConfiguration.ephemeral;config.protocolClasses=[HomePulseHTTPFixture.self]
         let session=URLSession(configuration:config);defer{session.invalidateAndCancel();HomePulseHTTPFixture.reply=nil}
@@ -67,7 +88,7 @@ final class HomePulseTests:XCTestCase {
         api.onAcknowledged={done.fulfill()};api.setForeground(true)
         await fulfillment(of:[done],timeout:5)
         await api.stopForTesting()
-        XCTAssertEqual(counts,[500,500,1]);XCTAssertEqual(seen.count,1001);XCTAssertEqual(store.pendingCount,0);XCTAssertEqual(store.journalCount,1001)
+        XCTAssertEqual(counts,[1000,1000,1]);XCTAssertEqual(seen.count,2001);XCTAssertEqual(store.pendingCount,0);XCTAssertEqual(store.journalCount,2001)
     }
     func testSleepPreservesNativeSummaryAndPartialRelativeSequence(){
         let period=SleepPeriod(.object(["id":.string("synthetic-sleep"),"started_at":.number(1000),"ended_at":.number(4600),"time_in_bed_seconds":.number(3600),"total_sleep_seconds":.number(3000),"stage_seconds":.object(["deep":.number(600)]),"phases_30_seconds":.string("11234")]))

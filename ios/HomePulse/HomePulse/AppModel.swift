@@ -18,19 +18,28 @@ struct AppArchiveSnapshot:Sendable {
     }
 }
 
+@MainActor final class TransferProgress:ObservableObject {
+    @Published var pending=0;@Published var journalCount=0;@Published var status="Invio in attesa"
+}
 @MainActor final class AppModel:ObservableObject {
     @Published var settings:LocalSettings
     @Published var current:WorkoutSession?
     @Published var sessions:[WorkoutSession]=[];@Published var readings:[Reading]=[]
-    @Published var now=Date();@Published var heartDisplay=HeartDisplayState()
+    var now:Date{Date()};var heartDisplay=HeartDisplayState()
+    @Published private var heartBPM:Int?
+    private var readingBuffer:[Reading]=[];private var lastChartUpdate=Date.distantPast
     var bpm:Int?{heartDisplay.bpm};var sampleAt:Date?{heartDisplay.capturedAt}
     @Published var warnings:[String]=[];@Published var temperatureRaw:Int?
     @Published var metrics=HistoricalMetrics();@Published var serverData:JSONValue = .null
     @Published var analysisData:JSONValue = .null
     @Published private var chartCache:[String:[ChartPoint]]=[:];private var chartRevision=0
     @Published var sleepData:JSONValue = .null;@Published var sleepStatus="";@Published var refreshingSleep=false
-    @Published var uploadStatus="Invio in attesa";@Published var syncStatus="Offline pronto";@Published var message:String?
-    @Published var ownerName:String?;@Published var enrolled=false;@Published var pending=0;@Published var journalCount=0
+    let transfer=TransferProgress()
+    var uploadStatus:String{get{transfer.status}set{if transfer.status != newValue{transfer.status=newValue}}}
+    var pending:Int{get{transfer.pending}set{if transfer.pending != newValue{transfer.pending=newValue}}}
+    var journalCount:Int{get{transfer.journalCount}set{if transfer.journalCount != newValue{transfer.journalCount=newValue}}}
+    @Published var syncStatus="Offline pronto";@Published var message:String?
+    @Published var ownerName:String?;@Published var enrolled=false
     @Published private(set) var changingWorkout=false
     #if DEBUG
     @Published var archiveTestStall=false
@@ -53,7 +62,7 @@ struct AppArchiveSnapshot:Sendable {
         api=WellnessAPI(store:store,folder:folder.appendingPathComponent("uploads"))
         ring=RingBridge(store:store,diagnosticsURL:folder.appendingPathComponent("battery-status.json"));gym=GymDetection(store:store,state:snapshot.detection,coordinates:snapshot.coordinates)
         enrolled=SecureStore.credentials() != nil
-        current=snapshot.current;sessions=snapshot.sessions;readings=snapshot.readings;metrics=snapshot.metrics
+        current=snapshot.current;sessions=snapshot.sessions;readingBuffer=snapshot.readings;readings=Self.displayReadings(snapshot.readings);metrics=snapshot.metrics
         serverData=snapshot.bootstrap;analysisData=snapshot.analysis;sleepData=snapshot.sleep;ownerName=snapshot.owner
         refreshChartCache()
         if let logical=snapshot.logicalRing{ring.configure(logicalRing:logical)}
@@ -73,7 +82,7 @@ struct AppArchiveSnapshot:Sendable {
         Task{await refreshBatteryNotificationStatus()}
         pending=snapshot.pending;journalCount=snapshot.journalCount
         if current==nil,let id=gym.engine.state.candidateSessionID,let date=gym.engine.state.candidateAt{startWorkout(auto:true,id:id,at:date)}
-        ticking=Task{[weak self] in var ticks=0;while !Task.isCancelled{try? await Task.sleep(nanoseconds:1_000_000_000);guard let self else{return};now=Date();ring.maintenance();refreshArchiveStatus();ticks+=1;if ticks%30==0{await refresh()}}}
+        ticking=Task{[weak self] in var ticks=0;while !Task.isCancelled{try? await Task.sleep(nanoseconds:1_000_000_000);guard let self else{return};ring.maintenance();refreshArchiveStatus();ticks+=1;if ticks%30==0{await refresh()}}}
     }
     private func refreshArchiveStatus(){
         guard !refreshingArchive,Date().timeIntervalSince(lastArchiveRefresh)>=1 else{return}
@@ -143,21 +152,25 @@ struct AppArchiveSnapshot:Sendable {
         if let permission{value["authorization_status"]=permission}
         if let data=try? JSONSerialization.data(withJSONObject:value){try? data.write(to:notificationDiagnosticsURL,options:[.atomic,.completeFileProtectionUntilFirstUserAuthentication])}
     }
-    var displayedBPM:Int?{heartDisplay.bpm}
+    var displayedBPM:Int?{heartBPM}
     var hasFreshBPM:Bool{ring.ready && heartDisplay.isFresh(at:now)}
     var heartSampleAge:Int?{heartDisplay.ageSeconds(at:now)}
-    private func receive(_ value:OuraLive,at date:Date){now=date;warnings=value.warnings;temperatureRaw=value.temperatureRaw
+    private func receive(_ value:OuraLive,at date:Date){
+        if warnings != value.warnings{warnings=value.warnings};if temperatureRaw != value.temperatureRaw{temperatureRaw=value.temperatureRaw}
         guard heartDisplay.receive(value,at:date),let hr=heartDisplay.bpm else{
             if let hr=value.bpm,!OuraWire.displaySupported(hr){warnings.append("Battito fuori intervallo di visualizzazione: pacchetto conservato")}
             return
         }
         let point=Reading(date:date,bpm:hr)
+        if heartBPM != hr{heartBPM=hr}
         // The original packet is already durable before this callback. Derived
         // readings and location state are archived without blocking the UI.
         store.enqueue({try $0.addReading(point)},onError:{[weak self] _ in Task{@MainActor in self?.message="Lettura non salvata; controlla lo spazio disponibile"}})
-        readings.append(point);if readings.count>1000{readings.removeFirst(readings.count-1000)}
+        readingBuffer.append(point);if readingBuffer.count>1000{readingBuffer.removeFirst(readingBuffer.count-1000)}
+        if Date().timeIntervalSince(lastChartUpdate)>=2{lastChartUpdate=Date();readings=Self.displayReadings(readingBuffer)}
         gym.accept(point,manualWorkout:current != nil)
     }
+    nonisolated static func displayReadings(_ source:[Reading])->[Reading]{ChartSeries.indices(values:source.map{Double($0.bpm)},limit:150).map{source[$0]}}
     func recordPayload(_ session:WorkoutSession,action:String)->JSONValue {
         var value:[String:JSONValue]=["action":.string(action),"session_id":.string(session.remoteID ?? session.id.uuidString),"activity_name":.string(session.activityName),"active_seconds":.number(session.elapsed()),"auto_detected":.bool(session.auto_detected),"provisional":.bool(session.provisional),"source":.string(session.source)]
         value["config_snapshot"]=(try? JSONValue.encoded(session.config)) ?? .null
@@ -323,17 +336,20 @@ enum ChartSeries {
     // Presentation only: retain real extrema and timestamps, with the full
     // original analysis stored separately for statistics and offline use.
     static func bound(_ points:[ChartPoint],limit:Int=300)->[ChartPoint]{
-        guard points.count>limit,limit>=4 else{return points}
-        let buckets=(limit-2)/2,width=Double(points.count-2)/Double(buckets)
-        var indices=Set([0,points.count-1])
+        indices(values:points.map{$0.value},limit:limit).map{points[$0]}
+    }
+    static func indices(values:[Double],limit:Int)->[Int]{
+        guard values.count>limit,limit>=4 else{return Array(values.indices)}
+        let buckets=(limit-2)/2,width=Double(values.count-2)/Double(buckets)
+        var indices=Set([0,values.count-1])
         for bucket in 0..<buckets{
-            let first=1+Int(Double(bucket)*width),end=min(points.count-1,1+Int(Double(bucket+1)*width))
+            let first=1+Int(Double(bucket)*width),end=min(values.count-1,1+Int(Double(bucket+1)*width))
             guard first<end else{continue}
             let range=first..<end
-            if let low=range.min(by:{points[$0].value<points[$1].value}){indices.insert(low)}
-            if let high=range.max(by:{points[$0].value<points[$1].value}){indices.insert(high)}
+            if let low=range.min(by:{values[$0]<values[$1]}){indices.insert(low)}
+            if let high=range.max(by:{values[$0]<values[$1]}){indices.insert(high)}
         }
-        return indices.sorted().map{points[$0]}
+        return indices.sorted()
     }
 }
 extension String {var nilIfEmpty:String?{trimmingCharacters(in:.whitespacesAndNewlines).isEmpty ? nil:self}}

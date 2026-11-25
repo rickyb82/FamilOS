@@ -160,6 +160,7 @@ class HomePulseStore:
             CREATE TABLE IF NOT EXISTS ring_bindings(owner_id TEXT PRIMARY KEY,logical_ring_id TEXT NOT NULL,encrypted_key TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY,owner_id TEXT NOT NULL,device_id TEXT NOT NULL,event_id TEXT NOT NULL,sequence INTEGER NOT NULL,captured_at REAL NOT NULL,received_at REAL NOT NULL,kind TEXT NOT NULL,payload TEXT NOT NULL,digest TEXT NOT NULL,decode_error TEXT,UNIQUE(device_id,event_id));
             CREATE INDEX IF NOT EXISTS events_owner_time ON events(owner_id,captured_at,id);
+            CREATE INDEX IF NOT EXISTS events_owner_decode ON events(owner_id,decode_error);
             CREATE TABLE IF NOT EXISTS history(id INTEGER PRIMARY KEY,owner_id TEXT NOT NULL,ring_id TEXT NOT NULL,raw_hex TEXT NOT NULL,digest TEXT NOT NULL,tag INTEGER NOT NULL,cursor INTEGER,received_at REAL NOT NULL,UNIQUE(owner_id,ring_id,digest));
             CREATE INDEX IF NOT EXISTS history_owner_cursor ON history(owner_id,ring_id,cursor,id);
             CREATE TABLE IF NOT EXISTS points(id INTEGER PRIMARY KEY,owner_id TEXT NOT NULL,kind TEXT NOT NULL,t REAL NOT NULL,value REAL NOT NULL,source TEXT NOT NULL,quality REAL,metadata TEXT NOT NULL,identity TEXT NOT NULL,UNIQUE(owner_id,kind,identity));

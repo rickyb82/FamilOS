@@ -95,7 +95,7 @@ final class EventStore: @unchecked Sendable {
     func prepareBatch(limit:Int=100,prioritizeLive:Bool=false) throws->EventBatch? {try guarded{try transaction{
         let old=try statement("SELECT body FROM batches ORDER BY rowid LIMIT 1");defer{sqlite3_finalize(old)}
         if sqlite3_step(old)==SQLITE_ROW{return try JSONDecoder().decode(EventBatch.self,from:data(old,0))}
-        let bound=max(1,min(500,limit));var ids:[String]=[];var seen=Set<String>()
+        let bound=max(1,min(1000,limit));var ids:[String]=[];var seen=Set<String>()
         func selectIDs(_ sql:String,after:Double?=nil)throws{
             guard ids.count<bound else{return}
             let s=try statement(sql);defer{sqlite3_finalize(s)}
@@ -120,7 +120,8 @@ final class EventStore: @unchecked Sendable {
         }
         guard !events.isEmpty else{return nil};let batch=EventBatch(batch_id:UUID().uuidString,events:events)
         let b=try statement("INSERT INTO batches(batch_id,body) VALUES(?,?)");defer{sqlite3_finalize(b)};bind(batch.batch_id,b,1);bind(try JSONEncoder().encode(batch),b,2);try done(b)
-        for e in events {let q=try statement("UPDATE outbox SET batch_id=? WHERE event_id=?");bind(batch.batch_id,q,1);bind(e.event_id,q,2);try done(q);sqlite3_finalize(q)}
+        let claim=try statement("UPDATE outbox SET batch_id=? WHERE event_id=?");defer{sqlite3_finalize(claim)}
+        for event in events{sqlite3_reset(claim);sqlite3_clear_bindings(claim);bind(batch.batch_id,claim,1);bind(event.event_id,claim,2);try done(claim)}
         return batch
     }}}
     @discardableResult func acknowledge(batchID:String,accepted:[String]) throws->Bool {try guarded{try transaction{
@@ -128,7 +129,8 @@ final class EventStore: @unchecked Sendable {
         guard sqlite3_step(s)==SQLITE_ROW else{return true}
         let batch=try JSONDecoder().decode(EventBatch.self,from:data(s,0));let expected=Set(batch.events.map{$0.event_id})
         guard Set(accepted).isSubset(of:expected) else {throw AppError.message("Conferma server incoerente: dati locali conservati")}
-        for id in Set(accepted) {let q=try statement("DELETE FROM outbox WHERE event_id=? AND batch_id=?");bind(id,q,1);bind(batchID,q,2);try done(q);sqlite3_finalize(q)}
+        let acknowledge=try statement("DELETE FROM outbox WHERE event_id=? AND batch_id=?");defer{sqlite3_finalize(acknowledge)}
+        for id in Set(accepted){sqlite3_reset(acknowledge);sqlite3_clear_bindings(acknowledge);bind(id,acknowledge,1);bind(batchID,acknowledge,2);try done(acknowledge)}
         let q=try statement("UPDATE outbox SET batch_id=NULL WHERE batch_id=?");defer{sqlite3_finalize(q)};bind(batchID,q,1);try done(q)
         let b=try statement("DELETE FROM batches WHERE batch_id=?");defer{sqlite3_finalize(b)};bind(batchID,b,1);try done(b)
         return expected.isSubset(of:Set(accepted))

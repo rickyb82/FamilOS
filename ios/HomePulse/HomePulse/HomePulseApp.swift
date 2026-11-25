@@ -18,6 +18,8 @@ import UIKit
                 return (store,folder,AppArchiveSnapshot.load(store))
             }.value
             let model=AppModel(store:archive.0,folder:archive.1,snapshot:archive.2)
+            let active=UIApplication.shared.applicationState == .active
+            model.ring.setForeground(active);model.api.setForeground(active)
             #if DEBUG
             let arguments=ProcessInfo.processInfo.arguments
             if arguments.contains("--uitest-isolated-store"),arguments.contains("--uitest-storage-stall"){
@@ -39,6 +41,16 @@ import UIKit
     init(){Task{do{model=try await AppRuntime.load()}catch{self.error="Archivio locale non disponibile. Libera spazio e riapri l’app; la raccolta non è stata avviata."}}}
 }
 final class AppDelegate:NSObject,UIApplicationDelegate {
+    func application(_ application:UIApplication,didFinishLaunchingWithOptions launchOptions:[UIApplication.LaunchOptionsKey:Any]?=nil)->Bool{
+        if launchOptions?[.bluetoothCentrals] != nil{updateActivity(false)}
+        return true
+    }
+    func applicationDidEnterBackground(_ application:UIApplication){updateActivity(false)}
+    func applicationDidBecomeActive(_ application:UIApplication){updateActivity(true)}
+    private func updateActivity(_ active:Bool){Task{@MainActor in
+        guard let model=try? await AppRuntime.load() else{return}
+        model.ring.setForeground(active);model.api.setForeground(active)
+    }}
     func application(_ application:UIApplication,handleEventsForBackgroundURLSession identifier:String,completionHandler:@escaping()->Void){
         guard identifier=="com.familos.homepulse.uploads" else{completionHandler();return}
         Task{@MainActor in do{let model=try await AppRuntime.load();model.api.attachBackgroundCompletion(completionHandler)}catch{completionHandler()}}

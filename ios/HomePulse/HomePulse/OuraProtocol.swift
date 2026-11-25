@@ -29,6 +29,7 @@ struct OuraBattery:Equatable {
     var chargingRecommendationRaw:Int
     var isCharging:Bool?{RingChargeState(progress:chargingProgressRaw)?.isCharging}
 }
+struct OuraFeatureStatus:Equatable,Sendable{var mode:Int;var flags:Int;var state:Int;var result:Int}
 enum OuraWire {
     static let service="98ed0001-a541-11e4-b6a0-0002a5d5c51b"
     static let write="98ed0002-a541-11e4-b6a0-0002a5d5c51b", notify="98ed0003-a541-11e4-b6a0-0002a5d5c51b"
@@ -52,6 +53,17 @@ enum OuraWire {
     static func ack(_ frame:Data,extended:UInt8,feature:UInt8)throws {
         let b=try complete(frame,minimum:5,tag:0x2f,extended:extended)
         guard b[3]==feature,b[4]==0 else{throw AppError.message("Comando anello rifiutato (esito \(b[4]))")}
+    }
+    static func featureStatus(_ frame:Data,feature:UInt8)throws->OuraFeatureStatus{
+        let bytes=try complete(frame,minimum:8,tag:0x2f,extended:0x21)
+        guard bytes[3]==feature,(0...3).contains(bytes[4]),(0...3).contains(bytes[6]) else{throw AppError.message("Stato della funzione anello non riconosciuto")}
+        return OuraFeatureStatus(mode:Int(bytes[4]),flags:Int(bytes[5]),state:Int(bytes[6]),result:Int(bytes[7]))
+    }
+    static func spo2AutomaticParameters(capabilityVersion:Int)->Data?{
+        // Original HealthSpo2 defaults, eight-parameter ABI advertised by Gen3.
+        // Version3 adds HFM duration; retain firmware parameters until verified.
+        guard (1...2).contains(capabilityVersion) else{return nil}
+        return Data([0x2f,0x0a,0x29,4,1,100,3,30,24,0,0,0])
     }
     static func cipher(key:Data,nonce:Data)throws->Data {
         guard key.count==16,nonce.count==15 else{throw AppError.message("Credenziale anello non disponibile")}

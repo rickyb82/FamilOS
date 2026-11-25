@@ -12,6 +12,7 @@ final class WellnessAPI:NSObject,URLSessionDataDelegate,URLSessionTaskDelegate,@
     private var bluetoothLiveUntil:TimeInterval=0;private var lastHTTP:Int?
     private var lastDiagnosticWrite:TimeInterval=0
     private var fastNetwork=false
+    private var lastBatchEvents:Int?;private var lastPreparationMS:Double?;private var lastRequestMS:Double?;private var lastAcknowledgementMS:Double?
     private var stopped=false
     private let diagnosticQueue=DispatchQueue(label:"HomePulse.transport-diagnostics",qos:.utility)
     private let mutex=NSLock();private let monitor=NWPathMonitor()
@@ -83,7 +84,7 @@ final class WellnessAPI:NSObject,URLSessionDataDelegate,URLSessionTaskDelegate,@
         upload()
     }
     private var useImmediateTransport:Bool{mutex.lock();defer{mutex.unlock()};return foreground || Date().timeIntervalSince1970<bluetoothLiveUntil}
-    private var batchLimit:Int{mutex.lock();defer{mutex.unlock()};return fastNetwork ? 500:128}
+    private var batchLimit:Int{mutex.lock();defer{mutex.unlock()};return fastNetwork ? 1000:128}
     private var acknowledgedDelay:Double{mutex.lock();defer{mutex.unlock()};return fastNetwork ? 0:1}
     func upload(){
         mutex.lock();let immediate=foreground || Date().timeIntervalSince1970<bluetoothLiveUntil;if stopped || preparing || immediate && Date().timeIntervalSince1970<nextForegroundAt{mutex.unlock();return};preparing=true;mutex.unlock()
@@ -115,10 +116,12 @@ final class WellnessAPI:NSObject,URLSessionDataDelegate,URLSessionTaskDelegate,@
     @MainActor private func startImmediateUpload(_ credentials:Credentials)async{
         let execution=ShortBackgroundExecution(name:"HomePulse live upload")
         do{
-            let limit=batchLimit
+            let limit=batchLimit,preparationStarted=Date()
             guard let batch=try await store.perform({try $0.prepareBatch(limit:limit,prioritizeLive:true)}) else{execution.finish();finishPreparation();status("Live collegato a FamilOS");retry(after:2);return}
             let bytes=try await Task.detached(priority:.utility){try JSONEncoder().encode(batch)}.value
+            recordPreparation(events:batch.events.count,milliseconds:Date().timeIntervalSince(preparationStarted)*1000)
             var request=try eventRequest(credentials);request.httpBody=bytes
+            let requestStarted=Date()
             let task=live.dataTask(with:request){[weak self] data,response,error in
                 defer{Task{@MainActor in execution.finish()}}
                 guard let self else{return};var delay=3.0
@@ -128,6 +131,7 @@ final class WellnessAPI:NSObject,URLSessionDataDelegate,URLSessionTaskDelegate,@
                     guard let http=response as? HTTPURLResponse else{throw AppError.message("Risposta server assente")}
                     guard (200...299).contains(http.statusCode) else{self.status("Invio rifiutato dal server: HTTP \(http.statusCode)",http:http.statusCode);return}
                     guard let data else{throw AppError.message("Conferma server assente")}
+                    self.recordRequest(milliseconds:Date().timeIntervalSince(requestStarted)*1000)
                     let partial=try self.accept(data,batch:batch.batch_id)
                     delay=partial ? 10:self.acknowledgedDelay
                 }catch{self.status("Offline: eventi live conservati sul telefono")}
@@ -143,6 +147,7 @@ final class WellnessAPI:NSObject,URLSessionDataDelegate,URLSessionTaskDelegate,@
     private func status(_ message:String,http:Int?=nil){
         mutex.lock();guard !stopped else{mutex.unlock();return};if let http{lastHTTP=http}
         let code=lastHTTP,active=foreground,now=Date().timeIntervalSince1970
+        let fast=fastNetwork,batchEvents=lastBatchEvents,prepare=lastPreparationMS,request=lastRequestMS,ack=lastAcknowledgementMS
         let writeDiagnostic=now-lastDiagnosticWrite>=5 || (http != nil && !(200...299).contains(http!))
         if writeDiagnostic{lastDiagnosticWrite=now};mutex.unlock()
         onStatus?(message)
@@ -153,15 +158,23 @@ final class WellnessAPI:NSObject,URLSessionDataDelegate,URLSessionTaskDelegate,@
         diagnosticQueue.async{
             var value:[String:Any]=["status":message,"foreground":active,"journal_events":store.journalCount,"pending_events":store.pendingCount,"at":Date().timeIntervalSince1970]
             if let code{value["last_http_status"]=code}
+            value["fast_network"]=fast
+            if let batchEvents{value["batch_events"]=batchEvents}
+            if let prepare{value["preparation_ms"]=prepare}
+            if let request{value["request_ms"]=request}
+            if let ack{value["acknowledgement_ms"]=ack}
             if let data=try? JSONSerialization.data(withJSONObject:value){try? data.write(to:path,options:[.atomic,.completeFileProtectionUntilFirstUserAuthentication])}
         }
     }
     private func finishPreparation(){mutex.lock();preparing=false;mutex.unlock()}
+    private func recordPreparation(events:Int,milliseconds:Double){mutex.lock();lastBatchEvents=events;lastPreparationMS=milliseconds;mutex.unlock()}
+    private func recordRequest(milliseconds:Double){mutex.lock();lastRequestMS=milliseconds;mutex.unlock()}
     @discardableResult private func accept(_ data:Data,batch:String)throws->Bool{
         guard data.count<=1_000_000 else{throw AppError.message("Conferma troppo grande")}
         let result=try JSONDecoder().decode(JSONValue.self,from:data)
         guard result["batch_id"].string==batch,case .array(let values)=result["accepted_event_ids"],values.allSatisfy({$0.string != nil}) else{throw AppError.message("Conferma batch non valida")}
-        let complete=try store.acknowledge(batchID:batch,accepted:values.compactMap{$0.string})
+        let started=Date(),complete=try store.acknowledge(batchID:batch,accepted:values.compactMap{$0.string})
+        mutex.lock();lastAcknowledgementMS=Date().timeIntervalSince(started)*1000;mutex.unlock()
         try? FileManager.default.removeItem(at:folder.appendingPathComponent(batch+".json"))
         status("Live inviato a FamilOS",http:200);onUpload?();onAcknowledged?()
         return !complete

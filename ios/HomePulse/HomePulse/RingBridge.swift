@@ -11,6 +11,9 @@ import Combine
     @Published var batteryLevel:Int?;@Published var batteryAt:Date?
     @Published var batteryStatus="Batteria non ancora letta"
     private let diagnosticsURL:URL?;private var batteryAttemptAt:Date?;private var batteryReplyHex:String?;private var batteryChargingProgressRaw:Int?
+    private var lastLivePacketAt:Date?;private var lastValidLivePacketAt:Date?
+    @Published var spo2Status="SpO₂: configurazione da verificare"
+    private var spo2Before:OuraFeatureStatus?;private var spo2After:OuraFeatureStatus?
     @Published var lastConnectionError:String?
     var onBattery:((OuraBattery,Date)->Void)?
     var onLive:((OuraLive,Date)->Void)?;var onHistory:(()->Void)?;var onJournal:(()->Void)?
@@ -25,7 +28,7 @@ import Combine
     private var responseMatch:((Data)->Bool)?;private var timeoutTask:Task<Void,Never>?
     private struct SportControl:Codable,Sendable{var restoreMode:UInt8;var pendingStop:Bool}
     private var sportKey:String{"sport.control.\(logicalRing ?? "unbound")"}
-    private var nextHistoryAt=Date.distantPast;private var nextExerciseAt=Date.distantPast;private var nextBatteryAt=Date.distantPast
+    private var nextHistoryAt=Date.distantPast;private var nextExerciseAt=Date.distantPast;private var nextBatteryAt=Date.distantPast;private var nextSpO2At=Date.distantPast
     private var pageRecords:[Data]?;private let store:EventStore
     init(store:EventStore,diagnosticsURL:URL?=nil){self.store=store;self.packetJournal=PacketJournal(store:store);self.diagnosticsURL=diagnosticsURL;super.init();logicalRing=UserDefaults.standard.string(forKey:"ringLogicalID");desired=UserDefaults.standard.bool(forKey:"ringWantsConnection");central=CBCentralManager(delegate:self,queue:.main,options:[CBCentralManagerOptionRestoreIdentifierKey:"com.familos.homepulse.central",CBCentralManagerOptionShowPowerAlertKey:true])}
     func configure(logicalRing:String){self.logicalRing=logicalRing;UserDefaults.standard.set(logicalRing,forKey:"ringLogicalID")}
@@ -138,7 +141,8 @@ import Combine
             writeBatteryDiagnostic()
         }
         if b.count>=3,b[0]==0x2f,b[2]==0x28,b.count>=4,b[3]==2,ready,!apiVersion.isEmpty {
-            if let live=try? OuraWire.live(frame,api:apiVersion){onLive?(live,receivedAt)}
+            lastLivePacketAt=receivedAt
+            if let live=try? OuraWire.live(frame,api:apiVersion){if live.bpm != nil{lastValidLivePacketAt=receivedAt};onLive?(live,receivedAt)}
             return
         }
         if pageRecords != nil,let first=b.first,first>=0x41 {pageRecords?.append(frame);return}
@@ -177,6 +181,7 @@ import Combine
             authenticating=false
             let sportKey=sportKey
             if let control=try await store.perform({$0.load(SportControl.self,key:sportKey)}),control.pendingStop {try await restoreSport(control)}
+            do{try await configureAutomaticSpO2()}catch{spo2Status="SpO₂: configurazione rinviata";nextSpO2At=Date().addingTimeInterval(60)}
             guard caps[2] != nil else{throw AppError.message("Battito live non pubblicizzato dal firmware")}
             try OuraWire.ack(await exchange(Data([0x2f,3,0x22,2,3]),tag:0x2f,extended:0x23),extended:0x23,feature:2)
             try OuraWire.ack(await exchange(Data([0x2f,3,0x26,2,2]),tag:0x2f,extended:0x27),extended:0x27,feature:2)
@@ -186,6 +191,25 @@ import Combine
             let more=try await historyPages(maxPages:32);nextHistoryAt=Date().addingTimeInterval(more ? 2:60)
         }catch{status=error.localizedDescription}
     }
+    private func configureAutomaticSpO2()async throws{
+        guard let version=capabilities[4] else{spo2Status="SpO₂: funzione non pubblicizzata dal firmware";nextSpO2At=Date.distantFuture;return}
+        let before=try OuraWire.featureStatus(await exchange(Data([0x2f,2,0x20,4]),tag:0x2f,extended:0x21),feature:4)
+        spo2Before=before;let key="spo2.parameters.\(logicalRing ?? "unbound")"
+        if before.mode != 1{try OuraWire.ack(await exchange(Data([0x2f,3,0x22,4,1]),tag:0x2f,extended:0x23),extended:0x23,feature:4)}
+        if let parameters=OuraWire.spo2AutomaticParameters(capabilityVersion:version){
+            let desired=parameters.hex,cached=try await store.perform{$0.load(String.self,key:key)}
+            if before.mode != 1 || cached != desired{
+                try OuraWire.ack(await exchange(parameters,tag:0x2f,extended:0x2a),extended:0x2a,feature:4)
+                try await store.perform{try $0.save(desired,key:key)}
+            }
+        }
+        let after=try OuraWire.featureStatus(await exchange(Data([0x2f,2,0x20,4]),tag:0x2f,extended:0x21),feature:4)
+        spo2After=after
+        guard after.mode==1 else{throw AppError.message("Modalità SpO₂ automatica non confermata")}
+        spo2Status=OuraWire.spo2AutomaticParameters(capabilityVersion:version) == nil ? "SpO₂ automatica attiva · parametri del firmware":"SpO₂ automatica attiva · ciclo richiesto 1 min · attesa iniziale 3 min"
+        nextSpO2At=Date().addingTimeInterval(300);writeBatteryDiagnostic()
+    }
+    func refreshSpO2()async{guard ready,!busy else{return};busy=true;defer{finishOperation()};do{try await configureAutomaticSpO2()}catch{spo2Status="SpO₂: configurazione rinviata";nextSpO2At=Date().addingTimeInterval(60)}}
     func downloadHistory()async{guard ready,!busy else{return};busy=true;defer{finishOperation()};do{let more=try await historyPages(maxPages:32);nextHistoryAt=Date().addingTimeInterval(more ? 2:60)}catch{status=error.localizedDescription;nextHistoryAt=Date().addingTimeInterval(60)}}
     private func historyPages(maxPages:Int)async throws->Bool{
         let key="history.cursor.\(logicalRing ?? peripheral?.identifier.uuidString ?? "unknown")"
@@ -211,13 +235,15 @@ import Combine
     func maintenance(){
         let now=Date()
         if scheduleChargingCheck(){return}
-        guard ready,!busy,now>=nextHistoryAt || now>=nextExerciseAt || now>=nextBatteryAt else{return}
-        let historyDue=now>=nextHistoryAt,exerciseDue=now>=nextExerciseAt && capabilities[3] != nil,batteryDue=now>=nextBatteryAt
+        guard ready,!busy,now>=nextHistoryAt || now>=nextExerciseAt || now>=nextBatteryAt || now>=nextSpO2At else{return}
+        let historyDue=now>=nextHistoryAt,exerciseDue=now>=nextExerciseAt && capabilities[3] != nil,batteryDue=now>=nextBatteryAt,spo2Due=now>=nextSpO2At
+        if spo2Due{nextSpO2At=now.addingTimeInterval(60)}
         nextExerciseAt=now.addingTimeInterval(60)
         if historyDue{nextHistoryAt=now.addingTimeInterval(60)}
         if batteryDue{nextBatteryAt=now.addingTimeInterval(60)}
         busy=true
         Task{defer{finishOperation()}
+            if spo2Due{do{try await configureAutomaticSpO2()}catch{spo2Status="SpO₂: configurazione rinviata"}}
             if batteryDue{do{try await batteryRead();nextBatteryAt=Date().addingTimeInterval(15)}catch{status="Lettura batteria rinviata"}}
             if exerciseDue{do{try await exerciseRead()}catch{status="Lettura cardio attività rinviata"}}
             if historyDue{do{let more=try await historyPages(maxPages:32);nextHistoryAt=Date().addingTimeInterval(more ? 2:60)}catch{status=error.localizedDescription}}
@@ -235,9 +261,13 @@ import Combine
     }
     private func writeBatteryDiagnostic(){
         guard let diagnosticsURL else{return}
-        // Battery exchange only: no health samples, ring IDs or credentials.
+        // Exchange state and timestamps only: no HR/SpO2 samples, IDs or credentials.
         var value:[String:Any]=["at":Date().timeIntervalSince1970,"status":batteryStatus,"ring_status":status,"connected":connected,"ready":ready,"busy":busy,"foreground":foreground,"waiting_for_charge_check":waitingForChargeCheck,"bluetooth_state":central?.state.rawValue ?? -1,"peripheral_state":peripheral?.state.rawValue ?? -1]
         if let batteryAt{value["battery_read_at"]=batteryAt.timeIntervalSince1970}
+        if let lastLivePacketAt{value["last_live_packet_at"]=lastLivePacketAt.timeIntervalSince1970}
+        if let lastValidLivePacketAt{value["last_valid_live_packet_at"]=lastValidLivePacketAt.timeIntervalSince1970}
+        if let spo2Before{value["spo2_mode_before"]=spo2Before.mode}
+        if let spo2After{value["spo2_mode"]=spo2After.mode;value["spo2_state_raw"]=spo2After.state;value["spo2_result_raw"]=spo2After.result}
         if let batteryAttemptAt{value["attempt_at"]=batteryAttemptAt.timeIntervalSince1970}
         if let batteryReplyHex{value["battery_reply_hex"]=batteryReplyHex}
         if let batteryLevel{value["battery_percentage"]=batteryLevel}

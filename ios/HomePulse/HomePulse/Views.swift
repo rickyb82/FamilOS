@@ -38,8 +38,8 @@ struct HomeView:View {
                 if let point=values.last{Text(point.value,format:.number.precision(.fractionLength(2)))+Text(" °C");Text(point.date,style:.relative).font(.caption).foregroundStyle(.secondary)}
                 else if let value=model.metrics.temperatureC{Text(String(format:"%.2f °C",value)).font(.title2.bold());Text("Sensore 1 · storico\nOra anello non risolta").font(.caption).foregroundStyle(.secondary)}else{Text("—").font(.largeTitle);Text("In attesa dello storico").font(.caption)}
             }
-            Card(title:"SpO₂ storica"){
-                if let point=model.serverPoints("spo2").last{Text(String(format:"%.0f %%",point.value)).font(.title2.bold());Text(point.date,style:.relative).font(.caption).foregroundStyle(.secondary)}else{Text("—").font(.largeTitle);Text("Elaborazione sul server\nNessuna stima dal battito").font(.caption).foregroundStyle(.secondary)}
+            Card(title:"SpO₂ · ultima misura"){
+                if let point=model.serverPoints("spo2").last{Text(String(format:"%.0f %%",point.value)).font(.title2.bold());Text("Misurata il \(point.date.formatted(.dateTime.day().month().hour().minute()))").font(.caption).foregroundStyle(.secondary)}else{Text("—").font(.largeTitle);Text("Elaborazione sul server\nNessuna stima dal battito").font(.caption).foregroundStyle(.secondary)}
             }
         }
         Card(title:"Respirazione storica"){
@@ -50,8 +50,8 @@ struct HomeView:View {
             Text("Dati storici dell’anello. Non rappresentano pedalate o cadenza.").font(.caption).foregroundStyle(.secondary)
         }
         Card(title:"Battito sul telefono"){PulseChart(readings:model.readings).frame(height:160)}
-        if let active=model.current{Card(title:"Sessione in corso"){Text(active.activityName).font(.title3.bold());Text(active.elapsed(at:model.now).durationText).monospacedDigit();if active.provisional{Text(GymDetection.prompt).font(.subheadline).foregroundStyle(.teal)}}}
-        SyncCard()
+        if let active=model.current{Card(title:"Sessione in corso"){Text(active.activityName).font(.title3.bold());TimelineView(.periodic(from:.now,by:1)){context in Text(active.elapsed(at:context.date).durationText).monospacedDigit()};if active.provisional{Text(GymDetection.prompt).font(.subheadline).foregroundStyle(.teal)}}}
+        SyncCard(progress:model.transfer)
     }.padding()}.navigationTitle("Home Pulse").navigationBarTitleDisplayMode(.inline).background(Color.black)}}
     func metric(_ title:String,_ value:String)->some View{VStack(alignment:.leading){Text(value).font(.title2.bold()).monospacedDigit();Text(title).font(.caption).foregroundStyle(.secondary)}}
 }
@@ -79,6 +79,8 @@ struct RingSettingsControls:View{
     var body:some View{VStack(alignment:.leading,spacing:12){
         Label(ring.status,systemImage:ring.connected ? "antenna.radiowaves.left.and.right":"antenna.radiowaves.left.and.right.slash").font(.subheadline)
         Text(ring.batteryStatus).font(.caption).foregroundStyle(.secondary)
+        Text(ring.spo2Status).font(.caption).foregroundStyle(.secondary)
+        Button("Controlla SpO₂ automatica"){Task{await ring.refreshSpO2()}}.disabled(!ring.ready || ring.busy)
         if let error=ring.lastConnectionError{Text(error+" Ritento automaticamente; puoi premere Scollega per fermare i tentativi.").font(.caption).foregroundStyle(.orange)}
         ForEach(model.warnings,id:\.self){Text($0).font(.caption).foregroundStyle(.orange)}
         HStack{Button("Cerca anello"){ring.scan()}.buttonStyle(.borderedProminent);if ring.connected || ring.status == "Connessione…"{Button("Scollega"){ring.disconnect()}.buttonStyle(.bordered)}}
@@ -95,24 +97,25 @@ struct RingSettingsControls:View{
     }}
 }
 struct SyncCard:View{
-    @EnvironmentObject var model:AppModel
+    @EnvironmentObject var model:AppModel;@ObservedObject var progress:TransferProgress
     var body:some View{Card(title:"FamilOS"){
         HStack{Image(systemName:model.enrolled ? "checkmark.icloud":"icloud.slash").foregroundStyle(.teal);Text(model.syncStatus);Spacer()}
-        Text("\(model.pending) eventi in coda · \(model.journalCount) conservati sul telefono").font(.caption).foregroundStyle(.secondary)
+        Text("\(progress.pending) eventi in coda · \(progress.journalCount) conservati sul telefono").font(.caption).foregroundStyle(.secondary)
         Button("Sincronizza ora"){Task{await model.refresh();model.api.upload()}}.disabled(!model.enrolled)
     }}
 }
+struct TransferStatusText:View{@ObservedObject var progress:TransferProgress;var body:some View{Text(progress.status).font(.caption)}}
 struct PulseChart:View{
     let readings:[Reading]
     var body:some View{if readings.isEmpty{ContentUnavailableView("Nessun campione",systemImage:"waveform.path.ecg",description:Text("I campioni reali compariranno qui."))}else{Chart(readings){p in LineMark(x:.value("Ora",p.date),y:.value("BPM",p.bpm)).foregroundStyle(.teal)}.chartYScale(domain:.automatic(includesZero:false)).chartXAxis{AxisMarks(values:.automatic(desiredCount:3))}}}
 }
 struct WorkoutView:View{
     @EnvironmentObject var model:AppModel;@State private var activity=""
-    var body:some View{NavigationStack{ScrollView{VStack(spacing:18){
+    var body:some View{NavigationStack{TimelineView(.periodic(from:.now,by:1)){context in ScrollView{VStack(spacing:18){
         RingBatteryCard()
         LiveCard(ring:model.ring)
         if let session=model.current{
-            let elapsed=session.elapsed(at:model.now),position=WorkoutEngine.position(elapsed:elapsed,config:session.config)
+            let elapsed=session.elapsed(at:context.date),position=WorkoutEngine.position(elapsed:elapsed,config:session.config)
             Card(title:session.provisional ? "Sessione rilevata · da confermare":"Sessione attiva"){
                 Text(session.activityName).font(.title2.bold());Text(position.name).font(.largeTitle.bold()).foregroundStyle(.teal)
                 Text(Double(position.remaining).durationText).font(.system(size:64,weight:.medium,design:.rounded)).monospacedDigit()
@@ -151,7 +154,7 @@ struct WorkoutView:View{
             Button("Leggi stato cardio attività"){Task{await model.ring.readExercise()}}.disabled(!model.ring.ready || model.ring.busy)
             Button("Arresta registrazione cardio"){Task{await model.ring.stopSport()}}.disabled(!model.ring.ready || model.ring.busy)
         }
-    }.padding()}.navigationTitle("Allenamento")}}
+    }.padding()}.navigationTitle("Allenamento")}}}
 }
 struct SleepView:View {
     @EnvironmentObject var model:AppModel;@State private var selectedID:String?
@@ -265,7 +268,7 @@ struct SettingsView:View{
     @State var code="";@State var server="https://familos.example/api/wellness/v1";@State var scanning=false
     var body:some View{NavigationStack{Form{
         Section("FamilOS"){
-            if model.enrolled{Label(model.ownerName ?? "Dispositivo associato",systemImage:"checkmark.shield");Text(model.syncStatus).font(.caption);Text(model.uploadStatus).font(.caption)}else{
+            if model.enrolled{Label(model.ownerName ?? "Dispositivo associato",systemImage:"checkmark.shield");Text(model.syncStatus).font(.caption);TransferStatusText(progress:model.transfer)}else{
                 TextField("Indirizzo server",text:$server).textInputAutocapitalization(.never).keyboardType(.URL)
                 TextField("Codice o link di associazione",text:$code).textInputAutocapitalization(.never).autocorrectionDisabled().privacySensitive()
                 Button("Associa questo iPhone"){Task{if let url=URL(string:code),url.scheme=="familos-homepulse"{await model.openPairingURL(url)}else{await model.enroll(code:code,server:server)};code=""}}
