@@ -174,6 +174,24 @@ async def mobile_analysis(session_id:str|None=None,start:float|None=None,end:flo
     except StoreError as exc:raise _error(exc) from None
 
 
+@router.get('/diary')
+async def diary(hours:int=2,ctx:AuthContext=Depends(require_adult)):
+    try:return await asyncio.to_thread(store().diary_analysis,ctx.user.id,hours)
+    except StoreError as exc:raise _error(exc) from None
+
+
+@router.get('/mobile/diary')
+async def mobile_diary(hours:int=2,device:dict=Depends(bridge)):
+    try:return await asyncio.to_thread(store().diary_analysis,device['owner_id'],hours)
+    except StoreError as exc:raise _error(exc) from None
+
+
+@router.post('/mobile/diary/cleanup')
+async def mobile_diary_cleanup(body:dict,device:dict=Depends(bridge)):
+    try:return await asyncio.to_thread(store().cleanup_diary,device['owner_id'],body)
+    except StoreError as exc:raise _error(exc) from None
+
+
 @router.get('/mobile/sleep')
 async def mobile_sleep(days:int=Query(default=14,ge=1,le=90),device:dict=Depends(bridge)):
     return await asyncio.to_thread(store().sleep,device['owner_id'],days)

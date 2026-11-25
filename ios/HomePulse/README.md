@@ -177,3 +177,8 @@ I tool `allenamento_grafico` e `allenamento_energia` completano i cinque tool gi
 
 
 SpO₂: il server cataloga tutti gli output medi nativi datatype6 con UTC, fuso, qualità e provenienza. La tab Sonno mostra media arrotondata, minimo, massimo e numero di campioni nel periodo selezionato; l’Home mostra l’ultimo riepilogo del sonno quando disponibile. La media replica la regola recuperata dal builder originale (85..100, media aritmetica senza filtro quality1), senza correzioni opzionali non configurate. La selezione per periodo nativo è esplicita: la selezione proprietaria DbSleep.day/LongestSleepDaily non è ancora interamente replicata. Il valore è riferito a quel sonno, non a una misura live. Il catalogo viene ricostruito in background dagli output già presenti, senza nuovi download Bluetooth.
+
+
+Il Diario apre i grafici sulle ultime2ore e permette di scegliere4,8,24ore,2o7giorni. L’endpoint personale `/wellness/v1/mobile/diary` prepara una serie leggera preservando estremi reali, istanti e interruzioni del segnale; i campioni completi restano nel server per statistiche ed Emily. Le viste offline usano l’archivio e i dati già salvati sul telefono. Allenamenti e cronologia sono raccolti in un menu espandibile, e ogni sessione apre i propri grafici limitati al suo intervallo. Il grafico cardiaco è stato spostato dalla Home al Diario.
+
+La pulizia del diario usa regole esplicite con intervallo da conservare e istante limite: conserva le sessioni sovrapposte all’intervallo e quelle future. Le regole sono personali e persistono sulle due parti, così vecchi batch non fanno ricomparire le sessioni escluse. I record dei sensori e il giornale di acquisizione rimangono disponibili.

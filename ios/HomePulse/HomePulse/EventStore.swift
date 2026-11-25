@@ -33,6 +33,7 @@ final class EventStore: @unchecked Sendable {
         try run("CREATE INDEX IF NOT EXISTS recorded_segments_time ON recorded_segments(started,through)")
         try run("INSERT OR IGNORE INTO recorded_segments(token,started,through,body) SELECT substr(key,17),json_extract(CAST(value AS TEXT),'$.startedAt'),json_extract(CAST(value AS TEXT),'$.availableUntil'),value FROM kv WHERE key LIKE 'recorded.result.%' AND json_valid(CAST(value AS TEXT))")
         try run("CREATE TABLE IF NOT EXISTS readings(id INTEGER PRIMARY KEY AUTOINCREMENT,at REAL NOT NULL,bpm INTEGER NOT NULL)")
+        try run("CREATE INDEX IF NOT EXISTS readings_time ON readings(at,id)")
         try? FileManager.default.setAttributes([.protectionKey:FileProtectionType.completeUntilFirstUserAuthentication],ofItemAtPath:url.path)
     }
     deinit {sqlite3_close(db)}
@@ -86,11 +87,34 @@ final class EventStore: @unchecked Sendable {
     @discardableResult func reconcileSessions(_ sessions:[WorkoutSession],active:WorkoutSession?)throws->Bool{
         try guarded{try transaction{
             guard try count("SELECT count(*) FROM outbox o JOIN journal j USING(event_id) WHERE j.kind='workout'")==0 else{return false}
-            for session in sessions{let s=try statement("INSERT OR REPLACE INTO sessions(id,body) VALUES(?,?)");defer{sqlite3_finalize(s)};bind(session.id.uuidString,s,1);bind(try JSONEncoder().encode(session),s,2);try done(s)}
+            for session in sessions where diaryAllows(session){let s=try statement("INSERT OR REPLACE INTO sessions(id,body) VALUES(?,?)");defer{sqlite3_finalize(s)};bind(session.id.uuidString,s,1);bind(try JSONEncoder().encode(session),s,2);try done(s)}
             try put(try JSONEncoder().encode(active),key:"activeWorkout");return true
         }}
     }
-    func sessions()->[WorkoutSession] {guarded{do{let s=try statement("SELECT body FROM sessions ORDER BY rowid DESC LIMIT 300");defer{sqlite3_finalize(s)};var a:[WorkoutSession]=[];while sqlite3_step(s)==SQLITE_ROW{if let v=try? JSONDecoder().decode(WorkoutSession.self,from:data(s,0)){a.append(v)}};return a.sorted{$0.startedAt>$1.startedAt}}catch{return []}}}
+    func sessions()->[WorkoutSession] {guarded{do{let s=try statement("SELECT body FROM sessions ORDER BY rowid DESC LIMIT 300");defer{sqlite3_finalize(s)};var a:[WorkoutSession]=[];while sqlite3_step(s)==SQLITE_ROW{if let v=try? JSONDecoder().decode(WorkoutSession.self,from:data(s,0)),diaryAllows(v){a.append(v)}};return a.sorted{$0.startedAt>$1.startedAt}}catch{return []}}}
+    func diaryAllows(_ session:WorkoutSession)->Bool{(load([DiaryCleanup].self,key:"diary.cleanups") ?? []).allSatisfy{$0.allows(session)}}
+    func applyDiaryCleanup(_ rule:DiaryCleanup,pending:Bool=false)throws{try guarded{try transaction{
+        guard rule.valid else{throw AppError.message("Intervallo diario non valido")}
+        var rules=load([DiaryCleanup].self,key:"diary.cleanups") ?? []
+        if !rules.contains(rule){rules.append(rule);try save(rules,key:"diary.cleanups")}
+        if pending{try save(rule,key:"diary.cleanup.pending")}
+        let rows=try statement("SELECT id,body FROM sessions");var remove:[String]=[]
+        while sqlite3_step(rows)==SQLITE_ROW{if let value=try? JSONDecoder().decode(WorkoutSession.self,from:data(rows,1)),!diaryAllows(value){remove.append(text(rows,0))}}
+        sqlite3_finalize(rows)
+        for id in remove{let q=try statement("DELETE FROM sessions WHERE id=?");bind(id,q,1);try done(q);sqlite3_finalize(q)}
+        if let active=load(WorkoutSession.self,key:"activeWorkout"),!diaryAllows(active){try save(Optional<WorkoutSession>.none,key:"activeWorkout")}
+    }}}
+    func diaryLocal(start:Date,end:Date)->JSONValue{guarded{
+        var rows=recordedResults(start:start,end:end).flatMap{$0.acceptedReadings}.filter{$0.date>=start && $0.date<=end}
+        if let q=try? statement("SELECT at,bpm FROM readings WHERE at>=? AND at<=? ORDER BY at,id"){
+            sqlite3_bind_double(q,1,start.timeIntervalSince1970);sqlite3_bind_double(q,2,end.timeIntervalSince1970)
+            while sqlite3_step(q)==SQLITE_ROW{rows.append(Reading(date:Date(timeIntervalSince1970:sqlite3_column_double(q,0)),bpm:Int(sqlite3_column_int(q,1))))};sqlite3_finalize(q)
+        }
+        let sorted=rows.sorted{$0.date<$1.date};var segment=0;var previous:Date?;var points:[ChartPoint]=[]
+        for row in sorted{if let previous,row.date.timeIntervalSince(previous)>8{segment+=1};previous=row.date;points.append(ChartPoint(date:row.date,value:Double(row.bpm),segment:segment))}
+        let bounded=ChartSeries.bound(points)
+        return .object(["heart_rate":.array(bounded.map{.object(["t":.number($0.date.timeIntervalSince1970),"v":.number($0.value),"segment":.number(Double($0.segment ?? 0))])}),"window_start":.number(start.timeIntervalSince1970),"window_end":.number(end.timeIntervalSince1970),"offline":.bool(true)])
+    }}
     func addReading(_ reading:Reading) throws {try guarded{let s=try statement("INSERT INTO readings(at,bpm) VALUES(?,?)");defer{sqlite3_finalize(s)};sqlite3_bind_double(s,1,reading.date.timeIntervalSince1970);sqlite3_bind_int(s,2,Int32(reading.bpm));try done(s)}}
     func readings(limit:Int=500)->[Reading] {guarded{do{let s=try statement("SELECT at,bpm FROM readings ORDER BY id DESC LIMIT ?");defer{sqlite3_finalize(s)};sqlite3_bind_int(s,1,Int32(limit));var a:[Reading]=[];while sqlite3_step(s)==SQLITE_ROW{a.append(Reading(date:Date(timeIntervalSince1970:sqlite3_column_double(s,0)),bpm:Int(sqlite3_column_int(s,1))))};return a.reversed()}catch{return []}}}
     var pendingCount:Int {guarded{(try? count("SELECT count(*) FROM outbox")) ?? 0}}

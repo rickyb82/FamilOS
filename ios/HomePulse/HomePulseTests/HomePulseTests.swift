@@ -3,6 +3,22 @@ import SQLite3
 @testable import HomePulse
 
 final class HomePulseTests:XCTestCase {
+    func testDiaryCleanupRetainsOverlapAndFutureAndDoesNotRestoreDeletedSessions()throws{
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString);defer{try? FileManager.default.removeItem(at:folder)}
+        let store=try EventStore(url:folder.appendingPathComponent("synthetic.sqlite"))
+        func session(_ start:Double,_ end:Double)->WorkoutSession{WorkoutSession(id:UUID(),activityName:"Synthetic",startedAt:Date(timeIntervalSince1970:start),endedAt:Date(timeIntervalSince1970:end),config:WorkoutConfig(),profile:BodyProfile(),accumulated:end-start,state:"ended")}
+        let old=session(100,200),keep=session(900,1200),future=session(2100,2200)
+        for item in [old,keep,future]{try store.workout(item,payload:.object(["action":.string("ended")]))}
+        let rule=DiaryCleanup(retain_start:1000,retain_end:1500,created_before:2000)
+        let before=store.journalCount
+        try store.applyDiaryCleanup(rule,pending:true)
+        XCTAssertEqual(Set(store.sessions().map(\.id)),Set([keep.id,future.id]));XCTAssertEqual(store.journalCount,before)
+        XCTAssertEqual(store.load(DiaryCleanup.self,key:"diary.cleanup.pending"),rule)
+        // A late replay cannot return it to the visible diary.
+        try store.workout(old,payload:.object(["action":.string("ended")]))
+        XCTAssertFalse(store.sessions().contains{$0.id==old.id})
+        XCTAssertEqual(DiaryRange.allCases.map(\.rawValue),[2,4,8,24,48,168]);XCTAssertEqual(DiaryRange.two.label,"2 ore")
+    }
     func testSpO2ProbeRestorationSurvivesReopenAndUsesBoundedDeadline()throws {
         let start=Date(timeIntervalSince1970:1000)
         var control=SpO2ProbeControl(restoreMode:1,restoreLiveMode:3,restoreSubscription:true,restoreAt:start.addingTimeInterval(360))
@@ -178,12 +194,13 @@ final class HomePulseTests:XCTestCase {
         }
         await MainActor.run{writer.submit(.object(["status":.string("first")]))}
         await fulfillment(of:[entered],timeout:3)
-        let start=Date()
-        await MainActor.run{
+        let elapsed=await MainActor.run{
+            let start=Date()
             writer.submit(.object(["status":.string("middle")]))
             writer.submit(.object(["status":.string("latest")]))
+            return Date().timeIntervalSince(start)
         }
-        XCTAssertLessThan(Date().timeIntervalSince(start),0.5,"Main actor must not wait for the blocked file write")
+        XCTAssertLessThan(elapsed,0.5,"Main actor must not wait for the blocked file write")
         gate.signal();await fulfillment(of:[completed],timeout:3)
         XCTAssertEqual(captures.values.map{$0["status"].string},["first","latest"])
     }

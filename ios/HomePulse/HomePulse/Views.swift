@@ -108,7 +108,6 @@ struct HomeView:View {
             HStack{metric("Passi nei record",model.metrics.steps.map(String.init) ?? "—");Spacer();metric("Ultimo movimento",model.metrics.motionSeconds.map{"\($0) s"} ?? "—")}
             Text("Dati storici dell’anello. Non rappresentano pedalate o cadenza.").font(.caption).foregroundStyle(.secondary)
         }
-        Card(title:"Battito sul telefono"){PulseChart(readings:model.readings).frame(height:160)}
         if let active=model.current{Card(title:"Sessione in corso"){Text(active.activityName).font(.title3.bold());TimelineView(.periodic(from:.now,by:1)){context in Text(active.elapsed(at:context.date).durationText).monospacedDigit()};if active.provisional{Text(GymDetection.prompt).font(.subheadline).foregroundStyle(.teal)}}}
         SyncCard(progress:model.transfer)
     }.padding()}.navigationTitle("Home Pulse").navigationBarTitleDisplayMode(.inline).background(Color.black)}}
@@ -334,28 +333,65 @@ struct PlanEditor:View{
         Section{Button("Salva scheda"){Task{await model.saveSettings()}};Text("Obiettivi e MET sono facoltativi e scelti da te. La scheda della sessione già iniziata resta quella salvata all’avvio.").font(.caption).foregroundStyle(.secondary)}
     }.navigationTitle("Scheda").dismissibleKeyboard().toolbar{EditButton()}}
 }
+private let diaryMetrics=[("heart_rate","Battito"),("spo2","SpO₂"),("temperature","Temperatura"),("respiratory_rate","Respiro"),("motion","Movimento"),("step_increments","Passi")]
+struct MetricHistoryChart:View{
+    let title:String;let points:[ChartPoint];var start:Date?=nil;var end:Date?=nil
+    var domain:ClosedRange<Date>{let a=start ?? points.first?.date ?? Date(),b=end ?? points.last?.date ?? Date();return a...max(a.addingTimeInterval(1),b)}
+    var body:some View{Chart(points){point in
+        if title=="Battito"{LineMark(x:.value("Ora",point.date),y:.value(title,point.value),series:.value("Tratto",point.segment ?? 0)).foregroundStyle(.teal)}
+        else{PointMark(x:.value("Ora",point.date),y:.value(title,point.value)).foregroundStyle(.teal).symbolSize(12)}
+    }.chartXScale(domain:domain).chartYScale(domain:.automatic(includesZero:false)).frame(height:180).accessibilityLabel("Grafico \(title)")}
+}
 struct DiaryView:View{
     @EnvironmentObject var model:AppModel
+    @State private var range:DiaryRange = .two
+    @State private var analysis:JSONValue = .null
+    @State private var loading=false
     var body:some View{NavigationStack{List{
-        Section("Battito locale"){PulseChart(readings:model.readings).frame(height:180)}
-        ForEach([("spo2","SpO₂ elaborata sul server"),("temperature","Temperatura storica"),("heart_rate","Battito sul server"),("respiratory_rate","Respirazione storica")],id:\.0){metric,title in
-            let points=model.serverPoints(metric)
-            if !points.isEmpty{Section(title){Chart(points){p in LineMark(x:.value("Ora",p.date),y:.value(title,p.value))}.frame(height:160).chartYScale(domain:.automatic(includesZero:false))}}
+        Section{
+            Picker("Periodo dei grafici",selection:$range){ForEach(DiaryRange.allCases){item in Text(item.label).tag(item)}}.accessibilityIdentifier("diary-range")
+            if loading{ProgressView("Caricamento grafici…")}
+            if analysis["offline"] == .bool(true){Text("Dati salvati sul telefono").font(.caption).foregroundStyle(.secondary)}
         }
-        Section("Allenamenti sul telefono"){
+        ForEach(diaryMetrics,id:\.0){metric,title in
+            let points=ChartSeries.decode(analysis[metric])
+            if !points.isEmpty{Section(title){MetricHistoryChart(title:title,points:points,start:analysis["window_start"].number.map{Date(timeIntervalSince1970:$0)},end:analysis["window_end"].number.map{Date(timeIntervalSince1970:$0)})}}
+        }
+        if !loading,diaryMetrics.allSatisfy({analysis[$0.0].array.isEmpty}){Text("Nessun campione disponibile nel periodo selezionato").foregroundStyle(.secondary)}
+        DisclosureGroup("Allenamenti e cronologia"){
+            Text("Allenamenti · \(model.sessions.count)").font(.headline)
             if model.sessions.isEmpty{Text("Nessun allenamento salvato").foregroundStyle(.secondary)}
-            ForEach(model.sessions){session in NavigationLink{SessionDetail(session:session)}label:{VStack(alignment:.leading){HStack{Text(session.activityName);Spacer();Text(session.accumulated.durationText).monospacedDigit()};Text(session.startedAt,format:.dateTime.day().month().hour().minute()).font(.caption).foregroundStyle(.secondary);if session.state=="false_detection"{Text("Rilevamento escluso").font(.caption).foregroundStyle(.orange)}}}}
-        }
-        Section("Cronologia FamilOS"){
-            ForEach(Array(model.serverData["sessions"].array.enumerated()),id:\.offset){_,s in NavigationLink{ServerSessionDetail(session:s)}label:{VStack(alignment:.leading){Text(s["activity_name"].string ?? "Allenamento sincronizzato");if let elapsed=s["active_seconds"].number{Text(elapsed.durationText).font(.caption)}}}}
+            ForEach(model.sessions){session in NavigationLink{SessionDetail(session:session)}label:{VStack(alignment:.leading){HStack{Text(session.activityName);Spacer();Text(session.accumulated.durationText).monospacedDigit()};Text(session.startedAt,format:.dateTime.day().month().hour().minute()).font(.caption).foregroundStyle(.secondary)}}}
+            Divider()
+            Text("Cronologia FamilOS").font(.headline)
+            ForEach(Array(model.serverData["sessions"].array.enumerated()),id:\.offset){_,session in NavigationLink{ServerSessionDetail(session:session)}label:{VStack(alignment:.leading){Text(session["activity_name"].string ?? "Allenamento");if let stamp=session["started_at"].number{Text(Date(timeIntervalSince1970:stamp),format:.dateTime.day().month().hour().minute()).font(.caption).foregroundStyle(.secondary)}}}}
             if model.serverData["sessions"].array.isEmpty{Text("Nessuna sessione server disponibile offline").foregroundStyle(.secondary)}
+        }.accessibilityIdentifier("diary-workouts-and-history")
+    }.navigationTitle("Diario").refreshable{await model.refresh();analysis=await model.diaryAnalysis(hours:range.rawValue)}
+    .task(id:range){analysis = .null;loading=true
+        while !Task.isCancelled{
+            let value=await model.diaryAnalysis(hours:range.rawValue)
+            guard !Task.isCancelled else{return};analysis=value;loading=false
+            do{try await Task.sleep(nanoseconds:30_000_000_000)}catch{return}
         }
-    }.navigationTitle("Diario").refreshable{await model.refresh()}}}
+    }}}
 }
 struct SessionDetail:View{
     @EnvironmentObject var model:AppModel
     let session:WorkoutSession
-    var body:some View{ScrollView{VStack(spacing:16){Card(title:session.activityName){Text(session.startedAt,format:.dateTime.day().month().year().hour().minute());Text(session.accumulated.durationText).font(.largeTitle.bold());Text(session.state=="false_detection" ? "Rilevamento escluso":"Sessione salvata")};RecordedSessionSummary(session:session,recorded:model.recorded);EnergyCard(session:session,elapsed:session.accumulated);Card(title:"Fasi della sessione"){ForEach(session.config.phases){phase in HStack{Text(phase.name);Spacer();Text(Double(phase.duration).durationText)}}}}.padding()}.navigationTitle("Riepilogo")}
+    @State private var analysis:JSONValue = .null
+    @State private var loading=true
+    var body:some View{ScrollView{VStack(spacing:16){
+        Card(title:session.activityName){Text(session.startedAt,format:.dateTime.day().month().year().hour().minute());Text(session.accumulated.durationText).font(.largeTitle.bold())}
+        if loading{ProgressView("Caricamento grafici allenamento…")}
+        ForEach(diaryMetrics,id:\.0){metric,title in
+            let points=ChartSeries.bound(ChartSeries.decode(analysis[metric]).filter{$0.date>=session.startedAt && $0.date<=(session.endedAt ?? Date())})
+            if !points.isEmpty{Card(title:title){MetricHistoryChart(title:title,points:points,start:session.startedAt,end:session.endedAt ?? Date())}}
+        }
+        if !loading,analysis == .null{Text("Grafici non ancora disponibili sul telefono").foregroundStyle(.secondary)}
+        EnergyCard(session:session,elapsed:session.accumulated)
+        Card(title:"Fasi della sessione"){ForEach(session.config.phases){phase in HStack{Text(phase.name);Spacer();Text(Double(phase.duration).durationText)}}}
+    }.padding()}.navigationTitle("Allenamento").task(id:session.id){analysis=await model.workoutAnalysis(session);loading=false}}
 }
 struct RecordedSessionSummary:View {
     @EnvironmentObject var model:AppModel
@@ -481,9 +517,10 @@ struct ServerSessionDetail:View{
             if let time=session["started_at"].number{Text(Date(timeIntervalSince1970:time),format:.dateTime.day().month().year().hour().minute())}
             if let elapsed=session["active_seconds"].number{Text(elapsed.durationText).font(.title)}
         }
-        ForEach([("heart_rate","Battito"),("spo2","SpO₂ storica"),("temperature","Temperatura storica"),("respiratory_rate","Respirazione storica")],id:\.0){metric,title in
-            let points=AppModel.chartPoints(analysis[metric])
-            if !points.isEmpty{Section(title){Chart(points){p in LineMark(x:.value("Ora",p.date),y:.value(title,p.value)).foregroundStyle(.teal)}.chartYScale(domain:.automatic(includesZero:false)).frame(height:180)}}
+        ForEach(diaryMetrics,id:\.0){metric,title in
+            let start=session["started_at"].number ?? 0,end=session["ended_at"].number ?? Date().timeIntervalSince1970
+            let points=ChartSeries.bound(ChartSeries.decode(analysis[metric]).filter{$0.date.timeIntervalSince1970>=start && $0.date.timeIntervalSince1970<=end})
+            if !points.isEmpty{Section(title){MetricHistoryChart(title:title,points:points)}}
         }
         if analysis["cardio"] != .null{Section("Fasce cardio"){
             let cardio=analysis["cardio"]

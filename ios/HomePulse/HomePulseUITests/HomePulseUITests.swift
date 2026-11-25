@@ -1,6 +1,22 @@
 import XCTest
 
 final class HomePulseUITests:XCTestCase {
+    func testDiaryRangesAndCollapsedHistory(){
+        continueAfterFailure=false
+        let app=XCUIApplication();app.launchArguments=["--uitest-isolated-store"];app.launch()
+        XCTAssertTrue(app.navigationBars["Home Pulse"].waitForExistence(timeout:15))
+        XCTAssertFalse(app.staticTexts["Battito sul telefono"].exists)
+        app.buttons["Diario"].tap()
+        XCTAssertTrue(app.navigationBars["Diario"].waitForExistence(timeout:5))
+        let picker=app.buttons["diary-range"]
+        XCTAssertTrue(picker.waitForExistence(timeout:5));XCTAssertTrue(picker.label.contains("2 ore"))
+        picker.tap();XCTAssertTrue(app.buttons["7 giorni"].waitForExistence(timeout:3));app.buttons["7 giorni"].tap()
+        XCTAssertTrue(picker.label.contains("7 giorni"))
+        let menu=app.buttons["diary-workouts-and-history"]
+        XCTAssertTrue(menu.waitForExistence(timeout:3));XCTAssertFalse(app.staticTexts["Cronologia FamilOS"].exists)
+        menu.tap();XCTAssertTrue(app.staticTexts["Cronologia FamilOS"].waitForExistence(timeout:3))
+        capture(app,"diary-range-and-expanded-history")
+    }
     func testOutsideTapDismissesKeyboardAndKeepsInputAndButtonsWorking(){
         continueAfterFailure=false
         let app=XCUIApplication();app.launchArguments=["--uitest-isolated-store"];app.launch()
@@ -80,6 +96,6 @@ final class HomePulseUITests:XCTestCase {
         app.tabBars.buttons["Sonno"].tap();XCTAssertTrue(app.navigationBars["Sonno"].exists);capture(app,"05-sonno")
         app.buttons["Impostazioni"].tap();XCTAssertTrue(app.navigationBars["Impostazioni"].exists);capture(app,"06-impostazioni")
         app.terminate();app.launch()
-        app.buttons["Diario"].tap();XCTAssertTrue(app.staticTexts["Allenamento"].firstMatch.exists)
+        app.buttons["Diario"].tap();app.buttons["diary-workouts-and-history"].tap();XCTAssertTrue(app.staticTexts["Allenamento"].firstMatch.exists)
     }
 }

@@ -171,6 +171,11 @@ class HomePulseStore:
             CREATE INDEX IF NOT EXISTS points_recorded_source ON points(owner_id,source,identity);
             CREATE TABLE IF NOT EXISTS recorded_cardio_runs(owner_id TEXT NOT NULL,device_id TEXT NOT NULL,token TEXT NOT NULL,revision INTEGER NOT NULL,result_digest TEXT NOT NULL,final INTEGER NOT NULL,started_at REAL NOT NULL,available_until REAL NOT NULL,signal_check INTEGER NOT NULL,point_count INTEGER NOT NULL,computed_at REAL NOT NULL,PRIMARY KEY(owner_id,device_id,token));
             CREATE TABLE IF NOT EXISTS sessions(owner_id TEXT NOT NULL,id TEXT NOT NULL,activity_name TEXT,started_at REAL NOT NULL,ended_at REAL,active_seconds REAL NOT NULL,status TEXT NOT NULL,auto_detected INTEGER NOT NULL DEFAULT 0,provisional INTEGER NOT NULL DEFAULT 0,config TEXT NOT NULL,profile TEXT NOT NULL,last_event_at REAL NOT NULL,source TEXT NOT NULL,PRIMARY KEY(owner_id,id));
+            CREATE TABLE IF NOT EXISTS diary_cleanups(owner_id TEXT NOT NULL,retain_start REAL NOT NULL,retain_end REAL NOT NULL,created_before REAL NOT NULL,PRIMARY KEY(owner_id,created_before));
+            CREATE VIEW IF NOT EXISTS visible_sessions AS SELECT s.* FROM sessions s WHERE NOT EXISTS(
+                SELECT 1 FROM diary_cleanups d WHERE d.owner_id=s.owner_id AND s.started_at<=d.created_before
+                AND NOT(s.started_at<=d.retain_end AND coalesce(s.ended_at,s.started_at+s.active_seconds)>=d.retain_start));
+            CREATE INDEX IF NOT EXISTS sessions_owner_start ON sessions(owner_id,started_at);
             CREATE TABLE IF NOT EXISTS processing(owner_id TEXT PRIMARY KEY,history_count INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL,last_processed_at REAL,error TEXT);
             CREATE TABLE IF NOT EXISTS processing_features(owner_id TEXT NOT NULL,feature TEXT NOT NULL,PRIMARY KEY(owner_id,feature));
             CREATE TABLE IF NOT EXISTS native_runs(id INTEGER PRIMARY KEY,owner_id TEXT NOT NULL,created_at REAL NOT NULL,source_input_sha256 TEXT,result TEXT NOT NULL,result_sha256 TEXT NOT NULL,UNIQUE(owner_id,result_sha256));
@@ -365,7 +370,7 @@ class HomePulseStore:
 
     def _sessions(self,db,owner,now):
         output=[]
-        for row in db.execute('SELECT * FROM sessions WHERE owner_id=? ORDER BY started_at DESC LIMIT 300',(owner,)):
+        for row in db.execute('SELECT * FROM visible_sessions WHERE owner_id=? ORDER BY started_at DESC LIMIT 300',(owner,)):
             item=dict(row);cfg=json.loads(item.pop('config'));profile=json.loads(item.pop('profile'))
             elapsed=item['active_seconds']
             if item['status']=='active':elapsed+=max(0,now-item['last_event_at'])
@@ -406,7 +411,38 @@ class HomePulseStore:
                            'processing_error':processing['error'] if processing else None},
                 'daily_energy':self.daily_energy(owner),
                 'spo2_catalog':self.spo2_summary(owner),
+                'diary_cleanups':self.diary_cleanups(owner),
                 'ring_binding':self.ring(owner,secret=False)}
+
+    def diary_cleanups(self,owner):
+        with self.connection() as db:
+            return [dict(row) for row in db.execute('SELECT retain_start,retain_end,created_before FROM diary_cleanups WHERE owner_id=? ORDER BY created_before',(owner,))]
+
+    def cleanup_diary(self,owner,rule):
+        if not isinstance(rule,dict) or set(rule)!={'retain_start','retain_end','created_before'}:raise StoreError('Pulizia diario non valida')
+        start,end,cutoff=(_finite(rule[k],1,time.time()+300) for k in ('retain_start','retain_end','created_before'))
+        if not start<end<=cutoff:raise StoreError('Intervallo da conservare non valido')
+        with self.connection(True) as db:
+            before=db.execute('SELECT count(*) FROM visible_sessions WHERE owner_id=?',(owner,)).fetchone()[0]
+            db.execute('INSERT OR IGNORE INTO diary_cleanups VALUES(?,?,?,?)',(owner,start,end,cutoff))
+            after=db.execute('SELECT count(*) FROM visible_sessions WHERE owner_id=?',(owner,)).fetchone()[0]
+        self._energy_cache.clear()
+        return {'removed_from_diary':before-after,'remaining_sessions':after,'sensor_data_preserved':True,'rule':dict(retain_start=start,retain_end=end,created_before=cutoff)}
+
+    def diary_analysis(self,owner,hours=2):
+        if type(hours) is not int or hours not in (2,4,8,24,48,168):raise StoreError('Intervallo diario non valido')
+        end=time.time();start=end-hours*3600;bucket=(end-start)/140
+        # Query only real extrema/edge points per time bucket, after computing
+        # signal gaps on the complete series. Original samples stay in points.
+        query="WITH base AS (\n            SELECT id,kind,t,value,source,lag(t) OVER(PARTITION BY kind ORDER BY t,id) previous\n            FROM points WHERE owner_id=? AND t>=? AND t<=? AND kind IN ('heart_rate','spo2','temperature','motion','steps','respiratory_rate')),\n            segmented AS (SELECT *,sum(CASE WHEN kind='heart_rate' AND t-previous>8 THEN 1 ELSE 0 END) OVER(PARTITION BY kind ORDER BY t,id) segment FROM base),\n            ranked AS (SELECT *,row_number() OVER(PARTITION BY kind,cast((t-?)/? AS INTEGER) ORDER BY value,t,id) low,\n            row_number() OVER(PARTITION BY kind,cast((t-?)/? AS INTEGER) ORDER BY value DESC,t,id) high,\n            row_number() OVER(PARTITION BY kind ORDER BY t,id) first,\n            row_number() OVER(PARTITION BY kind ORDER BY t DESC,id DESC) last FROM segmented)\n            SELECT kind,t,value,source,segment FROM ranked WHERE low=1 OR high=1 OR first=1 OR last=1 ORDER BY t,id"
+        with self.connection() as db:
+            rows=db.execute(query,(owner,start,end,start,bucket,start,bucket)).fetchall()
+            counts={row[0]:row[1] for row in db.execute('SELECT kind,count(*) FROM points WHERE owner_id=? AND t>=? AND t<=? GROUP BY kind',(owner,start,end))}
+        result={k:[] for k in ('heart_rate','spo2','temperature','motion','step_increments','respiratory_rate')}
+        for row in rows:
+            kind='step_increments' if row['kind']=='steps' else row['kind']
+            result[kind].append({'t':row['t'],'v':row['value'],'source':row['source'],'segment':row['segment']})
+        return {**result,'window_start':start,'window_end':end,'hours':hours,'source_counts':counts,'chart_reduced':True,'full_samples_preserved':True}
 
     def daily_energy(self,owner,date=None):
         from . import daily
@@ -419,7 +455,7 @@ class HomePulseStore:
             cached=self._energy_cache.get(key)
             if cached and 0<=now-cached[0]<30:return json.loads(_json(cached[1]))
             rows=db.execute("SELECT t,metadata FROM points WHERE owner_id=? AND kind='steps' AND t>? AND t<=? ORDER BY t,id",(owner,start,end+13*60)).fetchall()
-            sessions=db.execute("SELECT * FROM sessions WHERE owner_id=? AND started_at<? AND (ended_at IS NULL OR ended_at>?) AND status!='rejected'",(owner,end,start)).fetchall()
+            sessions=db.execute("SELECT * FROM visible_sessions WHERE owner_id=? AND started_at<? AND (ended_at IS NULL OR ended_at>?) AND status!='rejected'",(owner,end,start)).fetchall()
             intervals=[];steps=0
             for row in rows:
                 meta=json.loads(row['metadata']);mets=meta.get('met_levels',[])
@@ -488,7 +524,7 @@ class HomePulseStore:
         now=time.time();activity=None;workout_end=None;cardio=None;workout_events=[];session=None
         with self.connection() as db:
             if session_id and session_id!='last24h':
-                session=db.execute('SELECT * FROM sessions WHERE owner_id=? AND id=?',(owner,session_id)).fetchone()
+                session=db.execute('SELECT * FROM visible_sessions WHERE owner_id=? AND id=?',(owner,session_id)).fetchone()
                 if not session:raise StoreError('Sessione non trovata')
                 start=session['started_at'];workout_end=session['ended_at'];end=min(now,(workout_end or now)+600);activity=session['activity_name']
                 workout_events=[{'captured_at':r['captured_at'],'sequence':r['sequence'],'payload':json.loads(r['payload'])} for r in db.execute("SELECT captured_at,sequence,payload FROM events WHERE owner_id=? AND kind='workout' AND json_extract(payload,'$.session_id')=? ORDER BY captured_at,sequence,id",(owner,session_id))]
@@ -544,7 +580,7 @@ class HomePulseStore:
             except (ValueError,TypeError,KeyError,UnicodeError):raise StoreError('Cursore campioni non valido') from None
         now=time.time()
         with self.connection() as db:
-            session=db.execute('SELECT started_at,ended_at,activity_name FROM sessions WHERE owner_id=? AND id=?',(owner,session_id)).fetchone()
+            session=db.execute('SELECT started_at,ended_at,activity_name FROM visible_sessions WHERE owner_id=? AND id=?',(owner,session_id)).fetchone()
             if session is None:raise StoreError('Sessione non trovata')
             start=session['started_at']+offset
             end=min(now,(session['ended_at'] or now)+(600 if include_recovery and session['ended_at'] is not None else 0))
@@ -580,10 +616,10 @@ class HomePulseStore:
     def manual_session(self,owner,action,session_id=None,activity_name=None,**extra):
         now=time.time();session_id=session_id or uuid.uuid4().hex
         with self.connection() as db:
-            row=db.execute('SELECT * FROM sessions WHERE owner_id=? AND id=?',(owner,session_id)).fetchone()
+            row=db.execute('SELECT * FROM visible_sessions WHERE owner_id=? AND id=?',(owner,session_id)).fetchone()
             if action!='start' and row is None:raise StoreError('Sessione non trovata')
             if action=='start':
-                active=db.execute("SELECT id FROM sessions WHERE owner_id=? AND status IN ('active','paused')",(owner,)).fetchone()
+                active=db.execute("SELECT id FROM visible_sessions WHERE owner_id=? AND status IN ('active','paused')",(owner,)).fetchone()
                 if active:raise ConflictError('Una sessione è già attiva')
             elapsed=row['active_seconds'] if row else 0
             if row and row['status']=='active':elapsed+=max(0,now-row['last_event_at'])

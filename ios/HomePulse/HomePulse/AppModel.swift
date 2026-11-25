@@ -12,7 +12,7 @@ struct AppArchiveSnapshot:Sendable {
     var pending:Int;var journalCount:Int;var continuousCardio:Bool;var detection:DetectionState;var coordinates:[String:[Double]]
     static func load(_ store:EventStore)->Self{
         let settings=store.load(LocalSettings.self,key:"settings") ?? LocalSettings()
-        let active=store.load(WorkoutSession.self,key:"activeWorkout")
+        let active=store.load(WorkoutSession.self,key:"activeWorkout").flatMap{store.diaryAllows($0) ? $0:nil}
         let coordinate=store.load([Double].self,key:"gymCoordinate.\(settings.auto_detection.gym.id)")
         return Self(settings:settings,current:active.flatMap{["running","paused"].contains($0.state) ? $0:nil},sessions:store.sessions(),readings:store.readings(),metrics:store.metrics(),bootstrap:store.load(JSONValue.self,key:"bootstrap") ?? .null,analysis:store.load(JSONValue.self,key:"analysis.last24h") ?? .null,sleep:store.load(JSONValue.self,key:"sleep.last14d") ?? .null,owner:store.load(String.self,key:"ownerName"),logicalRing:store.load(String.self,key:"logicalRing"),battery:store.load(RingBatterySnapshot.self,key:"ringBattery.latest"),batteryAlert:store.load(BatteryAlertState.self,key:"ringBattery.alert") ?? BatteryAlertState(),fullAlert:store.load(BatteryFullAlertState.self,key:"ringBattery.fullAlert") ?? BatteryFullAlertState(),pending:store.pendingCount,journalCount:store.journalCount,continuousCardio:store.load(Bool.self,key:"cardio.continuous.enabled") ?? true,detection:store.load(DetectionState.self,key:"gymDetection") ?? DetectionState(),coordinates:coordinate.map{[settings.auto_detection.gym.id:$0]} ?? [:])
     }
@@ -62,7 +62,9 @@ struct AppArchiveSnapshot:Sendable {
     private var ticking:Task<Void,Never>?;private var refreshing=false
     private var refreshingArchive=false;private var archiveNeedsMetrics=false;private var lastArchiveRefresh=Date.distantPast
     private let notificationDiagnostics:DiagnosticWriter
+    private let diaryDiagnostics:DiagnosticWriter
     init(store:EventStore,folder:URL,snapshot:AppArchiveSnapshot){
+        diaryDiagnostics=DiagnosticWriter(url:folder.appendingPathComponent("diary-status.json"))
         self.store=store;notificationDiagnostics=DiagnosticWriter(url:folder.appendingPathComponent("notification-status.json"))
         settings=snapshot.settings;persistedSettings=snapshot.settings;continuousCardio=snapshot.continuousCardio
         api=WellnessAPI(store:store,folder:folder.appendingPathComponent("uploads"))
@@ -98,6 +100,11 @@ struct AppArchiveSnapshot:Sendable {
         if current==nil,let id=gym.engine.state.candidateSessionID,let date=gym.engine.state.candidateAt{startWorkout(auto:true,id:id,at:date)}
         ticking=Task{[weak self] in var ticks=0;while !Task.isCancelled{try? await Task.sleep(nanoseconds:1_000_000_000);guard let self else{return};ring.maintenance();recorded.tick();maintainContinuousCardio();refreshArchiveStatus();ticks+=1;if ticks%30==0{await refresh()}}}
         let arguments=ProcessInfo.processInfo.arguments
+        if let i=arguments.firstIndex(of:"--diary-keep-window"),i+3<arguments.count,let start=Double(arguments[i+1]),let end=Double(arguments[i+2]),let cutoff=Double(arguments[i+3]){
+            let rule=DiaryCleanup(retain_start:start,retain_end:end,created_before:cutoff)
+            if rule.valid{Task{do{try await applyDiaryCleanup(rule,pending:true);await refresh()}catch{message=error.localizedDescription}}}
+        }
+
         if let i=arguments.firstIndex(of:"--energy-sex"),i+1<arguments.count,["male","female"].contains(arguments[i+1]){let sex=arguments[i+1];Task{await setEnergySex(sex)}}
         if ProcessInfo.processInfo.arguments.contains("--enable-continuous-cardio"){Task{await setContinuousCardio(true)}}
         if ProcessInfo.processInfo.arguments.contains("--spo2-stop-probe") {
@@ -362,12 +369,49 @@ struct AppArchiveSnapshot:Sendable {
     func refresh()async{
         guard enrolled,!refreshing else{return};refreshing=true;defer{refreshing=false};api.upload()
         do{
+            try await syncDiaryCleanup()
             if settings.dirty{try await pushSettings()}else{try await applyBootstrap(await api.request(path:"mobile/bootstrap"))}
             if let analysis=try? await api.request(path:"mobile/analysis"){
                 try await store.perform{try $0.save(analysis,key:"analysis.last24h")};analysisData=analysis;refreshChartCache()
             }
             syncStatus="Dati FamilOS aggiornati";api.upload()
         }catch{syncStatus="Offline · impostazioni e allenamenti disponibili"}
+    }
+    func applyDiaryCleanup(_ rule:DiaryCleanup,pending:Bool=false)async throws{
+        let value=try await store.perform{store in try store.applyDiaryCleanup(rule,pending:pending);return(store.sessions(),store.load(WorkoutSession.self,key:"activeWorkout"))}
+        diaryDiagnostics.submit(.object(["at":.number(Date().timeIntervalSince1970),"cleanup_applied":.bool(true),"visible_sessions":.number(Double(value.0.count)),"all_visible_sessions_allowed":.bool(value.0.allSatisfy{rule.allows($0)}),"retained_window_sessions":.number(Double(value.0.filter{$0.startedAt.timeIntervalSince1970<=rule.retain_end && ($0.endedAt?.timeIntervalSince1970 ?? $0.startedAt.timeIntervalSince1970+$0.accumulated)>=rule.retain_start}.count)),"sensor_data_preserved":.bool(true)]))
+        sessions=value.0;if let current,!rule.allows(current){self.current=nil;gym.resolve()};if current==nil{current=value.1}
+        var data=serverData.object;data["sessions"] = .array(serverData["sessions"].array.filter{item in SessionReconciliation.decode(item,receivedAt:Date()).map{rule.allows($0)} ?? false});serverData = .object(data)
+    }
+    private func syncDiaryCleanup()async throws{
+        guard let rule=try await store.perform({$0.load(DiaryCleanup.self,key:"diary.cleanup.pending")}) else{return}
+        do{_ = try await api.request(path:"mobile/diary/cleanup",method:"POST",body:try JSONValue.encoded(rule));try await store.perform{try $0.save(Optional<DiaryCleanup>.none,key:"diary.cleanup.pending")}}
+        catch{ /* Keep the request durable while the server update is pending. */ }
+    }
+    func diaryAnalysis(hours:Int)async->JSONValue{
+        let key="diary.\(hours)h",end=Date(),start=Date().addingTimeInterval(-Double(hours)*3600)
+        if enrolled,let value=try? await api.request(path:"mobile/diary",query:[URLQueryItem(name:"hours",value:String(hours))]){
+            try? await store.perform{try $0.save(value,key:key)};return value
+        }
+        return (try? await store.perform{store in
+            let local=store.diaryLocal(start:start,end:end)
+            let cached=store.load(JSONValue.self,key:key) ?? store.load(JSONValue.self,key:"analysis.last24h") ?? .null
+            var value=cached.object
+            for metric in ["heart_rate","spo2","temperature","respiratory_rate","motion","step_increments"]{
+                var points=ChartSeries.decode(cached[metric]).filter{$0.date>=start && $0.date<=end}
+                if metric=="heart_rate"{points += ChartSeries.decode(local[metric])}
+                var unique:[Date:ChartPoint]=[:];for point in points{unique[point.date]=point}
+                let bounded=ChartSeries.bound(unique.values.sorted{$0.date<$1.date})
+                value[metric] = .array(bounded.map{.object(["t":.number($0.date.timeIntervalSince1970),"v":.number($0.value),"segment":.number(Double($0.segment ?? 0))])})
+            }
+            value["window_start"] = .number(start.timeIntervalSince1970);value["window_end"] = .number(end.timeIntervalSince1970)
+            value["offline"] = .bool(true);return .object(value)
+        }) ?? .null
+    }
+    func workoutAnalysis(_ session:WorkoutSession)async->JSONValue{
+        let remote=await sessionAnalysis(session.remoteID ?? session.id.uuidString)
+        if remote != .null{return remote}
+        return (try? await store.perform{$0.diaryLocal(start:session.startedAt,end:session.endedAt ?? Date())}) ?? .null
     }
     func refreshSleep()async{
         guard enrolled,!refreshingSleep else{return};refreshingSleep=true;defer{refreshingSleep=false}
@@ -380,6 +424,8 @@ struct AppArchiveSnapshot:Sendable {
         return settings.profile != saved.profile || settings.config != saved.config || settings.weekly_schedule != saved.weekly_schedule || settings.auto_detection != saved.auto_detection
     }
     func applyBootstrap(_ response:JSONValue)async throws{
+        for value in response["diary_cleanups"].array{if let rule=decode(DiaryCleanup.self,value),rule.valid{try await applyDiaryCleanup(rule)}}
+
         if let binding=decode(RingBinding.self,response["ring_binding"]){
             if let hex=binding.owner_key_hex,let key=Data(hex:hex),key.count==16{try SecureStore.write(key,key:"ring.\(binding.logical_ring_id)")}
             try await store.perform{try $0.save(binding.logical_ring_id,key:"logicalRing")};ring.configure(logicalRing:binding.logical_ring_id)
@@ -396,8 +442,9 @@ struct AppArchiveSnapshot:Sendable {
         if !catalog.isEmpty{allowedActivities=catalog}
         if !changingWorkout{
             let revision=workoutRevision
-            let imported=response["sessions"].array.compactMap{SessionReconciliation.decode($0,receivedAt:Date())}
-            let active=SessionReconciliation.decode(response["active_session"],receivedAt:Date())
+            let rules=try await store.perform{$0.load([DiaryCleanup].self,key:"diary.cleanups") ?? []}
+            let imported=response["sessions"].array.compactMap{SessionReconciliation.decode($0,receivedAt:Date())}.filter{session in rules.allSatisfy{$0.allows(session)}}
+            let active=SessionReconciliation.decode(response["active_session"],receivedAt:Date()).flatMap{session in rules.allSatisfy{$0.allows(session)} ? session:nil}
             let matching=current.flatMap{local in imported.first{$0.id==local.id}}
             // Un’assenza non equivale a una conclusione: serve uno stato esplicito.
             let next=active ?? (matching != nil ? nil:current)
@@ -406,6 +453,8 @@ struct AppArchiveSnapshot:Sendable {
             if archive.0,!changingWorkout,revision==workoutRevision{current=next;sessions=archive.1;if wasActive,next==nil{gym.resolve()}}
         }
         var safe=response.object;safe.removeValue(forKey:"ring_binding");safe.removeValue(forKey:"access_token");safe.removeValue(forKey:"device_id")
+        let diaryRules=try await store.perform{$0.load([DiaryCleanup].self,key:"diary.cleanups") ?? []}
+        if !diaryRules.isEmpty{safe["sessions"] = .array(response["sessions"].array.filter{value in SessionReconciliation.decode(value,receivedAt:Date()).map{session in diaryRules.allSatisfy{$0.allows(session)}} ?? false})}
         let bootstrap=JSONValue.object(safe);try await store.perform{try $0.save(bootstrap,key:"bootstrap")};serverData=bootstrap;recorded.observeServer(bootstrap["recorded_cardio"]);refreshChartCache()
     }
     private func refreshChartCache(){
@@ -426,12 +475,20 @@ struct AppArchiveSnapshot:Sendable {
     }
 
 }
-struct ChartPoint:Identifiable,Sendable {var date:Date;var value:Double;var id:String{"\(date.timeIntervalSince1970.bitPattern)-\(value.bitPattern)"}}
+struct ChartPoint:Identifiable,Sendable {var date:Date;var value:Double;var segment:Int?=nil;var id:String{"\(date.timeIntervalSince1970.bitPattern)-\(value.bitPattern)"}}
 enum ChartSeries {
-    static func decode(_ value:JSONValue)->[ChartPoint]{value.array.compactMap{v in guard let t=v["t"].number,let value=v["v"].number,t.isFinite,value.isFinite else{return nil};return ChartPoint(date:Date(timeIntervalSince1970:t),value:value)}}
+    static func decode(_ value:JSONValue)->[ChartPoint]{
+        let points:[ChartPoint]=value.array.compactMap{v in guard let t=v["t"].number,let number=v["v"].number,t.isFinite,number.isFinite else{return nil};return ChartPoint(date:Date(timeIntervalSince1970:t),value:number,segment:v["segment"].number.map{Int($0)})}
+        var previous:Date?;var segment=0
+        return points.sorted{$0.date<$1.date}.map{point in
+            var point=point
+            if point.segment==nil{if let previous,point.date.timeIntervalSince(previous)>8{segment+=1};point.segment=segment}
+            previous=point.date;return point
+        }
+    }
     static func build(analysis:JSONValue,bootstrap:JSONValue)->[String:[ChartPoint]]{
         var result:[String:[ChartPoint]]=[:]
-        for metric in ["heart_rate","temperature","spo2","respiratory_rate"]{
+        for metric in ["heart_rate","temperature","spo2","respiratory_rate","motion","step_increments"]{
             var points=decode(analysis[metric]);let latest=bootstrap["latest"][metric]
             if let time=latest["captured_at"].number,let value=latest["value"].number,time.isFinite,value.isFinite,!points.contains(where:{$0.date.timeIntervalSince1970==time}){points.append(ChartPoint(date:Date(timeIntervalSince1970:time),value:value))}
             result[metric]=bound(points.sorted{$0.date<$1.date})

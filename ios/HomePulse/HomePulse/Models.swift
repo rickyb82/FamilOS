@@ -176,6 +176,20 @@ struct WorkoutSession: Codable, Identifiable, Sendable {
     var auto_detected=false;var provisional=false;var source:String="manual";var remoteID:String?
     func elapsed(at now:Date=Date())->Double { max(0,accumulated+(runningSince.map{max(0,now.timeIntervalSince($0))} ?? 0)) }
 }
+enum DiaryRange:Int,CaseIterable,Identifiable,Sendable {
+    case two=2,four=4,eight=8,day=24,twoDays=48,week=168
+    var id:Int{rawValue}
+    var label:String{switch self{case .twoDays:return "2 giorni";case .week:return "7 giorni";default:return "\(rawValue) ore"}}
+}
+struct DiaryCleanup:Codable,Equatable,Sendable {
+    var retain_start:Double;var retain_end:Double;var created_before:Double
+    var valid:Bool{retain_start.isFinite && retain_end.isFinite && created_before.isFinite && retain_start>0 && retain_start<retain_end && retain_end<=created_before}
+    func allows(_ session:WorkoutSession)->Bool{
+        let start=session.startedAt.timeIntervalSince1970
+        let end=session.endedAt?.timeIntervalSince1970 ?? start+session.accumulated
+        return start>created_before || (start<=retain_end && end>=retain_start)
+    }
+}
 struct Reading: Identifiable, Codable, Sendable { var id=UUID(); var date:Date; var bpm:Int; var segment:Int? }
 struct StoredEvent: Codable, Identifiable, Sendable {
     var event_id:String; var sequence:Int64; var captured_at:Double; var kind:String; var payload:JSONValue
