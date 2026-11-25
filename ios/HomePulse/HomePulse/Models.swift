@@ -193,14 +193,14 @@ struct HistoricalMetrics:Sendable {var temperatureC:Double?;var receivedAt:Date?
 struct SleepPeriod:Identifiable,Sendable {
     var id:String;var start:Date;var end:Date;var zoneMinutes:Int;var timeInBed:Double
     var total:Double?;var stages:[String:Double];var latency:Double?;var efficiency:Double?
-    var phases:String?;var phaseStep:Int
+    var phases:String?;var phaseStep:Int;var spo2:JSONValue
     init?(_ value:JSONValue){
         guard let id=value["id"].string,let start=value["started_at"].number,let end=value["ended_at"].number,start.isFinite,end.isFinite,end>start,
               let time=value["time_in_bed_seconds"].number,time.isFinite,time>=0 else{return nil}
         self.id=id;self.start=Date(timeIntervalSince1970:start);self.end=Date(timeIntervalSince1970:end)
         zoneMinutes=Int(value["time_zone_minutes"].number ?? 0);timeInBed=time
         total=value["total_sleep_seconds"].number;latency=value["latency_seconds"].number;efficiency=value["efficiency"].number
-        stages=value["stage_seconds"].object.compactMapValues{$0.number}
+        stages=value["stage_seconds"].object.compactMapValues{$0.number};spo2=value["spo2"]
         if let raw=value["phases_30_seconds"].string,!raw.isEmpty{phases=raw;phaseStep=30}
         else if let raw=value["phases_5_minutes"].string,!raw.isEmpty{phases=raw;phaseStep=300}
         else{phases=nil;phaseStep=0}

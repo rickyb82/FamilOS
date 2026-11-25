@@ -146,3 +146,13 @@ it('handles unavailable routes and can retry a temporary error', async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Riprova' }))
   expect(await screen.findByText('7 h 30 min')).toBeTruthy()
 })
+
+
+it('shows the selected sleep SpO2 aggregate, not the current pulse or an invented zero', async () => {
+  const spo2 = {average:97.5,display_percentage:98,minimum:96,maximum:99,sample_count:2,catalog_count:3,quality_one_count:1,excluded_range_count:1,started_at:start,ended_at:start+28800,quality_prefilter_applied:false,bias_correction_applied:false,live:false} as const
+  vi.mocked(wellness.sleep).mockResolvedValue(response([period({spo2})]))
+  render(<SleepPanel />)
+  const card=await screen.findByRole('region',{name:'SpO₂ durante il sonno'})
+  expect(within(card).getByText('98%')).toBeTruthy()
+  expect(within(card).getByText('2 campioni · minimo 96% · massimo 99%')).toBeTruthy()
+})

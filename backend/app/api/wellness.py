@@ -207,6 +207,7 @@ async def process_history_once():
     """Worker receives sensor records only, never user profiles or credentials."""
     from ..services.homepulse.module import enabled
     if not enabled():return
+    await asyncio.to_thread(store().backfill_spo2_catalog)
     url=os.getenv('HOME_PULSE_CORE_URL','http://homepulse-core:8081').rstrip('/')
     for owner in await asyncio.to_thread(store().pending_owners):
         records=await asyncio.to_thread(store().historical_records,owner)

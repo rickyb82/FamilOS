@@ -29,7 +29,7 @@ from .motion import parse_motion_record, parse_activity_record
 from .breathing import decode_breathing_record
 from .workout import validate_profile, validate_plan, composition, schedule, energy_for_interval
 from .sleep import normalize_period, merge_period, verified_run, MAX_PERIODS_PER_RUN, NATIVE_ABI
-from . import recorded
+from . import recorded, spo2
 
 
 class StoreError(ValueError):
@@ -174,6 +174,8 @@ class HomePulseStore:
             CREATE TABLE IF NOT EXISTS processing(owner_id TEXT PRIMARY KEY,history_count INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL,last_processed_at REAL,error TEXT);
             CREATE TABLE IF NOT EXISTS processing_features(owner_id TEXT NOT NULL,feature TEXT NOT NULL,PRIMARY KEY(owner_id,feature));
             CREATE TABLE IF NOT EXISTS native_runs(id INTEGER PRIMARY KEY,owner_id TEXT NOT NULL,created_at REAL NOT NULL,source_input_sha256 TEXT,result TEXT NOT NULL,result_sha256 TEXT NOT NULL,UNIQUE(owner_id,result_sha256));
+            CREATE TABLE IF NOT EXISTS spo2_catalog(owner_id TEXT NOT NULL,utc_ms INTEGER NOT NULL,value INTEGER NOT NULL,quality REAL NOT NULL,timezone_raw INTEGER,native_run_id INTEGER NOT NULL,PRIMARY KEY(owner_id,utc_ms));
+            CREATE TABLE IF NOT EXISTS spo2_catalog_runs(run_id INTEGER PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS sleep_periods(owner_id TEXT NOT NULL,started_at REAL NOT NULL,ended_at REAL NOT NULL,id TEXT NOT NULL,period TEXT NOT NULL,native_result_sha256 TEXT NOT NULL,updated_at REAL NOT NULL,PRIMARY KEY(owner_id,started_at));
             CREATE INDEX IF NOT EXISTS sleep_owner_window ON sleep_periods(owner_id,ended_at,started_at);
             CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events BEGIN SELECT RAISE(ABORT,'events are append-only'); END;
@@ -403,6 +405,7 @@ class HomePulseStore:
                            'processing_status':processing['status'] if processing else 'In attesa di record storici',
                            'processing_error':processing['error'] if processing else None},
                 'daily_energy':self.daily_energy(owner),
+                'spo2_catalog':self.spo2_summary(owner),
                 'ring_binding':self.ring(owner,secret=False)}
 
     def daily_energy(self,owner,date=None):
@@ -445,10 +448,41 @@ class HomePulseStore:
             periods=[json.loads(row['period']) for row in db.execute(
                 'SELECT period FROM sleep_periods WHERE owner_id=? AND ended_at>=? AND started_at<=? ORDER BY started_at DESC',
                 (owner,start,now))]
+            for period in periods:
+                period['spo2']=spo2.aggregate(db,owner,period['started_at'],period['ended_at'])
             processing=db.execute('SELECT status,last_processed_at FROM processing WHERE owner_id=?',(owner,)).fetchone()
         return {'server_time':now,'window_start':start,'window_end':now,'periods':periods,
                 'processing_status':processing['status'] if processing else 'In attesa di record storici',
                 'last_processed_at':processing['last_processed_at'] if processing else None}
+
+    def backfill_spo2_catalog(self,limit=2):
+        """Bounded background migration, using saved outputs without RF/redecode."""
+        with self.connection() as db:
+            rows=db.execute('SELECT id,owner_id,result FROM native_runs WHERE id NOT IN (SELECT run_id FROM spo2_catalog_runs) ORDER BY id DESC LIMIT ?', (limit,)).fetchall()
+        for row in rows:
+            result=json.loads(row['result'])
+            with self.connection(True) as db:
+                spo2.capture(db,row['owner_id'],row['id'],result)
+                db.execute('INSERT OR IGNORE INTO spo2_catalog_runs VALUES(?)',(row['id'],))
+        return len(rows)
+
+    def spo2_summary(self,owner):
+        with self.connection() as db:
+            count=db.execute('SELECT count(*) FROM spo2_catalog WHERE owner_id=?',(owner,)).fetchone()[0]
+            recent=[dict(row) for row in db.execute('SELECT utc_ms,value,quality,timezone_raw FROM spo2_catalog WHERE owner_id=? ORDER BY utc_ms DESC LIMIT 10',(owner,))]
+            # Per-period aggregates are explicit until native sleep selection is
+            # available; do not manufacture a night from arbitrary daytime data.
+            periods=db.execute('SELECT period FROM sleep_periods WHERE owner_id=? ORDER BY ended_at DESC LIMIT 1',(owner,)).fetchall()
+            nightly=[]
+            for row in periods:
+                period=json.loads(row['period'])
+                aggregate=spo2.aggregate(db,owner,period['started_at'],period['ended_at'])
+                if aggregate['sample_count']:
+                    aggregate['sleep_id']=period['id'];nightly.append(aggregate)
+            return {'sample_count':count,'recent_native_outputs':recent,
+                    'latest_sleep':nightly[0] if nightly else None,
+                    'selection_policy':'latest native sleep period; not Oura DbSleep.day selection',
+                    'native_quality_preserved':True,'live':False}
 
     def analysis(self,owner,session_id=None,start=None,end=None):
         now=time.time();activity=None;workout_end=None;cardio=None;workout_events=[];session=None
@@ -491,7 +525,7 @@ class HomePulseStore:
         model revisions can replace points while paging. Callers are told this
         explicitly and must re-read after final processing when needed.
         """
-        units={'heart_rate':'BPM','spo2':'%','temperature':'°C','motion':'s','step_increments':'steps','respiratory_rate':'breaths/min'}
+        units={'heart_rate':'BPM','spo2_native':'%','spo2':'%','temperature':'°C','motion':'s','step_increments':'steps','respiratory_rate':'breaths/min'}
         if metric not in units or type(limit) is not int or not 1<=limit<=1000 or type(include_recovery) is not bool:
             raise StoreError('Parametri campioni non validi')
         _identity(session_id)
@@ -519,15 +553,20 @@ class HomePulseStore:
             kind='steps' if metric=='step_increments' else metric
             args=[owner,kind,start,end]
             where='owner_id=? AND kind=? AND t>=? AND t<=?'
-            summary=db.execute('SELECT count(*),min(value),max(value),avg(value) FROM points WHERE '+where,args).fetchone()
+            table='points'
+            if metric=='spo2_native':
+                # Trusted native type6 outputs, including quality0/out-of-range.
+                # UTC milliseconds uniquely identify this owner's catalog sample.
+                table="(SELECT utc_ms AS id,owner_id,'spo2_native' AS kind,utc_ms/1000.0 AS t,value,'oura-ecore-native-catalog' AS source,quality,'{\"native_catalog\":true,\"quality_filtered\":false}' AS metadata FROM spo2_catalog)"
+            summary=db.execute('SELECT count(*),min(value),max(value),avg(value) FROM '+table+' WHERE '+where,args).fetchone()
             if after is not None:where+=' AND (t>? OR (t=? AND id>?))';args += [after[0],after[0],after[1]]
-            rows=db.execute('SELECT id,t,value,source,quality,metadata FROM points WHERE '+where+' ORDER BY t,id LIMIT ?',args+[limit+1]).fetchall()
+            rows=db.execute('SELECT id,t,value,source,quality,metadata FROM '+table+' WHERE '+where+' ORDER BY t,id LIMIT ?',args+[limit+1]).fetchall()
         more=len(rows)>limit;rows=rows[:limit];points=[]
         for row in rows:
             meta=json.loads(row['metadata'])
             points.append({'t':row['t'],'captured_at':datetime.fromtimestamp(row['t'],timezone.utc).isoformat(),
                 'elapsed_seconds':row['t']-session['started_at'],'v':row['value'],'source':row['source'],'quality':row['quality'],
-                **{k:meta[k] for k in ('warnings','flags_raw','model','interpolated','experimental','provisional','revision','signal_quality','signal_check') if k in meta}})
+                **{k:meta[k] for k in ('warnings','flags_raw','model','interpolated','experimental','provisional','revision','signal_quality','signal_check','native_catalog','quality_filtered') if k in meta}})
         next_cursor=None
         if more:
             last=rows[-1];next_cursor=base64.urlsafe_b64encode(_json({'scope':scope,'t':last['t'],'id':last['id'],'end':end}).encode()).decode()
@@ -596,6 +635,9 @@ class HomePulseStore:
                     if previous:period=merge_period(json.loads(previous['period']),period)
                     db.execute('INSERT INTO sleep_periods VALUES(?,?,?,?,?,?,?) ON CONFLICT(owner_id,started_at) DO UPDATE SET ended_at=excluded.ended_at,period=excluded.period,native_result_sha256=excluded.native_result_sha256,updated_at=excluded.updated_at',
                                (owner,period['started_at'],period['ended_at'],period['id'],_json(period),result_digest,time.time()))
+            run_id=db.execute('SELECT id FROM native_runs WHERE owner_id=? AND result_sha256=?',(owner,result_digest)).fetchone()[0]
+            spo2.capture(db,owner,run_id,result)
+            db.execute('INSERT OR IGNORE INTO spo2_catalog_runs VALUES(?)',(run_id,))
             for row in result.get('spo2_outputs',[]):
                 value,quality,stamp=row.get('average_raw'),row.get('quality_raw'),row.get('timestamp_utc_ms_native')
                 # Original averages are retained, including those failing our display gate.

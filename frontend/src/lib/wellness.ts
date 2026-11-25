@@ -23,7 +23,10 @@ export type WellnessSession = {
 }
 export type BridgeDevice = { id: string; name: string; last_seen_at?: WellnessDate | null; revoked?: boolean; queue?: number | Record<string, unknown> }
 export type DailyEnergy = {date:string; base_kcal:number|null; active_kcal:number|null; total_kcal:number|null; base_kcal_range:{min:number|null;max:number|null};total_kcal_range:{min:number|null;max:number|null};estimated_activity_seconds:number;unestimated_activity_seconds:number;coverage_fraction:number|null;rest_method:string|null;activity_sources:string[];warnings:string[];updated_at:number}
+export type SpO2Aggregate = { average:number|null;display_percentage:number|null;minimum:number|null;maximum:number|null;sample_count:number;catalog_count:number;quality_one_count:number;excluded_range_count:number;started_at:number;ended_at:number;quality_prefilter_applied:false;bias_correction_applied:false;live:false }
+export type SpO2Catalog = {sample_count:number;recent_native_outputs:Array<{utc_ms:number;value:number;quality:number}>;latest_sleep:SpO2Aggregate|null;native_quality_preserved:boolean;live:false}
 export type WellnessState = {
+  spo2_catalog?: SpO2Catalog
   daily_energy?: DailyEnergy
   server_time: WellnessDate; settings: WellnessSettings
   latest: {
@@ -59,6 +62,7 @@ export type SleepPeriod = {
   total_sleep_seconds: number | null; stage_seconds: { awake: number; rem: number; light: number; deep: number } | null
   latency_seconds: number | null; efficiency: number | null
   phases_30_seconds: string | null; phases_5_minutes: string | null
+  spo2?: SpO2Aggregate
   source: 'oura-ecore'; native_version: [number, number, number]
 }
 export type WellnessSleep = {

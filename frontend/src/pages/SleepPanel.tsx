@@ -103,6 +103,11 @@ export default memo(function SleepPanel({ demo = false, visible = true }: { demo
           <div className="wl-sleep-totals"><div><span>Tempo a letto</span><strong>{sleepDuration(period.time_in_bed_seconds)}</strong></div><div><span>Sonno totale</span><strong>{sleepDuration(period.total_sleep_seconds)}</strong>{period.total_sleep_seconds == null && <small>Riepilogo non disponibile</small>}</div></div>
         </section>
         <section className="wl-sleep-stages" aria-label="Durate delle fasi">{STAGES.map(stage => <div className="wl-card" key={stage.key}><span><i style={{ background: stage.color }} />{stage.label}</span><strong>{sleepDuration(period.stage_seconds?.[stage.key])}</strong><small>Durata nel riepilogo del periodo</small></div>)}</section>
+        <section className="wl-card" aria-label="SpO₂ durante il sonno"><h2>SpO₂ · media sonno</h2>
+          <strong>{period.spo2?.display_percentage == null ? '—' : `${period.spo2.display_percentage}%`}</strong>
+          {period.spo2?.sample_count ? <p>{period.spo2.sample_count} campioni · minimo {period.spo2.minimum}% · massimo {period.spo2.maximum}%</p> : <p>Nessun campione SpO₂ elaborato in questo periodo.</p>}
+          <p className="wl-note">Media dei campioni nel periodo di sonno. La data si riferisce al sonno selezionato.</p>
+        </section>
         <SleepPhases key={period.id} period={period} />
         <div className="wl-sleep-foot"><span>Latenza <strong>{sleepDuration(period.latency_seconds)}</strong></span><span>Efficienza <strong>{period.efficiency == null ? '—' : `${valueLabel(period.efficiency)}%`}</strong></span><span>{data?.last_processed_at != null ? `Ultima elaborazione ${dateLabel(data.last_processed_at)} · ${timeLabel(data.last_processed_at)}` : 'Elaborazione in attesa'}</span></div>
       </>}

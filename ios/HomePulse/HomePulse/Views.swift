@@ -93,8 +93,12 @@ struct HomeView:View {
                 if let point=values.last{Text(point.value,format:.number.precision(.fractionLength(2)))+Text(" °C");Text(point.date,style:.relative).font(.caption).foregroundStyle(.secondary)}
                 else if let value=model.metrics.temperatureC{Text(String(format:"%.2f °C",value)).font(.title2.bold());Text("Sensore 1 · storico\nOra anello non risolta").font(.caption).foregroundStyle(.secondary)}else{Text("—").font(.largeTitle);Text("In attesa dello storico").font(.caption)}
             }
-            Card(title:"SpO₂ · ultima misura"){
-                if let point=model.serverPoints("spo2").last{Text(String(format:"%.0f %%",point.value)).font(.title2.bold());Text("Misurata il \(point.date.formatted(.dateTime.day().month().hour().minute()))").font(.caption).foregroundStyle(.secondary)}else{Text("—").font(.largeTitle);Text("Elaborazione sul server\nNessuna stima dal battito").font(.caption).foregroundStyle(.secondary)}
+            Card(title:model.serverData["spo2_catalog"]["latest_sleep"]["display_percentage"].number == nil ? "SpO₂ · ultima misura":"SpO₂ · media sonno"){
+                let summary=model.serverData["spo2_catalog"]["latest_sleep"]
+                if let average=summary["display_percentage"].number,let end=summary["ended_at"].number{
+                    Text(String(format:"%.0f %%",average)).font(.title2.bold())
+                    Text("Sonno del \(Date(timeIntervalSince1970:end).formatted(.dateTime.day().month()))").font(.caption).foregroundStyle(.secondary)
+                }else if let point=model.serverPoints("spo2").last{Text(String(format:"%.0f %%",point.value)).font(.title2.bold());Text("Misurata il \(point.date.formatted(.dateTime.day().month().hour().minute()))").font(.caption).foregroundStyle(.secondary)}else{Text("—").font(.largeTitle);Text("In attesa di campioni elaborati").font(.caption).foregroundStyle(.secondary)}
             }
         }
         Card(title:"Respirazione storica"){
@@ -278,6 +282,12 @@ struct SleepView:View {
                 HStack{sleepMetric("Sonno totale",period.total);Spacer();sleepMetric("A letto",period.timeInBed)}
                 if let efficiency=period.efficiency{Text("Efficienza \(efficiency,specifier:"%.0f")%").font(.subheadline).foregroundStyle(.secondary)}
                 if let latency=period.latency{Text("Addormentamento: \(latency.durationText)").font(.subheadline).foregroundStyle(.secondary)}
+            }
+            Card(title:"SpO₂ · media sonno"){
+                if let average=period.spo2["display_percentage"].number{
+                    Text(String(format:"%.0f %%",average)).font(.title2.bold())
+                    Text("\(Int(period.spo2["sample_count"].number ?? 0)) campioni · minimo \(Int(period.spo2["minimum"].number ?? 0))% · massimo \(Int(period.spo2["maximum"].number ?? 0))%").font(.caption).foregroundStyle(.secondary)
+                }else{Text("—").font(.title2);Text("Nessun campione SpO₂ elaborato in questo periodo.").font(.caption).foregroundStyle(.secondary)}
             }
             if !period.stages.isEmpty{Card(title:"Fasi del sonno"){
                 ForEach([("awake","Sveglio"),("rem","REM"),("light","Leggero"),("deep","Profondo")],id:\.0){key,name in

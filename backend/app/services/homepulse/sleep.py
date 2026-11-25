@@ -41,6 +41,9 @@ def normalize_period(owner, row, now):
     zone = _number(row.get('bedtime_start_time_zone_minutes'), -1440, 1440)
     if zone != int(zone):
         raise ValueError('Invalid native sleep timezone')
+    end_zone = _number(row.get('bedtime_end_time_zone_minutes', zone), -1440, 1440)
+    if end_zone != int(end_zone):
+        raise ValueError('Invalid native sleep timezone')
     summary = row.get('summary2')
     if summary is not None and not isinstance(summary, dict):
         raise ValueError('Invalid native sleep summary')
@@ -54,7 +57,7 @@ def normalize_period(owner, row, now):
             raise ValueError('Invalid native wake count')
     identity = hashlib.sha256((str(owner) + '\0' + str(int(start))).encode()).hexdigest()[:32]
     return {'id': 'sleep-' + identity, 'started_at': start, 'ended_at': end,
-            'time_zone_minutes': int(zone), 'time_in_bed_seconds': duration,
+            'time_zone_minutes': int(zone), 'end_time_zone_minutes': int(end_zone), 'time_in_bed_seconds': duration,
             'total_sleep_seconds': _optional_number(summary.get('total_sleep_seconds'), duration),
             'stage_seconds': stages if all(value is not None for value in stages.values()) else None,
             'latency_seconds': _optional_number(summary.get('latency_seconds'), duration),

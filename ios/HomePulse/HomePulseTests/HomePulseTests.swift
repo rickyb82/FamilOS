@@ -303,6 +303,11 @@ final class HomePulseTests:XCTestCase {
         await api.stopForTesting()
         XCTAssertEqual(counts,[1000,1000,1]);XCTAssertEqual(seen.count,2001);XCTAssertEqual(store.pendingCount,0);XCTAssertEqual(store.journalCount,2001)
     }
+    func testSleepSpO2IsBoundToItsNativePeriod(){
+        let value:JSONValue = .object(["id":.string("synthetic-spo2-sleep"),"started_at":.number(1000),"ended_at":.number(4600),"time_in_bed_seconds":.number(3600),"spo2":.object(["display_percentage":.number(98),"sample_count":.number(2),"live":.bool(false)])])
+        XCTAssertEqual(SleepPeriod(value)?.spo2["display_percentage"].number,98)
+        XCTAssertEqual(SleepPeriod(value)?.spo2["sample_count"].number,2)
+    }
     func testSleepPreservesNativeSummaryAndPartialRelativeSequence(){
         let period=SleepPeriod(.object(["id":.string("synthetic-sleep"),"started_at":.number(1000),"ended_at":.number(4600),"time_in_bed_seconds":.number(3600),"total_sleep_seconds":.number(3000),"stage_seconds":.object(["deep":.number(600)]),"phases_30_seconds":.string("11234")]))
         XCTAssertEqual(period?.total,3000);XCTAssertEqual(period?.stages["deep"],600)
