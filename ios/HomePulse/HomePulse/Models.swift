@@ -92,9 +92,10 @@ enum JSONValue: Codable, Equatable, Sendable {
 struct BodyProfile: Codable, Equatable, Sendable {
     var weight_kg: Double?; var body_fat_pct: Double?; var height_cm: Double?; var age: Int?
     var reported_lean_pct: Double?; var reported_retention_pct: Double?
-    var goal: String?; var composition_source: String?; var resting_hr: Int?
+    var goal: String?; var composition_source: String?; var resting_hr: Int?; var energy_sex:String?
     init() {}
     func validate() throws {
+        if let energy_sex, !["male","female"].contains(energy_sex){throw AppError.message("Parametro energetico non valido")}
         for (value, low, high) in [(weight_kg,30.0,350.0),(body_fat_pct,2,65),(height_cm,100,250),
                                    (reported_lean_pct,2,98),(reported_retention_pct,0,100)] {
             if let value, !value.isFinite || value < low || value > high { throw AppError.message("Valore del profilo fuori intervallo") }
@@ -175,7 +176,7 @@ struct WorkoutSession: Codable, Identifiable, Sendable {
     var auto_detected=false;var provisional=false;var source:String="manual";var remoteID:String?
     func elapsed(at now:Date=Date())->Double { max(0,accumulated+(runningSince.map{max(0,now.timeIntervalSince($0))} ?? 0)) }
 }
-struct Reading: Identifiable, Codable, Sendable { var id=UUID(); var date:Date; var bpm:Int }
+struct Reading: Identifiable, Codable, Sendable { var id=UUID(); var date:Date; var bpm:Int; var segment:Int? }
 struct StoredEvent: Codable, Identifiable, Sendable {
     var event_id:String; var sequence:Int64; var captured_at:Double; var kind:String; var payload:JSONValue
     var id:String {event_id}
@@ -288,4 +289,32 @@ struct HeartDisplayState {
         let age=date.timeIntervalSince(capturedAt);return age>=0 && age<=8
     }
     func ageSeconds(at date:Date)->Int? {capturedAt.map{max(0,Int(date.timeIntervalSince($0)))}}
+}
+
+/// A display-only rolling mean. Missing or repeated timestamps never count.
+struct FiveReadingAverage {
+    private var window:[Reading]=[]
+    mutating func accept(_ reading:Reading)->Int? {
+        if let last=window.last {
+            guard reading.date>last.date else{return nil}
+            if reading.date.timeIntervalSince(last.date)>8{window=[]}
+        }
+        window.append(reading);if window.count>5{window.removeFirst()}
+        guard window.count==5 else{return nil}
+        return Int((Double(window.reduce(0){$0+$1.bpm})/5).rounded())
+    }
+    static func series(_ readings:[Reading])->[Reading]{
+        var average=Self()
+        return readings.compactMap{p in average.accept(p).map{Reading(id:p.id,date:p.date,bpm:$0)}}
+    }
+}
+
+enum ContinuousCardioPolicy {
+    static let segmentSeconds:TimeInterval=3600
+    static func needsRotation(_ result:RecordedResult?,at date:Date)->Bool{
+        guard let result,!result.final,result.availableUntil-result.startedAt>=segmentSeconds else{return false}
+        // Do not restart on old data or treat absence of HR as removal.
+        let age=date.timeIntervalSince1970-result.availableUntil
+        return age>=0 && age<90 && result.latest != nil
+    }
 }

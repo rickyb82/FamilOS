@@ -37,7 +37,7 @@ settings = get_settings()
 MAX_TOOL_ROUNDS = max(1, int(getattr(settings, "max_tool_rounds", 500) or 500))
 TOOL_RESULT_CHARS = 50_000   # un risultato oltre questa lunghezza viene tagliato, con un avviso al modello
 KEEP_RECENT_RESULTS = 2      # i risultati degli ultimi giri restano sempre interi
-LOCAL_TOOLS = {"allenamento_stato", "allenamento_scheda", "allenamento_analisi", "allenamento_controlla", "create_artifact", "update_artifact", "list_artifacts", "delete_artifact", "search_documents", "read_document", "ask_model", "remember", "forget"}
+LOCAL_TOOLS = {"allenamento_stato", "allenamento_scheda", "allenamento_analisi", "allenamento_campioni", "allenamento_grafico", "allenamento_energia", "allenamento_controlla", "create_artifact", "update_artifact", "list_artifacts", "delete_artifact", "search_documents", "read_document", "ask_model", "remember", "forget"}
 INLINE_DOC_CHARS = settings.rag_inline_max_chars
 
 
@@ -518,7 +518,7 @@ async def run_turn(db: AsyncSession, user: User, conv: Conversation, text: str |
 
     system = await build_system_prompt(user, conv, db)
     if any(t.name.startswith("allenamento_") for t in tools):
-        system += "\nAllenamento: usa allenamento_stato/analisi per i dati personali e allenamento_scheda/controlla solo per modifiche richieste. Le fasce BPM sono scelte dall’utente, mai dedotte automaticamente dall’età. I tempi senza misure non appartengono a nessuna fascia. Non salvare dati di salute nella memoria di famiglia."
+        system += "\nAllenamento: usa allenamento_stato/analisi per riepiloghi e fasce. Quando l’utente chiede un grafico usa allenamento_grafico per mostrarlo nella chat; non limitarti a descriverlo. Per le calorie giornaliere usa allenamento_energia e riferisci metodo e copertura. Per punti intermedi, valori a un minuto preciso o confronti tra intervalli usa allenamento_campioni con la metrica e gli offset richiesti; segui next_cursor finché hai tutti i campioni necessari, senza descrivere una pagina come intera sessione. Distingui i punti interpolati dalle misure indipendenti e rileggi i risultati provvisori dopo la finalizzazione. Usa allenamento_scheda/controlla solo per modifiche richieste. Le fasce BPM sono scelte dall’utente, mai dedotte automaticamente dall’età. I tempi senza misure non appartengono a nessuna fascia. Non salvare dati di salute nella memoria di famiglia."
     # Parte variabile (data/ora, estratti RAG): va DOPO il punto di cache, cosi' il prefisso stabile
     # (tool + prompt di sistema) viene riusato dalla cache del provider a ogni turno.
     from ..policy.permissions import dynamic_context

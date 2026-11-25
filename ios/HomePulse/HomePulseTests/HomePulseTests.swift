@@ -13,6 +13,66 @@ final class HomePulseTests:XCTestCase {
         XCTAssertTrue(restored.mustRestore(at:start.addingTimeInterval(360)))
         XCTAssertEqual(restored.restoreMode,1);XCTAssertEqual(restored.restoreLiveMode,3);XCTAssertTrue(restored.restoreSubscription)
     }
+    func testFiveReadingAverageUsesNewSamplesAndResetsAfterMissingData(){
+        var average=FiveReadingAverage();let start=Date(timeIntervalSince1970:100)
+        for i in 0..<4{XCTAssertNil(average.accept(Reading(date:start.addingTimeInterval(Double(i)),bpm:100+i)))}
+        XCTAssertNil(average.accept(Reading(date:start.addingTimeInterval(3),bpm:200)))
+        XCTAssertEqual(average.accept(Reading(date:start.addingTimeInterval(4),bpm:104)),102)
+        XCTAssertEqual(average.accept(Reading(date:start.addingTimeInterval(5),bpm:110)),104)
+        XCTAssertNil(average.accept(Reading(date:start.addingTimeInterval(30),bpm:80)))
+    }
+    func testCardioDisplayGapsAreDetectedBeforeChartReduction(){
+        let start=Date(timeIntervalSince1970:100)
+        let rows=(0..<3000).map{Reading(date:start.addingTimeInterval(Double($0+($0>=1500 ? 30:0))),bpm:100)}
+        let reduced=AppModel.displayReadings(rows)
+        XCTAssertLessThanOrEqual(reduced.count,150)
+        XCTAssertEqual(Set(reduced.compactMap{ $0.segment }),[0,1])
+        XCTAssertEqual(reduced.first?.segment,0);XCTAssertEqual(reduced.last?.segment,1)
+        let averaged=AppModel.displayReadings(rows,average:true)
+        XCTAssertEqual(averaged.first?.date,start.addingTimeInterval(4))
+    }
+    func testContinuousRotationUsesFreshRingAcquisitionNotWallClockDuration(){
+        var result=RecordedResult(token:"synthetic",revision:1,inputDigest:"test",startedAt:100,availableUntil:3700,endedAt:nil,signalCheck:0,points:[RecordedPoint(offset:3600,bpm:100,quality:0.9)],ppgWindows:1,accelWindows:1,final:false)
+        XCTAssertTrue(ContinuousCardioPolicy.needsRotation(result,at:Date(timeIntervalSince1970:3710)))
+        XCTAssertFalse(ContinuousCardioPolicy.needsRotation(result,at:Date(timeIntervalSince1970:3800)))
+        result.final=true;XCTAssertFalse(ContinuousCardioPolicy.needsRotation(result,at:Date(timeIntervalSince1970:3710)))
+    }
+    func testContinuousResultsRemainAvailableByWorkoutTimeWithoutCreatingSessions()throws {
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString);defer{try? FileManager.default.removeItem(at:folder)}
+        let store=try EventStore(url:folder.appendingPathComponent("synthetic.sqlite"));var context=cardioContext();context.workoutID=nil
+        let result=RecordedResult(token:context.token,revision:1,inputDigest:"test",startedAt:100,availableUntil:200,endedAt:nil,signalCheck:0,points:[RecordedPoint(offset:5,bpm:100,quality:0.9)],ppgWindows:1,accelWindows:1,final:false)
+        try store.commitRecorded(context:context,result:result)
+        XCTAssertTrue(store.sessions().isEmpty)
+        XCTAssertEqual(store.recordedResults(start:Date(timeIntervalSince1970:120),end:Date(timeIntervalSince1970:150)).count,1)
+        XCTAssertTrue(store.recordedResults(start:Date(timeIntervalSince1970:201),end:Date(timeIntervalSince1970:250)).isEmpty)
+        let reopened=try EventStore(url:folder.appendingPathComponent("synthetic.sqlite"))
+        XCTAssertEqual(reopened.recordedResults(start:Date(timeIntervalSince1970:90),end:Date(timeIntervalSince1970:101)).count,1)
+    }
+    func testContinuousFollowUpNeedsARealEndAndNewStartRecord()throws{
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString);defer{try? FileManager.default.removeItem(at:folder)}
+        let store=try EventStore(url:folder.appendingPathComponent("synthetic.sqlite"));let context=cardioContext()
+        let records=[cardioFrame(0x6c,1000,[3,0]),cardioFrame(0x6c,1100,[3,11]),cardioFrame(0x6c,1200,[3,1])]
+        try store.archiveHistory(frames:records,nextCursor:1201,key:"synthetic.cursor",api:[2,0,0],ring:context.ring)
+        XCTAssertNotNil(try store.recordedNextSessionRow(context:context))
+        let last=try store.recordedLastRow(ring:context.ring)
+        var later=context;later.afterRow=last-1
+        XCTAssertNil(try store.recordedNextSessionRow(context:later))
+    }
+    func testContinuousCardioDefaultAndExplicitOptOutSurviveReopen()throws{
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString);defer{try? FileManager.default.removeItem(at:folder)}
+        let path=folder.appendingPathComponent("synthetic.sqlite"),store=try EventStore(url:path)
+        XCTAssertTrue(AppArchiveSnapshot.load(store).continuousCardio)
+        try store.save(false,key:"cardio.continuous.enabled")
+        let reopened=try EventStore(url:path)
+        XCTAssertFalse(AppArchiveSnapshot.load(reopened).continuousCardio)
+    }
+    func testEnergyProfileParameterIsOptionalAndRoundTrips()throws{
+        var profile=try JSONDecoder().decode(BodyProfile.self,from:Data("{\"weight_kg\":80}".utf8))
+        XCTAssertNil(profile.energy_sex)
+        profile.energy_sex="male";try profile.validate()
+        XCTAssertEqual(try JSONDecoder().decode(BodyProfile.self,from:JSONEncoder().encode(profile)).energy_sex,"male")
+        profile.energy_sex="invalid";XCTAssertThrowsError(try profile.validate())
+    }
     private func cardioFrame(_ tag:UInt8,_ rt:UInt32,_ payload:[UInt8])->Data {
         Data([tag,UInt8(payload.count+4)]+(0..<4).map{UInt8((rt>>($0*8))&255)}+payload)
     }

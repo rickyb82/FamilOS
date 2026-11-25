@@ -86,6 +86,7 @@ struct HomeView:View {
         HStack{VStack(alignment:.leading){Text("Il tuo corpo, qui").font(.largeTitle.bold());Text(model.ownerName.map{"Ciao, \($0)"} ?? "Benvenuto in Home Pulse").foregroundStyle(.secondary)};Spacer();Image(systemName:"waveform.path.ecg").font(.largeTitle).foregroundStyle(.teal)}
         RingBatteryCard()
         SelectedCardioCard(ring:model.ring,recorded:model.recorded)
+        DailyEnergyCard()
         HStack(alignment:.top,spacing:12){
             Card(title:"Temperatura anello"){
                 let values=model.serverPoints("temperature")
@@ -108,6 +109,17 @@ struct HomeView:View {
         SyncCard(progress:model.transfer)
     }.padding()}.navigationTitle("Home Pulse").navigationBarTitleDisplayMode(.inline).background(Color.black)}}
     func metric(_ title:String,_ value:String)->some View{VStack(alignment:.leading){Text(value).font(.title2.bold()).monospacedDigit();Text(title).font(.caption).foregroundStyle(.secondary)}}
+}
+struct DailyEnergyCard:View{
+    @EnvironmentObject var model:AppModel
+    func number(_ value:JSONValue)->String{value.number.map{String(Int($0.rounded()))} ?? "—"}
+    var body:some View{let energy=model.serverData["daily_energy"]
+        if energy != .null{Card(title:"Calorie di oggi · finora"){
+            HStack{VStack{Text(number(energy["base_kcal"])).font(.title2.bold());Text("Di base").font(.caption)};Spacer();VStack{Text(number(energy["active_kcal"])).font(.title2.bold());Text("Attive stimate").font(.caption)};Spacer();VStack{Text(number(energy["total_kcal"])).font(.title2.bold());Text("Totale parziale").font(.caption)}}
+            Text("kcal · stima da profilo e MET. I periodi senza dati non sono conteggiati come attività.").font(.caption).foregroundStyle(.secondary)
+            if let seconds=energy["unestimated_activity_seconds"].number{Text("Attività senza stima: \(seconds.durationText)").font(.caption).foregroundStyle(.secondary)}
+        }}
+    }
 }
 struct RingBatteryCard:View{
     @EnvironmentObject var model:AppModel
@@ -186,7 +198,12 @@ struct SyncCard:View{
 struct TransferStatusText:View{@ObservedObject var progress:TransferProgress;var body:some View{Text(progress.status).font(.caption)}}
 struct PulseChart:View{
     let readings:[Reading]
-    var body:some View{if readings.isEmpty{ContentUnavailableView("Nessun campione",systemImage:"waveform.path.ecg",description:Text("I campioni reali compariranno qui."))}else{Chart(readings){p in LineMark(x:.value("Ora",p.date),y:.value("BPM",p.bpm)).foregroundStyle(.teal)}.chartYScale(domain:.automatic(includesZero:false)).chartXAxis{AxisMarks(values:.automatic(desiredCount:3))}}}
+    private func segment(at index:Int)->Int{
+        if let segment=readings[index].segment{return segment}
+        guard index>0 else{return 0}
+        return (1...index).reduce(0){count,i in count+(readings[i].date.timeIntervalSince(readings[i-1].date)>8 ? 1:0)}
+    }
+    var body:some View{if readings.isEmpty{ContentUnavailableView("Nessun campione",systemImage:"waveform.path.ecg",description:Text("I campioni reali compariranno qui."))}else{Chart{ForEach(Array(readings.enumerated()),id:\.element.id){index,p in LineMark(x:.value("Ora",p.date),y:.value("BPM",p.bpm),series:.value("Segmento",segment(at:index))).foregroundStyle(.teal)}}.chartYScale(domain:.automatic(includesZero:false)).chartXAxis{AxisMarks(values:.automatic(desiredCount:3))}}}
 }
 struct WorkoutView:View{
     @EnvironmentObject var model:AppModel;@State private var activity=""
@@ -232,7 +249,7 @@ struct WorkoutView:View{
             Text("La registrazione dedicata richiede età, FC a riposo e un’attività compatibile. Gli ultimi valori di questa funzione restano separati dal battito live.").font(.caption).foregroundStyle(.secondary)
             Button("Avvia registrazione cardio nell’anello"){Task{await model.startRingSport()}}.disabled(!model.ring.ready || model.ring.busy)
             Button("Leggi stato cardio attività"){Task{await model.ring.readExercise()}}.disabled(!model.ring.ready || model.ring.busy)
-            Button("Arresta registrazione cardio"){Task{await model.ring.stopSport()}}.disabled(!model.ring.ready || model.ring.busy)
+            Button("Arresta registrazione cardio"){Task{await model.stopRingSport()}}.disabled(!model.ring.ready || model.ring.busy)
         }
         Card(title:"Cardio registrato offline"){
             Text(model.ring.recordedHistorySummary).font(.subheadline)
@@ -339,10 +356,10 @@ struct RecordedSessionSummary:View {
         HStack{Text(average.map{"Media \(Int($0)) BPM"} ?? "Segnale insufficiente");Spacer();if let maximum{Text("Picco \(maximum) BPM")}}
         Text(provisional ? "Elaborazione provvisoria salvata sul telefono":"Elaborazione finale salvata sul telefono").font(.caption).foregroundStyle(.secondary)
     }}}.task(id:recorded.result?.revision){
-        let id=session.remoteID ?? session.id.uuidString
-        let values=(try? await model.store.perform{$0.recordedResults(workoutID:id)}) ?? []
+        let start=session.startedAt,end=session.endedAt ?? Date()
+        let values=(try? await model.store.perform{$0.recordedResults(start:start,end:end)}) ?? []
         let prepared=await Task.detached(priority:.utility){
-            let rows=values.flatMap{$0.acceptedReadings}.sorted{$0.date<$1.date}
+            let rows=values.flatMap{$0.acceptedReadings}.filter{$0.date>=start && $0.date<=end}.sorted{$0.date<$1.date}
             let average=rows.isEmpty ? nil:Double(rows.reduce(0){$0+$1.bpm})/Double(rows.count)
             return(AppModel.displayReadings(rows),average,rows.map{$0.bpm}.max())
         }.value
@@ -380,6 +397,11 @@ struct SettingsView:View{
                 Button("Scansiona QR",systemImage:"qrcode.viewfinder"){scanning=true}
             }
         }
+        Section("Monitoraggio cardio"){
+            Toggle("Cardio attività anche fuori allenamento",isOn:Binding(get:{model.continuousCardio},set:{enabled in Task{await model.setContinuousCardio(enabled)}}))
+            Text(model.continuousStatus).font(.caption).foregroundStyle(.secondary)
+            Text("Inizia e Termina delimitano le sessioni nel diario. Il monitoraggio esteso continua separatamente e consuma più batteria; viene sospeso durante la carica.").font(.caption).foregroundStyle(.secondary)
+        }
         Section("Anello e Bluetooth"){RingSettingsControls(ring:model.ring)}
         Section("Batteria anello"){
             Text(model.batteryLevel.map{"Ultima lettura: \($0)%"} ?? "In attesa della prima lettura")
@@ -389,6 +411,7 @@ struct SettingsView:View{
             Text("Un avviso quando la carica è completa e uno al 10% o meno. Si riattiva dopo una lettura di ricarica almeno al 20%. Se l’anello è scollegato, livello e stato mostrati restano gli ultimi ricevuti.").font(.caption).foregroundStyle(.secondary)
         }
         Section("Profilo · nessun valore presunto"){
+            Picker("Parametro fisiologico · energia",selection:$model.settings.profile.energy_sex){Text("Non specificato").tag(String?.none);Text("Maschile").tag(String?.some("male"));Text("Femminile").tag(String?.some("female"))}
             TextField("Peso (kg)",value:$model.settings.profile.weight_kg,format:.number).keyboardType(.decimalPad)
             TextField("Età",value:$model.settings.profile.age,format:.number).keyboardType(.numberPad)
             TextField("Altezza (cm)",value:$model.settings.profile.height_cm,format:.number).keyboardType(.decimalPad)

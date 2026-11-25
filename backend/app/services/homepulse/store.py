@@ -150,7 +150,7 @@ class HomePulseStore:
         self.path=self.base/'wellness.sqlite3'
         if self.path.is_symlink():raise StoreError('Archivio non valido')
         self.encrypt,self.decrypt=encrypt,decrypt
-        self.lock=threading.RLock()
+        self.lock=threading.RLock();self._energy_cache={}
         fd=os.open(self.path,os.O_RDWR|os.O_CREAT|getattr(os,'O_NOFOLLOW',0),0o600);os.close(fd)
         os.chmod(self.path,0o600)
         with self.connection() as db:
@@ -402,7 +402,41 @@ class HomePulseStore:
                 'archive':{'events':events[0],'history_records':history,'decode_errors':events[1] or 0,
                            'processing_status':processing['status'] if processing else 'In attesa di record storici',
                            'processing_error':processing['error'] if processing else None},
+                'daily_energy':self.daily_energy(owner),
                 'ring_binding':self.ring(owner,secret=False)}
+
+    def daily_energy(self,owner,date=None):
+        from . import daily
+        now=time.time()
+        try:day,start,end=daily.window(now,date)
+        except (ValueError,TypeError):raise StoreError('Data energia non valida') from None
+        with self.connection() as db:
+            settings=self._settings(db,owner);profile=settings['profile']
+            key=(owner,day,_json(profile))
+            cached=self._energy_cache.get(key)
+            if cached and 0<=now-cached[0]<30:return json.loads(_json(cached[1]))
+            rows=db.execute("SELECT t,metadata FROM points WHERE owner_id=? AND kind='steps' AND t>? AND t<=? ORDER BY t,id",(owner,start,end+13*60)).fetchall()
+            sessions=db.execute("SELECT * FROM sessions WHERE owner_id=? AND started_at<? AND (ended_at IS NULL OR ended_at>?) AND status!='rejected'",(owner,end,start)).fetchall()
+            intervals=[];steps=0
+            for row in rows:
+                meta=json.loads(row['metadata']);mets=meta.get('met_levels',[])
+                if not isinstance(mets,list) or len(mets)>13:continue
+                for i,met in enumerate(mets):
+                    stop=row['t']-(len(mets)-i-1)*60
+                    intervals.append({'start':stop-60,'end':stop,'met':met,'source':'oura-minute-met','priority':2})
+                if start<=row['t']<=end:steps+=meta.get('step_count',0)
+            from .cardio import phase_windows
+            for session in sessions:
+                events=[{'captured_at':r['captured_at'],'sequence':r['sequence'],'payload':json.loads(r['payload'])} for r in db.execute("SELECT captured_at,sequence,payload FROM events WHERE owner_id=? AND kind='workout' AND json_extract(payload,'$.session_id')=? ORDER BY captured_at,sequence,id",(owner,session['id']))]
+                windows,_=phase_windows(session['started_at'],min(end,session['ended_at'] or end),json.loads(session['config']),events)
+                for a,b,_,phase,_,_ in windows:
+                    if phase.get('met') is not None:intervals.append({'start':a,'end':b,'met':phase['met'],'source':'workout-plan-met','priority':1})
+            value=daily.estimate(profile,intervals,start,end)
+            value.update(date=day,time_zone='Europe/Rome',updated_at=now,steps_in_records=steps)
+            # Bounded per-profile cache; no health data leaves this owner's store.
+            if len(self._energy_cache)>128:self._energy_cache.clear()
+            self._energy_cache[key]=(now,value)
+            return json.loads(_json(value))
 
     def sleep(self,owner,days=14):
         if type(days) is not int or not 1<=days<=90:raise StoreError('Intervallo sonno non valido')
@@ -449,6 +483,60 @@ class HomePulseStore:
                 'steps_in_records':sum(p['v'] for p in result['step_increments']),'quality_events':quality,
                 'stats':{'average_bpm':sum(heart)/len(heart) if heart else None,'max_bpm':max(heart) if heart else None},
                 'acquisition_time_alignment':True,'interpolated':any(p.get('interpolated') for p in result['heart_rate'])}
+
+    def samples(self,owner,session_id,metric='heart_rate',start_offset_seconds=0,end_offset_seconds=None,cursor=None,limit=200,include_recovery=False):
+        """Bounded, lossless pages of derived measurements in an owner's session.
+
+        The cursor fixes the time window, not a database snapshot: provisional
+        model revisions can replace points while paging. Callers are told this
+        explicitly and must re-read after final processing when needed.
+        """
+        units={'heart_rate':'BPM','spo2':'%','temperature':'°C','motion':'s','step_increments':'steps','respiratory_rate':'breaths/min'}
+        if metric not in units or type(limit) is not int or not 1<=limit<=1000 or type(include_recovery) is not bool:
+            raise StoreError('Parametri campioni non validi')
+        _identity(session_id)
+        offset=float(_finite(start_offset_seconds))
+        stop=None if end_offset_seconds is None else float(_finite(end_offset_seconds))
+        if stop is not None and stop<offset:raise StoreError('Intervallo campioni non valido')
+        scope=hashlib.sha256(_json([owner,session_id,metric,offset,stop,include_recovery]).encode()).hexdigest()
+        after=None;cutoff=None
+        if cursor is not None:
+            try:
+                if not isinstance(cursor,str) or len(cursor)>1024:raise ValueError()
+                page=json.loads(base64.urlsafe_b64decode(cursor.encode()))
+                if set(page)!={'scope','t','id','end'} or page['scope']!=scope:raise ValueError()
+                after=(_finite(page['t']),page['id']);cutoff=_finite(page['end'])
+                if type(after[1]) is not int or not 1<=after[1]<2**63:raise ValueError()
+            except (ValueError,TypeError,KeyError,UnicodeError):raise StoreError('Cursore campioni non valido') from None
+        now=time.time()
+        with self.connection() as db:
+            session=db.execute('SELECT started_at,ended_at,activity_name FROM sessions WHERE owner_id=? AND id=?',(owner,session_id)).fetchone()
+            if session is None:raise StoreError('Sessione non trovata')
+            start=session['started_at']+offset
+            end=min(now,(session['ended_at'] or now)+(600 if include_recovery and session['ended_at'] is not None else 0))
+            if stop is not None:end=min(end,session['started_at']+stop)
+            if cutoff is not None:end=min(end,cutoff)
+            kind='steps' if metric=='step_increments' else metric
+            args=[owner,kind,start,end]
+            where='owner_id=? AND kind=? AND t>=? AND t<=?'
+            summary=db.execute('SELECT count(*),min(value),max(value),avg(value) FROM points WHERE '+where,args).fetchone()
+            if after is not None:where+=' AND (t>? OR (t=? AND id>?))';args += [after[0],after[0],after[1]]
+            rows=db.execute('SELECT id,t,value,source,quality,metadata FROM points WHERE '+where+' ORDER BY t,id LIMIT ?',args+[limit+1]).fetchall()
+        more=len(rows)>limit;rows=rows[:limit];points=[]
+        for row in rows:
+            meta=json.loads(row['metadata'])
+            points.append({'t':row['t'],'captured_at':datetime.fromtimestamp(row['t'],timezone.utc).isoformat(),
+                'elapsed_seconds':row['t']-session['started_at'],'v':row['value'],'source':row['source'],'quality':row['quality'],
+                **{k:meta[k] for k in ('warnings','flags_raw','model','interpolated','experimental','provisional','revision','signal_quality','signal_check') if k in meta}})
+        next_cursor=None
+        if more:
+            last=rows[-1];next_cursor=base64.urlsafe_b64encode(_json({'scope':scope,'t':last['t'],'id':last['id'],'end':end}).encode()).decode()
+        return {'session_id':session_id,'activity_name':session['activity_name'],'metric':metric,'unit':units[metric],
+            'window_start':start,'window_end':end,'workout_start':session['started_at'],'workout_end':session['ended_at'],
+            'include_recovery':include_recovery,'points':points,'returned':len(points),'total_points':summary[0],
+            'range_stats':{'min':summary[1],'max':summary[2],'mean':summary[3]},'has_more':more,'next_cursor':next_cursor,
+            'downsampled':False,'pagination_snapshot':False,'acquisition_time_alignment':True,
+            'interpretation':'Tempi di acquisizione; valori mancanti non ricostruiti. I punti interpolati del modello non sono misure indipendenti. Le revisioni provvisorie possono cambiare durante la lettura: rileggere a elaborazione finale.'}
 
     def manual_session(self,owner,action,session_id=None,activity_name=None,**extra):
         now=time.time();session_id=session_id or uuid.uuid4().hex

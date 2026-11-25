@@ -167,7 +167,7 @@ def dynamic_context(tz: str = "Europe/Rome") -> str:
     return f"Data e ora attuali: {now}."
 
 
-TOOL_ALIASES = {**{name:"mcp" for name in ("allenamento_stato","allenamento_scheda","allenamento_analisi","allenamento_controlla")},"search_documents": "read_document",  # stesso permesso dei documenti
+TOOL_ALIASES = {**{name:"mcp" for name in ("allenamento_stato","allenamento_scheda","allenamento_analisi","allenamento_campioni", "allenamento_grafico", "allenamento_energia","allenamento_controlla")},"search_documents": "read_document",  # stesso permesso dei documenti
                 "create_artifact": "artifacts", "update_artifact": "artifacts",
                 "list_artifacts": "artifacts", "delete_artifact": "artifacts",
                 "remember": "memory", "forget": "memory",

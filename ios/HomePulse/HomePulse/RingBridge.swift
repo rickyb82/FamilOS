@@ -37,8 +37,9 @@ import UIKit
     private var spo2Before:OuraFeatureStatus?;private var spo2After:OuraFeatureStatus?
     @Published var lastConnectionError:String?
     var onBattery:((OuraBattery,Date)->Void)?
+    var onIdle:(()->Void)?
     var onLive:((OuraLive,Date)->Void)?;var onHistory:(()->Void)?;var onJournal:(()->Void)?
-    var onRecordedPrepare:(()async throws->Void)?
+    var onRecordedPrepare:((Int)async throws->Void)?
     var logicalRingID:String?{logicalRing}
     private let statusJournalQueue=DispatchQueue(label:"HomePulse.status-journal",qos:.utility)
     private var central:CBCentralManager!;private var peripheral:CBPeripheral?
@@ -100,7 +101,7 @@ import UIKit
         writeBatteryDiagnostic();central.cancelPeripheralConnection(peripheral)
         return true
     }
-    private func finishOperation(){busy=false;_ = scheduleChargingCheck();writeBatteryDiagnostic()}
+    private func finishOperation(){busy=false;_ = scheduleChargingCheck();writeBatteryDiagnostic();onIdle?()}
     func disconnect(){cancelReconnect();reconnectFailures=0;connectionTimeout?.cancel();connectionFailure=nil;chargeWakeDelay=nil;waitingForChargeCheck=false;desired=false;UserDefaults.standard.set(false,forKey:"ringWantsConnection")
         guard let peripheral else{return}
         guard ready,!busy else{ready=false;central.cancelPeripheralConnection(peripheral);return}
@@ -562,7 +563,7 @@ import UIKit
             let cursorKey="history.cursor.\(logicalRing ?? peripheral?.identifier.uuidString ?? "unknown")"
             recordedCapture?.baselineNextRingTime=try await store.perform{$0.load(UInt32.self,key:cursorKey)}
             guard recordedCapture?.baselineComplete == true else{nextHistoryAt=Date.distantPast;throw AppError.message("Recupero dei dati precedenti in corso: riprova quando lo storico è allineato")}
-            try await onRecordedPrepare?()
+            try await onRecordedPrepare?(Int(activity))
         }
         let key=sportKey
         let control=SportControl(restoreMode:current[4],pendingStop:true,restoreLiveMode:liveMode,restoreLiveSubscription:recordedOnly ? liveSubscriptionActive:nil)

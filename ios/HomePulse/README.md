@@ -156,3 +156,21 @@ L’elaborazione si aggiorna al massimo ogni 15 secondi quando arrivano nuove tr
 Per preparare una build fisica, fornire privatamente `Research/whr_2_5_1.pt` già decifrato e il runtime ufficiale LibTorch 1.12.0 in `Research/LibTorch/` (`install/include`, `install/lib`, `LICENSE`). Distribuzione ufficiale: https://ossci-ios.s3.amazonaws.com/libtorch_ios_1.12.0.zip; SHA256 c33f77d4c3984ea20aef83d8e755ece5e22cc5233f19459b7c6b3c1085405e80. La fase di build controlla identità e integrità dell’archivio modello, lo copia nell’app firmata e include la licenza del runtime. Nessuna chiave modello viene inclusa nell’app. Tutto Research è escluso da Git e dagli ZIP dei sorgenti.
 
 La compatibilità numerica sintetica e la qualità sui segnali reali del Gen3 sono prove distinte. La modalità è sperimentale finché la prova con l’anello non è completata. Non sono richiesti account, app ufficiale o API Oura. FamilOS resta il server personale di sincronizzazione, senza un servizio Oura intermedio.
+
+## Monitoraggio separato dalle sessioni
+
+In Impostazioni, **Cardio attività anche fuori allenamento** controlla il monitoraggio esteso, attivo come impostazione iniziale. La scelta resta salvata sul dispositivo e una disattivazione esplicita viene rispettata agli avvii successivi. Inizia e Termina delimitano le sessioni del diario; Arresta registrazione cardio disabilita anche il monitoraggio esteso. Durante la carica il monitoraggio esteso viene sospeso. Nessuna sessione fittizia viene creata fuori allenamento.
+
+Il calcolo usa segmenti limitati: dopo un’ora di tracce recenti conclude il segmento, attende l’elaborazione finale e richiede il successivo. Le eventuali pause di transizione restano vuoti. I nuovi inizi emessi dal firmware dopo una fine acquisizione vengono elaborati con identità separate. La durata della batteria, la ripresa fisica dopo rimozione e il comportamento su un’intera giornata richiedono verifiche sul dispositivo; l’opzione non garantisce misure 24 ore su 24.
+
+Nel live normale fuori sessione, il numero e il grafico usano una media mobile di cinque nuovi campioni validi, senza riutilizzare valori trattenuti. Un vuoto oltre otto secondi azzera la finestra. Le letture originali rimangono archiviate per le analisi. I grafici conservano le interruzioni anche quando il numero di punti disegnati viene ridotto.
+
+Emily può usare `allenamento_campioni` per leggere i punti intermedi di ciascuna metrica, filtrati per secondi dall’inizio della sessione. Le pagine espongono un cursore e non riducono la serie: la chat deve seguire il cursore per un’analisi completa. I tempi restano quelli di acquisizione, con sorgente, qualità e interpolazione; il post allenamento richiede l’opzione esplicita di recupero.
+
+## Energia giornaliera ed Emily
+
+Il server calcola automaticamente `daily_energy` (anche nel bootstrap iPhone), con base stimata da profilo e kcal attive da MET per minuto acquisiti dall’anello; le fasi con MET esplicito coprono gli intervalli mancanti. Le sovrapposizioni non vengono contate due volte. L’integrazione segue il giorno Europe/Rome, inclusi i cambi d’ora, ed espone serie oraria e minuti privi di stima. Non sono calorie misurate né un dispendio totale completo: attività senza MET e termogenesi alimentare non sono inventate.
+
+Quando la composizione è coerente si usa la stima di Cunningham già presente; altrimenti, con peso/altezza/età, Mifflin–St Jeor. `energy_sex` sceglie il parametro della formula; senza parametro si conserva l’intervallo tra le due formule. Una vecchia versione del server non può cancellare silenziosamente la preferenza in coda sul telefono.
+
+I tool `allenamento_grafico` e `allenamento_energia` completano i cinque tool già presenti. Il grafico è un artifact locale alla chat personale: contiene tutte le sei serie disponibili e una tabella paginata dei punti, senza caricare script o dati da siti esterni. Il disegno usa canvas e la tabella mostra cento righe per pagina, per conservare tutti i campioni senza un DOM enorme.

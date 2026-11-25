@@ -9,12 +9,12 @@ struct AppArchiveSnapshot:Sendable {
     var metrics:HistoricalMetrics;var bootstrap:JSONValue;var analysis:JSONValue;var sleep:JSONValue
     var owner:String?;var logicalRing:String?;var battery:RingBatterySnapshot?
     var batteryAlert:BatteryAlertState;var fullAlert:BatteryFullAlertState
-    var pending:Int;var journalCount:Int;var detection:DetectionState;var coordinates:[String:[Double]]
+    var pending:Int;var journalCount:Int;var continuousCardio:Bool;var detection:DetectionState;var coordinates:[String:[Double]]
     static func load(_ store:EventStore)->Self{
         let settings=store.load(LocalSettings.self,key:"settings") ?? LocalSettings()
         let active=store.load(WorkoutSession.self,key:"activeWorkout")
         let coordinate=store.load([Double].self,key:"gymCoordinate.\(settings.auto_detection.gym.id)")
-        return Self(settings:settings,current:active.flatMap{["running","paused"].contains($0.state) ? $0:nil},sessions:store.sessions(),readings:store.readings(),metrics:store.metrics(),bootstrap:store.load(JSONValue.self,key:"bootstrap") ?? .null,analysis:store.load(JSONValue.self,key:"analysis.last24h") ?? .null,sleep:store.load(JSONValue.self,key:"sleep.last14d") ?? .null,owner:store.load(String.self,key:"ownerName"),logicalRing:store.load(String.self,key:"logicalRing"),battery:store.load(RingBatterySnapshot.self,key:"ringBattery.latest"),batteryAlert:store.load(BatteryAlertState.self,key:"ringBattery.alert") ?? BatteryAlertState(),fullAlert:store.load(BatteryFullAlertState.self,key:"ringBattery.fullAlert") ?? BatteryFullAlertState(),pending:store.pendingCount,journalCount:store.journalCount,detection:store.load(DetectionState.self,key:"gymDetection") ?? DetectionState(),coordinates:coordinate.map{[settings.auto_detection.gym.id:$0]} ?? [:])
+        return Self(settings:settings,current:active.flatMap{["running","paused"].contains($0.state) ? $0:nil},sessions:store.sessions(),readings:store.readings(),metrics:store.metrics(),bootstrap:store.load(JSONValue.self,key:"bootstrap") ?? .null,analysis:store.load(JSONValue.self,key:"analysis.last24h") ?? .null,sleep:store.load(JSONValue.self,key:"sleep.last14d") ?? .null,owner:store.load(String.self,key:"ownerName"),logicalRing:store.load(String.self,key:"logicalRing"),battery:store.load(RingBatterySnapshot.self,key:"ringBattery.latest"),batteryAlert:store.load(BatteryAlertState.self,key:"ringBattery.alert") ?? BatteryAlertState(),fullAlert:store.load(BatteryFullAlertState.self,key:"ringBattery.fullAlert") ?? BatteryFullAlertState(),pending:store.pendingCount,journalCount:store.journalCount,continuousCardio:store.load(Bool.self,key:"cardio.continuous.enabled") ?? true,detection:store.load(DetectionState.self,key:"gymDetection") ?? DetectionState(),coordinates:coordinate.map{[settings.auto_detection.gym.id:$0]} ?? [:])
     }
 }
 
@@ -27,6 +27,10 @@ struct AppArchiveSnapshot:Sendable {
     @Published var sessions:[WorkoutSession]=[];@Published var readings:[Reading]=[]
     var now:Date{Date()};var heartDisplay=HeartDisplayState()
     @Published private var heartBPM:Int?
+    private var normalAverage=FiveReadingAverage()
+    @Published private(set) var continuousCardio=false
+    @Published private(set) var continuousStatus="Cardio esteso disattivato"
+    private var controllingContinuous=false;private var nextContinuousAttempt=Date.distantPast
     private var readingBuffer:[Reading]=[];private var lastChartUpdate=Date.distantPast
     var bpm:Int?{heartDisplay.bpm};var sampleAt:Date?{heartDisplay.capturedAt}
     @Published var warnings:[String]=[];@Published var temperatureRaw:Int?
@@ -60,12 +64,13 @@ struct AppArchiveSnapshot:Sendable {
     private let notificationDiagnostics:DiagnosticWriter
     init(store:EventStore,folder:URL,snapshot:AppArchiveSnapshot){
         self.store=store;notificationDiagnostics=DiagnosticWriter(url:folder.appendingPathComponent("notification-status.json"))
-        settings=snapshot.settings;persistedSettings=snapshot.settings
+        settings=snapshot.settings;persistedSettings=snapshot.settings;continuousCardio=snapshot.continuousCardio
         api=WellnessAPI(store:store,folder:folder.appendingPathComponent("uploads"))
         ring=RingBridge(store:store,diagnosticsURL:folder.appendingPathComponent("battery-status.json"));gym=GymDetection(store:store,state:snapshot.detection,coordinates:snapshot.coordinates)
         recorded=RecordedCardioController(store:store,diagnosticsURL:folder.appendingPathComponent("recorded-model-status.json"))
+        recorded.continuousMode=snapshot.continuousCardio
         enrolled=SecureStore.credentials() != nil
-        current=snapshot.current;sessions=snapshot.sessions;readingBuffer=snapshot.readings;readings=Self.displayReadings(snapshot.readings);metrics=snapshot.metrics
+        current=snapshot.current;sessions=snapshot.sessions;readingBuffer=snapshot.readings;readings=Self.displayReadings(snapshot.readings,average:snapshot.current==nil);metrics=snapshot.metrics
         serverData=snapshot.bootstrap;analysisData=snapshot.analysis;sleepData=snapshot.sleep;ownerName=snapshot.owner
         refreshChartCache()
         if let logical=snapshot.logicalRing{ring.configure(logicalRing:logical)}
@@ -75,11 +80,12 @@ struct AppArchiveSnapshot:Sendable {
         api.onAcknowledged={[weak self] in Task{@MainActor in self?.refreshArchiveStatus()}}
         ring.onLive={[weak self] value,time in self?.api.noteBluetoothActivity();self?.receive(value,at:time)}
         ring.onHistory={[weak self] in self?.archiveNeedsMetrics=true;self?.recorded.historyChanged()}
-        ring.onRecordedPrepare={[weak self] in
-            guard let self,let id=ring.logicalRingID,let activity=settings.config.activity_id else{throw AppError.message("Configurazione cardio incompleta")}
-            try await recorded.prepare(ring:id,version:ring.capabilities[3] ?? 0,activity:activity,profile:settings.profile,workoutID:current.map{$0.remoteID ?? $0.id.uuidString})
+        ring.onRecordedPrepare={[weak self] activity in
+            guard let self,let id=ring.logicalRingID else{throw AppError.message("Configurazione cardio incompleta")}
+            try await recorded.prepare(ring:id,version:ring.capabilities[3] ?? 0,activity:activity,profile:settings.profile,workoutID:continuousCardio ? nil:current.map{$0.remoteID ?? $0.id.uuidString})
         }
         recorded.onResult={[weak self] value in self?.receiveRecorded(value)}
+        ring.onIdle={[weak self] in self?.maintainContinuousCardio()}
         ring.onJournal={[weak self] in self?.api.upload()}
         gym.onCandidate={[weak self] id,date in self?.startWorkout(auto:true,id:id,at:date)}
         gym.onReply={[weak self] id,name,negative in self?.resolveCandidate(id:id,name:name,negative:negative)}
@@ -90,7 +96,10 @@ struct AppArchiveSnapshot:Sendable {
         Task{await refreshBatteryNotificationStatus()}
         pending=snapshot.pending;journalCount=snapshot.journalCount
         if current==nil,let id=gym.engine.state.candidateSessionID,let date=gym.engine.state.candidateAt{startWorkout(auto:true,id:id,at:date)}
-        ticking=Task{[weak self] in var ticks=0;while !Task.isCancelled{try? await Task.sleep(nanoseconds:1_000_000_000);guard let self else{return};ring.maintenance();recorded.tick();refreshArchiveStatus();ticks+=1;if ticks%30==0{await refresh()}}}
+        ticking=Task{[weak self] in var ticks=0;while !Task.isCancelled{try? await Task.sleep(nanoseconds:1_000_000_000);guard let self else{return};ring.maintenance();recorded.tick();maintainContinuousCardio();refreshArchiveStatus();ticks+=1;if ticks%30==0{await refresh()}}}
+        let arguments=ProcessInfo.processInfo.arguments
+        if let i=arguments.firstIndex(of:"--energy-sex"),i+1<arguments.count,["male","female"].contains(arguments[i+1]){let sex=arguments[i+1];Task{await setEnergySex(sex)}}
+        if ProcessInfo.processInfo.arguments.contains("--enable-continuous-cardio"){Task{await setContinuousCardio(true)}}
         if ProcessInfo.processInfo.arguments.contains("--spo2-stop-probe") {
             Task{[weak self] in for _ in 0..<90 {
                 guard let self else{return}
@@ -185,20 +194,26 @@ struct AppArchiveSnapshot:Sendable {
             return
         }
         let point=Reading(date:date,bpm:hr)
-        if heartBPM != hr{heartBPM=hr}
+        let averaged=normalAverage.accept(point)
+        if let displayed=current == nil ? averaged:hr,heartBPM != displayed{heartBPM=displayed}
         // The original packet is already durable before this callback. Derived
         // readings and location state are archived without blocking the UI.
         store.enqueue({try $0.addReading(point)},onError:{[weak self] _ in Task{@MainActor in self?.message="Lettura non salvata; controlla lo spazio disponibile"}})
         readingBuffer.append(point);if readingBuffer.count>1000{readingBuffer.removeFirst(readingBuffer.count-1000)}
-        if Date().timeIntervalSince(lastChartUpdate)>=0.2{lastChartUpdate=Date();readings=Self.displayReadings(readingBuffer)}
+        if Date().timeIntervalSince(lastChartUpdate)>=0.2{lastChartUpdate=Date();readings=Self.displayReadings(readingBuffer,average:current==nil)}
         gym.accept(point,manualWorkout:current != nil)
     }
-    nonisolated static func displayReadings(_ source:[Reading])->[Reading]{ChartSeries.indices(values:source.map{Double($0.bpm)},limit:150).map{source[$0]}}
+    nonisolated static func displayReadings(_ source:[Reading],average:Bool=false)->[Reading]{
+        let values=average ? FiveReadingAverage.series(source):source
+        var segments=[Int](repeating:0,count:values.count)
+        if values.count>1{for i in 1..<values.count{segments[i]=segments[i-1]+(values[i].date.timeIntervalSince(values[i-1].date)>8 ? 1:0)}}
+        return ChartSeries.indices(values:values.map{Double($0.bpm)},limit:150).map{i in var p=values[i];p.segment=segments[i];return p}
+    }
     private func receiveRecorded(_ value:RecordedResult){
         readingBuffer.removeAll{$0.date.timeIntervalSince1970>=value.startedAt && $0.date.timeIntervalSince1970<=value.availableUntil}
         readingBuffer += value.acceptedReadings
         readingBuffer.sort{$0.date<$1.date};if readingBuffer.count>3000{readingBuffer.removeFirst(readingBuffer.count-3000)}
-        readings=Self.displayReadings(readingBuffer);api.upload()
+        readings=Self.displayReadings(readingBuffer,average:current==nil);api.upload()
     }
     func recordPayload(_ session:WorkoutSession,action:String)->JSONValue {
         var value:[String:JSONValue]=["action":.string(action),"session_id":.string(session.remoteID ?? session.id.uuidString),"activity_name":.string(session.activityName),"active_seconds":.number(session.elapsed()),"auto_detected":.bool(session.auto_detected),"provisional":.bool(session.provisional),"source":.string(session.source)]
@@ -217,7 +232,7 @@ struct AppArchiveSnapshot:Sendable {
             try store.workout(session,payload:payload,active:active)
             return (store.sessions(),store.pendingCount)
         }
-        if active{current=["running","paused"].contains(session.state) ? session:nil}
+        if active{current=["running","paused"].contains(session.state) ? session:nil;readings=Self.displayReadings(readingBuffer,average:current==nil)}
         sessions=archive.0;pending=archive.1;api.upload()
     }
     func startWorkout(auto:Bool=false,id:UUID=UUID(),at date:Date=Date()){
@@ -234,7 +249,7 @@ struct AppArchiveSnapshot:Sendable {
     }
     func pause(){changeWorkout{[self] in guard var session=current,session.state=="running" else{return};session.accumulated=session.elapsed();session.runningSince=nil;session.state="paused";try await commit(session,action:"paused")}}
     func resume(){changeWorkout{[self] in guard var session=current,session.state=="paused" else{return};session.runningSince=Date();session.state="running";try await commit(session,action:"resumed")}}
-    func end(){changeWorkout{[self] in guard var session=current else{return};session.accumulated=session.elapsed();session.runningSince=nil;session.endedAt=Date();session.state="ended";try await commit(session,action:"ended");gym.resolve();Task{await ring.stopSport()}}}
+    func end(){changeWorkout{[self] in guard var session=current else{return};session.accumulated=session.elapsed();session.runningSince=nil;session.endedAt=Date();session.state="ended";try await commit(session,action:"ended");gym.resolve();if !continuousCardio{Task{await ring.stopSport()}}}}
     func resolveCandidate(id:UUID,name:String?,negative:Bool){
         changeWorkout{[self] in
             guard var session=(current?.id==id ? current:sessions.first{$0.id==id}),session.auto_detected else{return}
@@ -246,13 +261,57 @@ struct AppArchiveSnapshot:Sendable {
     }
     func startRingSport(recordedOnly:Bool=false)async{guard let selected=settings.config.activity_id,allowedActivities.contains(where:{$0.0==selected}),(0...65535).contains(selected),let age=settings.profile.age,let rest=settings.profile.resting_hr else{message="Scegli un’attività compatibile e inserisci età e FC a riposo nel profilo";return}
         do{
-            if recordedOnly,current==nil {
+            if recordedOnly,current==nil,!continuousCardio {
                 guard !changingWorkout else{throw AppError.message("Salvataggio allenamento in corso")}
                 let session=WorkoutSession(id:UUID(),activityName:settings.config.activity_name?.nilIfEmpty ?? "Allenamento",startedAt:Date(),config:settings.config,profile:settings.profile,runningSince:Date())
                 try await commit(session,action:"started")
             }
+            if recordedOnly,ring.recordedWorkoutProbeActive{return}
             try await ring.startSport(activity:UInt16(selected),age:age,resting:rest,recordedOnly:recordedOnly)
         }catch{message=error.localizedDescription}
+    }
+    func stopRingSport()async {
+        if continuousCardio {
+            do{try await store.perform{try $0.save(false,key:"cardio.continuous.enabled")} }
+            catch{message="Arresto cardio non salvato: riprova";return}
+            continuousCardio=false;recorded.continuousMode=false;continuousStatus="Cardio esteso disattivato"
+        }
+        await ring.stopSport()
+    }
+    func setContinuousCardio(_ enabled:Bool)async {
+        do{
+            try await store.perform{try $0.save(enabled,key:"cardio.continuous.enabled")}
+            continuousCardio=enabled;recorded.continuousMode=enabled;nextContinuousAttempt = .distantPast
+            if !enabled,current==nil{await ring.stopSport()}
+            continuousStatus=enabled ? "Cardio esteso attivo · diario separato":"Cardio esteso disattivato"
+            maintainContinuousCardio()
+        }catch{message="Preferenza cardio non salvata"}
+    }
+    private func maintainContinuousCardio(){
+        guard continuousCardio,!controllingContinuous,!changingWorkout,ring.ready,!ring.busy,!ring.spo2ProbeActive,Date()>=nextContinuousAttempt else{return}
+        nextContinuousAttempt=Date().addingTimeInterval(10);controllingContinuous=true
+        Task{defer{controllingContinuous=false}
+            // Charging is an explicit ring state. Missing HR is not a wear sensor.
+            if batteryChargeState?.isCharging == true {
+                continuousStatus="Cardio esteso sospeso durante la carica"
+                if ring.recordedWorkoutProbeActive{await ring.stopSport()};return
+            }
+            if ring.recordedWorkoutProbeActive {
+                if ContinuousCardioPolicy.needsRotation(recorded.result,at:Date()){
+                    continuousStatus="Salvataggio segmento cardio · ripresa automatica";await ring.stopSport()
+                }else{continuousStatus="Cardio esteso attivo · diario separato"}
+                return
+            }
+            guard recorded.canPrepare else{return}
+            if recorded.hasContext,recorded.result?.final != true {
+                recorded.historyChanged();continuousStatus="Completo il segmento cardio prima di riprendere";return
+            }
+            guard let age=settings.profile.age,let resting=settings.profile.resting_hr else{continuousStatus="Completa il profilo per il cardio esteso";return}
+            let activity=current?.config.activity_id ?? settings.config.activity_id ?? 65535
+            guard (0...65535).contains(activity) else{return}
+            do{try await ring.startSport(activity:UInt16(activity),age:age,resting:resting,recordedOnly:true);continuousStatus="Cardio esteso attivo · diario separato"}
+            catch{continuousStatus=error.localizedDescription;nextContinuousAttempt=Date().addingTimeInterval(30)}
+        }
     }
     func regionEvent(_ inside:Bool){
         let payload:JSONValue = .object(["source":.string("geofence"),"gym_id":.string(settings.auto_detection.gym.id),"event":.string(inside ? "location_arrival":"location_exit")]),date=Date(),api=api
@@ -270,10 +329,20 @@ struct AppArchiveSnapshot:Sendable {
             try await pushSettings();message="Impostazioni salvate"
         }catch{message="Salvataggio remoto rinviato: \(error.localizedDescription)"}
     }
+    private func setEnergySex(_ sex:String)async{
+        guard ["male","female"].contains(sex) else{return}
+        do{
+            settings.profile.energy_sex=sex;try settings.profile.validate()
+            settings.dirty=true;settings.revision=UUID().uuidString;let saved=settings
+            try await store.perform{try $0.save(saved,key:"settings")};persistedSettings=saved
+            if enrolled{try await pushSettings()}
+        }catch{syncStatus="Preferenza energia salvata; invio da riprovare"}
+    }
     private func pushSettings()async throws{
         let snapshot=settings,revision=settings.revision
         let value:JSONValue = .object(["profile":try JSONValue.encoded(snapshot.profile),"config":try JSONValue.encoded(snapshot.config),"weekly_schedule":try JSONValue.encoded(snapshot.weekly_schedule),"auto_detection":try JSONValue.encoded(snapshot.auto_detection)])
         let response=try await api.request(path:"mobile/settings",method:"PATCH",body:value)
+        if let sex=snapshot.profile.energy_sex,response["settings"]["profile"]["energy_sex"].string != sex{syncStatus="Parametro calorie salvato; attendo l’aggiornamento FamilOS";try await applyBootstrap(response);return}
         if settings.revision==revision{var clean=snapshot;clean.dirty=false;let saved=clean;try await store.perform{try $0.save(saved,key:"settings")};if settings.revision==revision{settings.dirty=false;persistedSettings=saved}}
         try await applyBootstrap(response)
     }

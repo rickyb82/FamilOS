@@ -58,7 +58,9 @@ def validate_profile(profile):
     """Normalize optional adult profile data; unknown fields are not retained."""
     if not isinstance(profile, dict):
         raise ValueError('Profilo non valido')
-    values = {}
+    sex=profile.get('energy_sex')
+    if sex not in (None,'male','female'):raise ValueError('Parametro energetico non valido')
+    values = {'energy_sex':sex}
     for key, label, low, high in (
         ('weight_kg', 'Peso in kg', 30, 350),
         ('body_fat_pct', 'Massa grassa percentuale', 2, 65),

@@ -81,6 +81,12 @@ async def analysis(session_id:str|None=None,start:float|None=None,end:float|None
     except StoreError as exc:raise _error(exc) from None
 
 
+@router.get('/energy')
+async def energy(date:str|None=None,ctx:AuthContext=Depends(require_adult)):
+    try:return await asyncio.to_thread(store().daily_energy,ctx.user.id,date)
+    except StoreError as exc:raise _error(exc) from None
+
+
 @router.get('/sleep')
 async def sleep(days:int=Query(default=14,ge=1,le=90),ctx:AuthContext=Depends(require_adult)):
     return await asyncio.to_thread(store().sleep,ctx.user.id,days)

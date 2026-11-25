@@ -6,10 +6,10 @@ import {
 
 describe('wellness acquisition time and personal data', () => {
   it('shows Rome time across summer time without reinterpreting wall clock dates', () => {
-    expect(timeLabel(Date.parse('2026-01-15T12:30:00Z') / 1000)).toBe('09:00')
-    expect(timeLabel(Date.parse('2026-07-15T12:30:00Z') / 1000)).toBe('14:30')
+    expect(timeLabel(Date.parse('2026-01-15T08:00:00Z') / 1000)).toBe('09:00')
+    expect(timeLabel(Date.parse('2026-07-15T08:00:00Z') / 1000)).toBe('10:00')
     expect(epochSeconds('2026-11-24T09:00:00')).toBeNull()
-    expect(epochSeconds('2026-11-24T09:00:00+01:00')).toBe(Date.parse('2026-11-24T12:30:00Z') / 1000)
+    expect(epochSeconds('2026-11-24T09:00:00+01:00')).toBe(Date.parse('2026-11-24T08:00:00Z') / 1000)
     expect(epochSeconds(NaN)).toBeNull()
   })
   it('labels ISO weekdays and preserves user calendar times', () => {
@@ -28,7 +28,7 @@ describe('wellness acquisition time and personal data', () => {
     analysis.spo2 = [{ t: 1700000010, v: 97 }]
     const csv = analysisCsv(analysis)
     expect(csv).toContain('2023-11-14T22:13:20.000Z,heart_rate,80')
-    expect(csv).toContain('2023-11-14T22:09:00.000Z,spo2,97')
+    expect(csv).toContain('2023-11-14T22:13:30.000Z,spo2,97')
   })
   it('exports historical breathing only when supplied and keeps outside-display heart data separate', () => {
     const analysis = demoAnalysis(1800000000)

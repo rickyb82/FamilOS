@@ -5,7 +5,7 @@ export const WELLNESS_TIMEZONE = 'Europe/Rome'
 export const WEEKDAYS = ['Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato', 'Domenica']
 export type WellnessDate = number | string
 export type Profile = {
-  resting_hr?: number | null; weight_kg: number | null; height_cm: number | null; age: number | null; body_fat_pct: number | null
+  energy_sex?: 'male' | 'female' | null; resting_hr?: number | null; weight_kg: number | null; height_cm: number | null; age: number | null; body_fat_pct: number | null
   reported_lean_pct: number | null; reported_retention_pct: number | null; composition_source: string | null; goal: string | null
 }
 export type Phase = { name: string; duration: number; target_min: number | null; target_max: number | null; met: number | null }
@@ -22,7 +22,9 @@ export type WellnessSession = {
   status: string; auto_detected?: boolean; provisional?: boolean; stats: SessionStats; config?: WorkoutConfig
 }
 export type BridgeDevice = { id: string; name: string; last_seen_at?: WellnessDate | null; revoked?: boolean; queue?: number | Record<string, unknown> }
+export type DailyEnergy = {date:string; base_kcal:number|null; active_kcal:number|null; total_kcal:number|null; base_kcal_range:{min:number|null;max:number|null};total_kcal_range:{min:number|null;max:number|null};estimated_activity_seconds:number;unestimated_activity_seconds:number;coverage_fraction:number|null;rest_method:string|null;activity_sources:string[];warnings:string[];updated_at:number}
 export type WellnessState = {
+  daily_energy?: DailyEnergy
   server_time: WellnessDate; settings: WellnessSettings
   latest: {
     heart_rate?: { bpm: number; captured_at: WellnessDate; source: string; warnings?: string[]; flags_raw?: number; ibi_validity_raw?: number; provisional?: boolean; signal_check?: number; model?: string } | null

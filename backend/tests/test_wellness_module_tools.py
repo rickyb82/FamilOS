@@ -1,4 +1,5 @@
 import pytest
+import json
 from unittest.mock import Mock
 from sqlalchemy import select
 from app.db import SessionLocal
@@ -37,12 +38,37 @@ async def test_tools_are_owner_scoped_and_reject_shared_conversation(anna,tmp_pa
         assert archive.settings(user.id)['config']['rounds']==2
         assert archive.settings('someone-else')['config']['rounds']!=2
         assert (await tools.analysis({'session_id':'other-owner-session'},ctx)).is_error
+        assert (await tools.samples({'session_id':'other-owner-session'},ctx)).is_error
         from app.policy.permissions import tool_allowed
         assert tool_allowed({'allowed_tools':['mcp'],'apps':['wellness']},'allenamento_analisi')
         assert not tool_allowed({'allowed_tools':['mcp'],'apps':[]},'allenamento_analisi')
+        assert tool_allowed({'allowed_tools':['mcp'],'apps':['wellness']},'allenamento_campioni')
+        assert not tool_allowed({'allowed_tools':['mcp'],'apps':[]},'allenamento_campioni')
+        for name in ('allenamento_grafico','allenamento_energia'):
+            assert tool_allowed({'allowed_tools':['mcp'],'apps':['wellness']},name)
+            assert not tool_allowed({'allowed_tools':['mcp'],'apps':[]},name)
+        active=archive.manual_session(user.id,'start')['active_session']
+        with archive.connection(True) as point_db:
+            for i in range(1000):
+                point_db.execute('INSERT INTO points(owner_id,kind,t,value,source,quality,metadata,identity) VALUES(?,?,?,?,?,?,?,?)',(user.id,'heart_rate',active['started_at'],100,'synthetic',.9,json.dumps({'warnings':['synthetic quality metadata']*4,'interpolated':True,'provisional':True,'model':'WHR-U2.5.1'}),str(i)))
+        sample=await tools.samples({'session_id':active['id'],'limit':1000},ctx)
+        assert not sample.is_error and len(sample.content)<40_000
+        page=json.loads(sample.content)
+        assert page['has_more'] and page['returned']<1000 and page['next_cursor']
+        next_page=await tools.samples({'session_id':active['id'],'limit':1000,'cursor':page['next_cursor']},ctx)
+        assert not next_page.is_error and json.loads(next_page.content)['returned']>0
+        graph=await tools.chart({'session_id':active['id']},ctx)
+        assert not graph.is_error and graph.artifacts[0]['kind']=='html'
+        assert graph.artifacts[0]['conversation_id']==conv.id
+        assert '<canvas' in graph.artifacts[0]['content'] or "node('canvas'" in graph.artifacts[0]['content'] and '1000' in graph.content
+        assert not (await tools.energy({},ctx)).is_error
+        assert (await tools.chart({'session_id':'another-owner'},ctx)).is_error
         share=Share(family_id=user.family_id,resource_type='conversation',resource_id=conv.id,owner_id=user.id,target_user_id=None)
         db.add(share);await db.commit()
         assert (await tools.state({},ctx)).is_error
+        assert (await tools.samples({'session_id':active['id']},ctx)).is_error
+        assert (await tools.chart({'session_id':active['id']},ctx)).is_error
+        assert (await tools.energy({},ctx)).is_error
         before=archive.settings(user.id)
         assert (await tools.plan({'config':{'rounds':3}},ctx)).is_error
         assert archive.settings(user.id)==before

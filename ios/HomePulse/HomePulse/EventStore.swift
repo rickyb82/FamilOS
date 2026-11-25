@@ -29,6 +29,9 @@ final class EventStore: @unchecked Sendable {
         try run("CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY,body BLOB NOT NULL)")
         try run("CREATE TABLE IF NOT EXISTS history_records(digest TEXT PRIMARY KEY,ring TEXT,raw BLOB,received REAL,steps INTEGER,temp REAL,motion INTEGER)")
         try run("CREATE INDEX IF NOT EXISTS history_recorded_lookup ON history_records(ring,substr(raw,1,1))")
+        try run("CREATE TABLE IF NOT EXISTS recorded_segments(token TEXT PRIMARY KEY,started REAL NOT NULL,through REAL NOT NULL,body BLOB NOT NULL)")
+        try run("CREATE INDEX IF NOT EXISTS recorded_segments_time ON recorded_segments(started,through)")
+        try run("INSERT OR IGNORE INTO recorded_segments(token,started,through,body) SELECT substr(key,17),json_extract(CAST(value AS TEXT),'$.startedAt'),json_extract(CAST(value AS TEXT),'$.availableUntil'),value FROM kv WHERE key LIKE 'recorded.result.%' AND json_valid(CAST(value AS TEXT))")
         try run("CREATE TABLE IF NOT EXISTS readings(id INTEGER PRIMARY KEY AUTOINCREMENT,at REAL NOT NULL,bpm INTEGER NOT NULL)")
         try? FileManager.default.setAttributes([.protectionKey:FileProtectionType.completeUntilFirstUserAuthentication],ofItemAtPath:url.path)
     }
@@ -192,6 +195,19 @@ final class EventStore: @unchecked Sendable {
         bind(ring,s,1);guard sqlite3_step(s)==SQLITE_ROW else{throw AppError.message("Archivio cardio non leggibile")}
         return sqlite3_column_int64(s,0)
     }}
+    func recordedNextSessionRow(context:RecordedContext)throws->Int64?{try guarded{
+        let q=try statement("SELECT rowid,raw FROM history_records WHERE ring=? AND rowid>? AND substr(raw,1,1)=x'6c' ORDER BY rowid");defer{sqlite3_finalize(q)}
+        bind(context.ring,q,1);sqlite3_bind_int64(q,2,context.afterRow)
+        var sawStart=false,sawEnd=false
+        while sqlite3_step(q)==SQLITE_ROW{
+            let b=[UInt8](data(q,1));guard b.count>=8,b[6]==3 else{continue}
+            if b[7]<=1{
+                if sawEnd{return sqlite3_column_int64(q,0)}
+                sawStart=true
+            }else if sawStart,(2...11).contains(b[7]){sawEnd=true}
+        }
+        return nil
+    }}
     func recordedInput(context:RecordedContext)throws->([RecordedRaw],Data?){try guarded{
         let a=try statement("SELECT raw FROM history_records WHERE ring=? AND rowid<=? AND substr(raw,1,1) IN (x'41',x'42') ORDER BY rowid DESC LIMIT 1");defer{sqlite3_finalize(a)}
         bind(context.ring,a,1);sqlite3_bind_int64(a,2,context.afterRow)
@@ -206,7 +222,10 @@ final class EventStore: @unchecked Sendable {
     func commitRecorded(context:RecordedContext,result:RecordedResult)throws{try guarded{try transaction{
         try put(try JSONEncoder().encode(context),key:"recorded.context")
         try put(try JSONEncoder().encode(result),key:"recorded.latest")
-        try put(try JSONEncoder().encode(result),key:"recorded.result."+result.token)
+        let body=try JSONEncoder().encode(result)
+        try put(body,key:"recorded.result."+result.token)
+        let segment=try statement("INSERT INTO recorded_segments(token,started,through,body) VALUES(?,?,?,?) ON CONFLICT(token) DO UPDATE SET started=excluded.started,through=excluded.through,body=excluded.body");defer{sqlite3_finalize(segment)}
+        bind(result.token,segment,1);sqlite3_bind_double(segment,2,result.startedAt);sqlite3_bind_double(segment,3,result.availableUntil);bind(body,segment,4);try done(segment)
         if let workout=result.workoutID {
             let key="recorded.workout."+workout
             var tokens=load([String].self,key:key) ?? []
@@ -215,6 +234,15 @@ final class EventStore: @unchecked Sendable {
         }
         _=try insert(kind:"recorded_cardio",payload:result.payload,at:Date(),eventID:UUID())
     }}}
+    func recordedResults(start:Date,end:Date)->[RecordedResult]{guarded{
+        do{
+            let s=try statement("SELECT body FROM recorded_segments WHERE started<=? AND through>=? ORDER BY started,token");defer{sqlite3_finalize(s)}
+            sqlite3_bind_double(s,1,end.timeIntervalSince1970);sqlite3_bind_double(s,2,start.timeIntervalSince1970)
+            var values:[RecordedResult]=[]
+            while sqlite3_step(s)==SQLITE_ROW{values.append(try JSONDecoder().decode(RecordedResult.self,from:data(s,0)))}
+            return values
+        }catch{return []}
+    }}
     func recordedResults(workoutID:String)->[RecordedResult]{guarded{
         (load([String].self,key:"recorded.workout."+workoutID) ?? []).compactMap{load(RecordedResult.self,key:"recorded.result."+$0)}.sorted{$0.startedAt<$1.startedAt}
     }}

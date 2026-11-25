@@ -193,14 +193,17 @@ actor RecordedModelRunner {
     @Published private(set) var result:RecordedResult?
     @Published private(set) var status="Cardio registrato locale pronto"
     @Published private(set) var running=false
+    var continuousMode=false{didSet{monitorDiagnostic.submit(.object(["at":.number(Date().timeIntervalSince1970),"continuous_cardio_enabled":.bool(continuousMode)]))}}
     private var context:RecordedContext?;private var working=false;private var dirty=false
     private var next=Date.distantPast;private let store:EventStore;private let runner=RecordedModelRunner()
     private let diagnostic:DiagnosticWriter
     private let serverDiagnostic:DiagnosticWriter
+    private let monitorDiagnostic:DiagnosticWriter
     var onResult:((RecordedResult)->Void)?
     init(store:EventStore,diagnosticsURL:URL){
         self.store=store;diagnostic=DiagnosticWriter(url:diagnosticsURL)
         serverDiagnostic=DiagnosticWriter(url:diagnosticsURL.deletingLastPathComponent().appendingPathComponent("recorded-server-status.json"))
+        monitorDiagnostic=DiagnosticWriter(url:diagnosticsURL.deletingLastPathComponent().appendingPathComponent("cardio-monitor-status.json"))
         Task{let saved=try? await store.perform{($0.load(RecordedContext.self,key:"recorded.context"),$0.load(RecordedResult.self,key:"recorded.latest"))}
             if let saved,context==nil{context=saved.0;result=saved.1;dirty=context != nil;running=saved.0 != nil && saved.1?.final != true;if let result{onResult?(result)};tick()}}
         if ProcessInfo.processInfo.arguments.contains("--recorded-model-self-test") {
@@ -220,6 +223,8 @@ actor RecordedModelRunner {
         try await store.perform{try $0.save(value,key:"recorded.context")}
         context=value;result=nil;running=true;dirty=true;next = .distantPast;status="Attendo le prime tracce cardio dell’anello"
     }
+    var canPrepare:Bool{!working}
+    var hasContext:Bool{context != nil}
     func historyChanged(){dirty=true;tick()}
     func observeServer(_ value:JSONValue){
         guard let count=value["point_count"].number,let revision=value["revision"].number else{return}
@@ -231,15 +236,24 @@ actor RecordedModelRunner {
         let taskID=UIApplication.shared.beginBackgroundTask(withName:"Cardio registrato locale",expirationHandler:nil)
         Task{defer{working=false;if taskID != .invalid{UIApplication.shared.endBackgroundTask(taskID)}}
             do{
-                let saved=try await store.perform{try $0.recordedInput(context:context)}
+                var context=context
+                if continuousMode,result?.final==true {
+                    let previousContext=context
+                    guard let row=try await store.perform({try $0.recordedNextSessionRow(context:previousContext)}) else{return}
+                    context=RecordedContext(ring:context.ring,afterRow:row-1,version:context.version,activity:context.activity,profile:context.profile,workoutID:nil)
+                    let resumed=context;try await store.perform{try $0.save(resumed,key:"recorded.context")}
+                    self.context=context;result=nil;running=true
+                }
+                let activeContext=context
+                let saved=try await store.perform{try $0.recordedInput(context:activeContext)}
                 guard saved.0.count<65_536 else{throw AppError.message("Sessione troppo estesa; tracce salvate")}
-                guard let input=try await Task.detached(priority:.utility,operation:{try RecordedBuilder.build(context:context,records:saved.0,previousAnchor:saved.1)}).value else {
+                guard let input=try await Task.detached(priority:.utility,operation:{try RecordedBuilder.build(context:activeContext,records:saved.0,previousAnchor:saved.1)}).value else {
                     status="Attendo tracce cardio e movimento"
                     diagnostic.submit(.object(["at":.number(Date().timeIntervalSince1970),"status":.string("awaiting_traces"),"input_record_count":.number(Double(saved.0.count)),"time_anchor_available":.bool(saved.1.flatMap{RecordedBuilder.anchor($0)} != nil),"health_values_exported":.bool(false)]));return
                 }
                 if result?.inputDigest==input.digest{return}
-                let start=Date();let output=try await runner.run(input,context:context,revision:context.revision+1)
-                var updated=context;updated.revision=output.revision
+                let start=Date();let output=try await runner.run(input,context:activeContext,revision:activeContext.revision+1)
+                var updated=activeContext;updated.revision=output.revision
                 try await store.perform{try $0.commitRecorded(context:updated,result:output)}
                 self.context=updated;result=output;running = !output.final
                 status=output.signalCheck == -2 ? "Segnale cardio insufficiente · tracce conservate":output.final ? "Cardio registrato · elaborazione finale locale":"Cardio registrato · elaborazione locale"
