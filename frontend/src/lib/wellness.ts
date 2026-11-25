@@ -83,13 +83,17 @@ export function epochSeconds(value: unknown): number | null {
   const ms = Date.parse(value)
   return Number.isFinite(ms) ? ms / 1000 : null
 }
+// Intl formatter construction is expensive when rendering hundreds of samples.
+const clockFormatter = new Intl.DateTimeFormat('it-IT', { timeZone: WELLNESS_TIMEZONE, hour: '2-digit', minute: '2-digit' })
+const secondsFormatter = new Intl.DateTimeFormat('it-IT', { timeZone: WELLNESS_TIMEZONE, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+const dayFormatter = new Intl.DateTimeFormat('it-IT', { timeZone: WELLNESS_TIMEZONE, day: 'numeric', month: 'short' })
 export function timeLabel(epoch: number | null | undefined, seconds = false): string {
   if (epoch == null || !Number.isFinite(epoch)) return '—'
-  return new Intl.DateTimeFormat('it-IT', { timeZone: WELLNESS_TIMEZONE, hour: '2-digit', minute: '2-digit', ...(seconds ? { second: '2-digit' } : {}) }).format(new Date(epoch * 1000))
+  return (seconds ? secondsFormatter : clockFormatter).format(new Date(epoch * 1000))
 }
 export function dateLabel(value: WellnessDate | null | undefined): string {
   const epoch = epochSeconds(value)
-  return epoch == null ? 'Data non disponibile' : new Intl.DateTimeFormat('it-IT', { timeZone: WELLNESS_TIMEZONE, day: 'numeric', month: 'short' }).format(new Date(epoch * 1000))
+  return epoch == null ? 'Data non disponibile' : dayFormatter.format(new Date(epoch * 1000))
 }
 export function ageLabel(value: WellnessDate | null | undefined, now: number): string {
   const epoch = epochSeconds(value)
@@ -161,6 +165,46 @@ export function chartSegments(values: TimePoint[], maxGap = 8): TimePoint[][] {
     else last.push(point)
   }
   return segments
+}
+/** Display-only envelope. Keep real first/min/max/last samples per time bucket.
+ * Segment identity is assigned BEFORE selection so decimation neither connects
+ * a dropout nor invents gaps when selected samples are more than 8 seconds apart.
+ * Full source arrays remain available for statistics and CSV export.
+ */
+export function chartEnvelope(values: TimePoint[], start: number, end: number, columns = 160, maxGap = 8) {
+  const sorted = values.filter(p => Number.isFinite(p.t) && Number.isFinite(p.v) && p.t >= start && p.t <= end)
+  if (sorted.some((p, i) => i > 0 && p.t < sorted[i - 1].t)) sorted.sort((a, b) => a.t - b.t)
+  const buckets = Math.max(1, Math.min(900, Math.floor(columns) || 1))
+  const selected: Array<{ point: TimePoint; segment: number; index: number }> = []
+  let segment = 0, previous: TimePoint | undefined, bucket = -1
+  let first: typeof selected[number] | undefined, low: typeof first, high: typeof first, last: typeof first
+  let min = Infinity, max = -Infinity
+  const flush = () => {
+    const candidates = [first, low, high, last].filter((p): p is typeof selected[number] => !!p).sort((a, b) => a.index - b.index)
+    for (const candidate of candidates) if (selected[selected.length - 1]?.index !== candidate.index) selected.push(candidate)
+  }
+  for (let index = 0; index < sorted.length; index++) {
+    const point = sorted[index]
+    min = Math.min(min, point.v); max = Math.max(max, point.v)
+    if (previous && (point.t - previous.t > maxGap || point.warnings?.length || previous.warnings?.length)) segment++
+    const current = Math.min(buckets - 1, Math.floor((point.t - start) / Math.max(1, end - start) * buckets))
+    const item = { point, segment, index }
+    if (current !== bucket) { flush(); first = low = high = last = item; bucket = current }
+    else {
+      if (point.v < low!.point.v) low = item
+      if (point.v > high!.point.v) high = item
+      last = item
+    }
+    previous = point
+  }
+  flush()
+  const segments: TimePoint[][] = []
+  let lastSegment = -1
+  for (const item of selected) {
+    if (item.segment !== lastSegment) segments.push([])
+    segments[segments.length - 1].push(item.point); lastSegment = item.segment
+  }
+  return { points: selected.map(item => item.point), segments, min: sorted.length ? min : 0, max: sorted.length ? max : 1 }
 }
 export function analysisCsv(analysis: WellnessAnalysis): string {
   const lines = ['timestamp_utc,serie,valore']

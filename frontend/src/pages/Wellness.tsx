@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useAuth } from '../lib/auth'
 import {
-  activePhase, ageLabel, analysisCsv, chartSegments, dateLabel, defaultConfig, defaultDetection, demoAnalysis,
+  activePhase, ageLabel, analysisCsv, dateLabel, defaultConfig, defaultDetection, demoAnalysis,
   demoState, durationLabel, energyValue, epochSeconds, heartQuality, profileComposition, timeLabel,
   valueLabel, wellness, WEEKDAYS, WELLNESS_TIMEZONE,
-  type AutoDetection, type BridgeDevice, type Pairing, type Phase, type Profile, type TimePoint,
+  type AutoDetection, type BridgeDevice, type Pairing, type Phase, type Profile,
   type WeeklySlot, type WellnessAnalysis, type WellnessSession, type WellnessSettings, type WellnessState, type WorkoutConfig,
 } from '../lib/wellness'
 import './Wellness.css'
 import SleepPanel from './SleepPanel'
+import { MiniHeart, SharedTimeline, EMPTY_POINTS } from './WellnessCharts'
 
 type View = 'dashboard' | 'sleep' | 'plan' | 'profile' | 'calendar' | 'devices'
 const VIEWS: Array<{ id: View; label: string; icon: string }> = [
@@ -70,17 +71,28 @@ export default function Wellness() {
   const [demo, setDemo] = useState(false), [clock, setClock] = useState(Date.now() / 1000), [tv, setTv] = useState(false)
   const [loadError, setLoadError] = useState(''), [actionError, setActionError] = useState(''), [notice, setNotice] = useState(''), [busy, setBusy] = useState('')
   const [lastUpdate, setLastUpdate] = useState(0), [pairing, setPairing] = useState<Pairing | null>(null)
+  const [visible, setVisible] = useState(() => document.visibilityState !== 'hidden')
+  useEffect(() => {
+    const changed = () => setVisible(document.visibilityState !== 'hidden')
+    document.addEventListener('visibilitychange', changed)
+    return () => document.removeEventListener('visibilitychange', changed)
+  }, [])
   const root = useRef<HTMLElement>(null)
   const mounted = useRef(true)
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
-  useEffect(() => { const timer = window.setInterval(() => setClock(Date.now() / 1000), 1000); return () => clearInterval(timer) }, [])
+  useEffect(() => {
+    if (!visible) return
+    setClock(Date.now() / 1000)
+    const timer = window.setInterval(() => setClock(Date.now() / 1000), 1000)
+    return () => clearInterval(timer)
+  }, [visible])
   const refresh = useCallback(async () => {
     const next = await wellness.state()
     if (mounted.current) { setState(next); setLoadError(''); setLastUpdate(Date.now() / 1000) }
     return next
   }, [])
   useEffect(() => {
-    if (!allowed || demo) return
+    if (!allowed || demo || !visible) return
     let alive = true, timer: ReturnType<typeof setTimeout>
     const poll = async () => {
       try { await refresh() } catch (error) { if (alive && mounted.current) setLoadError(error instanceof Error ? error.message : 'Il server non è raggiungibile') }
@@ -88,9 +100,9 @@ export default function Wellness() {
     }
     poll()
     return () => { alive = false; clearTimeout(timer) }
-  }, [allowed, demo, refresh])
+  }, [allowed, demo, refresh, visible])
   useEffect(() => {
-    if (!allowed || demo) return
+    if (!allowed || demo || !visible || view !== 'dashboard') return
     let alive = true, timer: ReturnType<typeof setTimeout>
     const poll = async () => {
       try { const next = await wellness.analysis(selected || undefined); if (alive) setAnalysis(next) } catch { /* Historical decoding may still be queued. */ }
@@ -98,7 +110,7 @@ export default function Wellness() {
     }
     setAnalysis(null); poll()
     return () => { alive = false; clearTimeout(timer) }
-  }, [allowed, demo, selected])
+  }, [allowed, demo, selected, visible, view])
   const perform = useCallback(async (name: string, operation: () => Promise<unknown>) => {
     if (demo) return
     setBusy(name); setActionError(''); setNotice('')
@@ -147,7 +159,7 @@ export default function Wellness() {
       {view === 'dashboard' && <>
         <div className="wl-page-title"><div><span className="wl-eyebrow">IL TUO RITMO, IL TUO SPAZIO</span><h1>{hello === 'Il tuo spazio' ? 'Ogni allenamento conta.' : `${hello}, ritrova il tuo ritmo.`}</h1><p>Il corpo durante la sessione. I progressi, nel tempo.</p></div><span className={`wl-status ${hasSignal ? 'wl-status-live' : ''}`}><i />{demo ? 'Simulazione attiva' : hasSignal ? 'Battito aggiornato' : paired.length ? 'iPhone associato' : 'In attesa del tuo iPhone'}</span></div>
         <div className="wl-dashboard">
-          <section className="wl-card wl-heart-card"><div className="wl-card-heading"><h2>Frequenza cardiaca</h2><span>{demo ? 'SIMULAZIONE' : 'OURA GEN3'}</span></div><div className="wl-heart-main"><div className="wl-heart-value"><Icon name="heart" size={43} /><strong>{hasSignal ? valueLabel(snapshot?.latest.heart_rate?.bpm) : '—'}</strong><span>bpm</span></div><div className="wl-heart-target"><TargetLabel bpm={hasSignal ? snapshot?.latest.heart_rate?.bpm : null} phase={currentPhase} /><p>{hasSignal ? `Ricevuto ${ageLabel(snapshot?.latest.heart_rate?.captured_at, serverNow)}` : quality.fresh ? 'Il segnale richiede una verifica' : 'La lettura apparirà quando il sensore invia dati recenti.'}</p></div></div>{outsideIsNewer && <div className="wl-quality-note" role="status">Ultima lettura fuori dall’intervallo di visualizzazione · {timeLabel(outsideStamp, true)}. Il dato originale è conservato nell’archivio.</div>}<QualityNote warnings={quality.warnings} flags={snapshot?.latest.heart_rate?.flags_raw} /><div className="wl-heart-chart"><MiniHeart points={shownAnalysis?.heart_rate || []} now={shownAnalysis?.window_end || serverNow} /></div><div className="wl-heart-meta"><span>Rilevazioni, senza riempire i vuoti</span><span>{demo ? 'Dati sintetici' : 'Acquisizione reale · Roma'}</span></div><div className="wl-session-stats"><div><span>Media sessione</span><strong>{valueLabel(session?.stats.average_bpm)} <small>bpm</small></strong></div><div><span>Picco sessione</span><strong>{valueLabel(session?.stats.max_bpm)} <small>bpm</small></strong></div><div><span>Tempo attivo</span><strong>{durationLabel(session?.active_seconds || 0)}</strong></div></div></section>
+          <section className="wl-card wl-heart-card"><div className="wl-card-heading"><h2>Frequenza cardiaca</h2><span>{demo ? 'SIMULAZIONE' : 'OURA GEN3'}</span></div><div className="wl-heart-main"><div className="wl-heart-value"><Icon name="heart" size={43} /><strong>{hasSignal ? valueLabel(snapshot?.latest.heart_rate?.bpm) : '—'}</strong><span>bpm</span></div><div className="wl-heart-target"><TargetLabel bpm={hasSignal ? snapshot?.latest.heart_rate?.bpm : null} phase={currentPhase} /><p>{hasSignal ? `Ricevuto ${ageLabel(snapshot?.latest.heart_rate?.captured_at, serverNow)}` : quality.fresh ? 'Il segnale richiede una verifica' : 'La lettura apparirà quando il sensore invia dati recenti.'}</p></div></div>{outsideIsNewer && <div className="wl-quality-note" role="status">Ultima lettura fuori dall’intervallo di visualizzazione · {timeLabel(outsideStamp, true)}. Il dato originale è conservato nell’archivio.</div>}<QualityNote warnings={quality.warnings} flags={snapshot?.latest.heart_rate?.flags_raw} /><div className="wl-heart-chart"><MiniHeart points={shownAnalysis?.heart_rate || EMPTY_POINTS} now={shownAnalysis?.window_end || serverNow} /></div><div className="wl-heart-meta"><span>Rilevazioni, senza riempire i vuoti</span><span>{demo ? 'Dati sintetici' : 'Acquisizione reale · Roma'}</span></div><div className="wl-session-stats"><div><span>Media sessione</span><strong>{valueLabel(session?.stats.average_bpm)} <small>bpm</small></strong></div><div><span>Picco sessione</span><strong>{valueLabel(session?.stats.max_bpm)} <small>bpm</small></strong></div><div><span>Tempo attivo</span><strong>{durationLabel(session?.active_seconds || 0)}</strong></div></div></section>
           <SessionCard config={config} session={session} phase={currentPhase} busy={!!busy} demo={demo} onAction={sessionAction} onEdit={() => setView('plan')} />
           <section className="wl-metric-grid" aria-label="Altri segnali"><SensorCard icon="drop" title="SpO₂" value={snapshot?.latest.spo2?.value} unit="%" utcMs={snapshot?.latest.spo2?.utc_ms} note="Dato storico elaborato" color="aqua" /><SensorCard icon="temperature" title="Temperatura anello" value={snapshot?.latest.temperature?.value} unit="°C" utcMs={snapshot?.latest.temperature?.utc_ms} note="Sensore 1 · non temperatura interna" color="coral" digits={1} /><SensorCard icon="motion" title="Movimento" value={snapshot?.latest.motion?.value} unit="s" utcMs={snapshot?.latest.motion?.utc_ms} note="Secondi nel record storico" color="violet" /><SensorCard icon="activity" title="Passi" value={snapshot?.latest.steps?.value} unit="" utcMs={snapshot?.latest.steps?.utc_ms} note="Incremento nell’ultimo record" color="lime" /><SensorCard icon="breath" title="Frequenza respiratoria" value={snapshot?.latest.respiratory_rate?.value} unit="resp/min" utcMs={snapshot?.latest.respiratory_rate?.utc_ms} note="Media nel record storico" color="aqua" digits={1} emptyNote="Nessun record del respiro disponibile" /></section>
         </div>
@@ -180,23 +192,6 @@ function QualityNote({ warnings, flags }: { warnings: string[]; flags?: number }
   if (flags != null && flags & 4 && !labels.length) labels.push('Segnale ottico non affidabile.')
   if (!labels.length) return null
   return <div className="wl-quality-note" role="status">{labels.map((warning, index) => <span key={index}>{warning}</span>)}</div>
-}
-function MiniHeart({ points, now }: { points: TimePoint[]; now: number }) {
-  const selected = points.filter(point => point.t >= now - 300 && point.t <= now)
-  return <LinePlot points={selected} start={now - 300} end={now} color="#d6ed98" kind="heart" label="Battito negli ultimi cinque minuti" />
-}
-function LinePlot({ points, start, end, color, kind, label }: { points: TimePoint[]; start: number; end: number; color: string; kind: 'heart' | 'dots' | 'bars'; label: string }) {
-  const valid = points.filter(point => Number.isFinite(point.t) && Number.isFinite(point.v) && point.t >= start && point.t <= end)
-  const values = valid.map(point => point.v), min = values.length ? Math.min(...values) : 0, max = values.length ? Math.max(...values) : 1
-  const spread = Math.max(kind === 'heart' ? 20 : 1, max - min), low = kind === 'bars' ? 0 : min - spread * .18, high = max + spread * .18
-  const x = (t: number) => 8 + Math.min(1, Math.max(0, (t - start) / Math.max(1, end - start))) * 872
-  const y = (v: number) => 76 - (v - low) / Math.max(.01, high - low) * 64
-  return <div className="wl-plot"><svg viewBox="0 0 900 88" preserveAspectRatio="none" role="img" aria-label={label}><g stroke="currentColor" className="wl-grid-lines">{[15, 46, 77].map(at => <path d={`M0 ${at}H900`} key={at} />)}{[0, 225, 450, 675, 900].map(at => <path d={`M${at} 0V88`} key={at} />)}</g>{kind === 'heart' && chartSegments(valid).map((segment, index) => segment.length > 1 && <polyline key={index} fill="none" stroke={color} strokeWidth="2.4" vectorEffect="non-scaling-stroke" points={segment.map(point => `${x(point.t)},${y(point.v)}`).join(' ')} />)}{valid.map((point, index) => kind === 'bars' ? <path key={index} d={`M${x(point.t)} 80V${y(point.v)}`} stroke={color} strokeWidth="4" vectorEffect="non-scaling-stroke"><title>{timeLabel(point.t, true)} · {valueLabel(point.v, 1)}</title></path> : <circle key={index} cx={x(point.t)} cy={y(point.v)} r={kind === 'dots' ? 3.4 : 2} fill={point.warnings?.length ? '#f0aa81' : color}><title>{timeLabel(point.t, true)} · {valueLabel(point.v, 1)}</title></circle>)}</svg>{!valid.length && <span className="wl-plot-empty">Nessuna rilevazione in questo periodo</span>}</div>
-}
-function SharedTimeline({ analysis }: { analysis: WellnessAnalysis | null }) {
-  const now = Date.now() / 1000, start = analysis?.window_start ?? now - 3600, end = Math.max(start + 1, analysis?.window_end ?? now)
-  const series = [{ key: 'heart_rate', label: 'Battito', unit: 'bpm', color: '#d6ed98', kind: 'heart' }, { key: 'spo2', label: 'SpO₂', unit: '%', color: '#85d4cc', kind: 'dots' }, { key: 'temperature', label: 'Temperatura', unit: '°C', color: '#eda58c', kind: 'dots' }, { key: 'motion', label: 'Movimento', unit: 's / record', color: '#b5a9e6', kind: 'bars' }, { key: 'respiratory_rate', label: 'Respiro', unit: 'resp/min', color: '#a3d4eb', kind: 'dots' }] as const
-  return <div className="wl-shared-chart">{series.map(row => <div className="wl-series-row" key={row.key}><div className="wl-series-label"><span style={{ background: row.color }} /><strong>{row.label}</strong><small>{row.unit}</small></div><div className="wl-series-plot"><LinePlot points={analysis?.[row.key] || []} start={start} end={end} color={row.color} kind={row.kind} label={`${row.label}, istanti di acquisizione`} />{analysis?.workout_end != null && analysis.workout_end > start && analysis.workout_end < end && <span className="wl-workout-end" style={{ left: `${(analysis.workout_end - start) / (end - start) * 100}%` }} title={`Fine allenamento ${timeLabel(analysis.workout_end)}`} />}</div></div>)}<div className="wl-shared-axis"><span /><div>{Array.from({ length: 5 }, (_, index) => <span key={index}>{timeLabel(start + (end - start) * index / 4)}</span>)}</div></div></div>
 }
 function SensorCard({ title, icon, value, unit, utcMs, note, color, digits = 0, emptyNote = 'Non ancora disponibile' }: { title: string; icon: string; value?: number; unit: string; utcMs?: number; note: string; color: string; digits?: number; emptyNote?: string }) {
   return <div className={`wl-card wl-sensor wl-sensor-${color}`}><div><Icon name={icon} size={21} /><span>{title}</span></div><strong>{valueLabel(value, digits)} <small>{value != null ? unit : ''}</small></strong><p>{note}</p><small>{utcMs != null ? `${dateLabel(utcMs / 1000)} · ${timeLabel(utcMs / 1000)}` : emptyNote}</small></div>

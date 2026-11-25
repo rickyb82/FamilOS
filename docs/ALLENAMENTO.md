@@ -23,7 +23,15 @@ Non accettano un proprietario alternativo. I dati sono disponibili esclusivament
 
 ## Trasporto live
 
-Con Home Pulse aperta, i frame sono prima salvati nel journal e poi inviati con una sessione HTTP immediata, con cadenza di invio non superiore a circa un batch al secondo. I campioni recenti hanno precedenza sullo storico ancora da inviare; UUID, sequenze e timestamp originali non cambiano. L’ACK rimuove solo i riferimenti della coda, mai il journal. Anche a schermo bloccato una nuova notifica Bluetooth apre una finestra breve per l’invio HTTP immediato; un task di completamento protegge soltanto la singola richiesta. In assenza di eventi live, URLSession background conserva la sincronizzazione differita e durevole. Il ritorno in primo piano riprende lo stesso batch durevole, con deduplicazione lato server. L’aggiornamento della dashboard interroga lo stato ogni secondo e i grafici ogni cinque secondi. La latenza effettiva dipende dalla rete e dalla disponibilità di nuove misure valide.
+Con Home Pulse aperta, i frame sono prima salvati nel journal e poi inviati con una sessione HTTP immediata, con cadenza di invio non superiore a circa un batch al secondo. I campioni recenti hanno precedenza sullo storico ancora da inviare; UUID, sequenze e timestamp originali non cambiano. L’ACK rimuove solo i riferimenti della coda, mai il journal. Anche a schermo bloccato una nuova notifica Bluetooth apre una finestra breve per l’invio HTTP immediato; un task di completamento protegge soltanto la singola richiesta. In assenza di eventi live, URLSession background conserva la sincronizzazione differita e durevole. Il ritorno in primo piano riprende lo stesso batch durevole, con deduplicazione lato server. Con la pagina visibile, la dashboard interroga lo stato ogni secondo e i grafici ogni cinque secondi. Lo storico viene richiesto solo nella Panoramica; passando a un’altra sezione, oppure nascondendo la pagina, le richieste non necessarie si fermano e riprendono al ritorno. La latenza effettiva dipende dalla rete e dalla disponibilità di nuove misure valide.
+
+## Fluidità della dashboard
+
+I grafici sono componenti memorizzati: gli aggiornamenti del timer e del solo stato live non ricalcolano lo storico. Il pannello Sonno è isolato dagli aggiornamenti della Panoramica e sospende le richieste quando la pagina non è visibile. I formattatori di data e ora vengono riutilizzati anziché ricreati per ogni punto.
+
+Ogni serie disegna al massimo 640 campioni reali con orari originali: primo, minimo, massimo e ultimo di ciascun intervallo temporale del disegno. I confini di interruzione e qualità vengono assegnati sulla serie completa prima della selezione, evitando di unire campioni separati da un’interruzione o di scambiare la selezione grafica per un’assenza di segnale. Le serie complete rimangono disponibili per statistiche e CSV; non vengono riscritte né interpolate.
+
+I test includono uno storico sintetico di 200.000 punti, picchi nello stesso intervallo, interruzioni, isolamento dal timer, cambio sezione e sospensione/ripresa della pagina.
 
 ## Orbita
 

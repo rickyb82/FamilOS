@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react'
+import { memo, useEffect, useId, useState } from 'react'
 import { ApiError } from '../lib/api'
 import { dateLabel, timeLabel, valueLabel, wellness, type SleepPeriod, type WellnessSleep } from '../lib/wellness'
 
@@ -56,13 +56,13 @@ function SleepPhases({ period }: { period: SleepPeriod }) {
   </section>
 }
 
-export default function SleepPanel({ demo = false }: { demo?: boolean }) {
+export default memo(function SleepPanel({ demo = false, visible = true }: { demo?: boolean; visible?: boolean }) {
   const [data, setData] = useState<WellnessSleep | null>(null), [selected, setSelected] = useState('')
   const [days, setDays] = useState(14), [retry, setRetry] = useState(0)
   const [loading, setLoading] = useState(true), [error, setError] = useState('')
   const selectId = useId(), daysId = useId()
   useEffect(() => {
-    if (demo) return
+    if (demo || !visible) return
     let alive = true, timer: ReturnType<typeof setTimeout> | undefined
     setLoading(true)
     const load = async () => {
@@ -86,7 +86,7 @@ export default function SleepPanel({ demo = false }: { demo?: boolean }) {
     }
     void load()
     return () => { alive = false; clearTimeout(timer) }
-  }, [demo, days, retry])
+  }, [demo, days, retry, visible])
   const periods = [...(data?.periods || [])].sort((a, b) => b.started_at - a.started_at)
   const period = periods.find(item => item.id === selected) || periods[0]
   return <div className="wl-sleep-panel">
@@ -108,4 +108,4 @@ export default function SleepPanel({ demo = false }: { demo?: boolean }) {
       </>}
     </>}
   </div>
-}
+})
