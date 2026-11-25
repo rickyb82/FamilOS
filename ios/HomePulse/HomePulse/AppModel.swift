@@ -54,6 +54,7 @@ struct AppArchiveSnapshot:Sendable {
     private var batteryAlert=BatteryAlertState();private var batteryNotificationPending=false
     private var batteryFullAlert=BatteryFullAlertState();private var batteryFullNotificationPending=false
     let store:EventStore;let api:WellnessAPI;let ring:RingBridge;let gym:GymDetection
+    let recorded:RecordedCardioController
     private var ticking:Task<Void,Never>?;private var refreshing=false
     private var refreshingArchive=false;private var archiveNeedsMetrics=false;private var lastArchiveRefresh=Date.distantPast
     private let notificationDiagnostics:DiagnosticWriter
@@ -62,6 +63,7 @@ struct AppArchiveSnapshot:Sendable {
         settings=snapshot.settings;persistedSettings=snapshot.settings
         api=WellnessAPI(store:store,folder:folder.appendingPathComponent("uploads"))
         ring=RingBridge(store:store,diagnosticsURL:folder.appendingPathComponent("battery-status.json"));gym=GymDetection(store:store,state:snapshot.detection,coordinates:snapshot.coordinates)
+        recorded=RecordedCardioController(store:store,diagnosticsURL:folder.appendingPathComponent("recorded-model-status.json"))
         enrolled=SecureStore.credentials() != nil
         current=snapshot.current;sessions=snapshot.sessions;readingBuffer=snapshot.readings;readings=Self.displayReadings(snapshot.readings);metrics=snapshot.metrics
         serverData=snapshot.bootstrap;analysisData=snapshot.analysis;sleepData=snapshot.sleep;ownerName=snapshot.owner
@@ -72,7 +74,12 @@ struct AppArchiveSnapshot:Sendable {
         api.onUpload={[weak self] in Task{@MainActor in self?.refreshArchiveStatus()}}
         api.onAcknowledged={[weak self] in Task{@MainActor in self?.refreshArchiveStatus()}}
         ring.onLive={[weak self] value,time in self?.api.noteBluetoothActivity();self?.receive(value,at:time)}
-        ring.onHistory={[weak self] in self?.archiveNeedsMetrics=true}
+        ring.onHistory={[weak self] in self?.archiveNeedsMetrics=true;self?.recorded.historyChanged()}
+        ring.onRecordedPrepare={[weak self] in
+            guard let self,let id=ring.logicalRingID,let activity=settings.config.activity_id else{throw AppError.message("Configurazione cardio incompleta")}
+            try await recorded.prepare(ring:id,version:ring.capabilities[3] ?? 0,activity:activity,profile:settings.profile,workoutID:current.map{$0.remoteID ?? $0.id.uuidString})
+        }
+        recorded.onResult={[weak self] value in self?.receiveRecorded(value)}
         ring.onJournal={[weak self] in self?.api.upload()}
         gym.onCandidate={[weak self] id,date in self?.startWorkout(auto:true,id:id,at:date)}
         gym.onReply={[weak self] id,name,negative in self?.resolveCandidate(id:id,name:name,negative:negative)}
@@ -83,7 +90,7 @@ struct AppArchiveSnapshot:Sendable {
         Task{await refreshBatteryNotificationStatus()}
         pending=snapshot.pending;journalCount=snapshot.journalCount
         if current==nil,let id=gym.engine.state.candidateSessionID,let date=gym.engine.state.candidateAt{startWorkout(auto:true,id:id,at:date)}
-        ticking=Task{[weak self] in var ticks=0;while !Task.isCancelled{try? await Task.sleep(nanoseconds:1_000_000_000);guard let self else{return};ring.maintenance();refreshArchiveStatus();ticks+=1;if ticks%30==0{await refresh()}}}
+        ticking=Task{[weak self] in var ticks=0;while !Task.isCancelled{try? await Task.sleep(nanoseconds:1_000_000_000);guard let self else{return};ring.maintenance();recorded.tick();refreshArchiveStatus();ticks+=1;if ticks%30==0{await refresh()}}}
     }
     private func refreshArchiveStatus(){
         guard !refreshingArchive,Date().timeIntervalSince(lastArchiveRefresh)>=1 else{return}
@@ -172,6 +179,12 @@ struct AppArchiveSnapshot:Sendable {
         gym.accept(point,manualWorkout:current != nil)
     }
     nonisolated static func displayReadings(_ source:[Reading])->[Reading]{ChartSeries.indices(values:source.map{Double($0.bpm)},limit:150).map{source[$0]}}
+    private func receiveRecorded(_ value:RecordedResult){
+        readingBuffer.removeAll{$0.date.timeIntervalSince1970>=value.startedAt && $0.date.timeIntervalSince1970<=value.availableUntil}
+        readingBuffer += value.acceptedReadings
+        readingBuffer.sort{$0.date<$1.date};if readingBuffer.count>3000{readingBuffer.removeFirst(readingBuffer.count-3000)}
+        readings=Self.displayReadings(readingBuffer);api.upload()
+    }
     func recordPayload(_ session:WorkoutSession,action:String)->JSONValue {
         var value:[String:JSONValue]=["action":.string(action),"session_id":.string(session.remoteID ?? session.id.uuidString),"activity_name":.string(session.activityName),"active_seconds":.number(session.elapsed()),"auto_detected":.bool(session.auto_detected),"provisional":.bool(session.provisional),"source":.string(session.source)]
         value["config_snapshot"]=(try? JSONValue.encoded(session.config)) ?? .null
@@ -217,7 +230,14 @@ struct AppArchiveSnapshot:Sendable {
         }
     }
     func startRingSport(recordedOnly:Bool=false)async{guard let selected=settings.config.activity_id,allowedActivities.contains(where:{$0.0==selected}),(0...65535).contains(selected),let age=settings.profile.age,let rest=settings.profile.resting_hr else{message="Scegli un’attività compatibile e inserisci età e FC a riposo nel profilo";return}
-        do{try await ring.startSport(activity:UInt16(selected),age:age,resting:rest,recordedOnly:recordedOnly)}catch{message=error.localizedDescription}
+        do{
+            if recordedOnly,current==nil {
+                guard !changingWorkout else{throw AppError.message("Salvataggio allenamento in corso")}
+                let session=WorkoutSession(id:UUID(),activityName:settings.config.activity_name?.nilIfEmpty ?? "Allenamento",startedAt:Date(),config:settings.config,profile:settings.profile,runningSince:Date())
+                try await commit(session,action:"started")
+            }
+            try await ring.startSport(activity:UInt16(selected),age:age,resting:rest,recordedOnly:recordedOnly)
+        }catch{message=error.localizedDescription}
     }
     func regionEvent(_ inside:Bool){
         let payload:JSONValue = .object(["source":.string("geofence"),"gym_id":.string(settings.auto_detection.gym.id),"event":.string(inside ? "location_arrival":"location_exit")]),date=Date(),api=api

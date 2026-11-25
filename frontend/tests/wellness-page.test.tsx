@@ -31,6 +31,17 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
+it('labels recorded model results and keeps their acquisition age', async () => {
+  const data=fixture()
+  data.latest.heart_rate={bpm:123,captured_at:Date.now()/1000-30,source:'oura-recorded-offline',provisional:true,signal_check:0,model:'WHR-U2.5.1'}
+  vi.mocked(wellness.state).mockResolvedValue(data)
+  render(<Wellness />)
+  expect(await screen.findByText('CARDIO REGISTRATO')).toBeTruthy()
+  expect(screen.getByText('Risultato provvisorio')).toBeTruthy()
+  expect(screen.getByText('Calcolo locale · WHR U2.5.1')).toBeTruthy()
+  expect(screen.getByText('123')).toBeTruthy()
+})
+
 it('integrates the app for adults and blocks child rendering and requests', async () => {
   expect(desktopApps({ user: { role: 'adult' }, features: {wellness:true} } as Me).some(app => app.id === 'wellness')).toBe(true)
   expect(desktopApps({ user: { role: 'child' } } as Me).some(app => app.id === 'wellness')).toBe(false)

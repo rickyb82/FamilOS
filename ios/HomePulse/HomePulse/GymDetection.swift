@@ -4,18 +4,18 @@ import UserNotifications
 import Combine
 
 struct Gym:Codable,Equatable,Sendable {
-    var id="serendip-prato";var name="Serendip Prato"
-    var address="Via Giuseppe Valentini 20, 59100 Prato, Italia"
+    var id="primary-gym";var name="La mia palestra"
+    var address="Imposta indirizzo palestra"
     var latitude:Double?;var longitude:Double?;var radius_m:Double=150
 }
 struct AutoDetectionSettings:Codable,Equatable,Sendable {
-    var enabled=true;var gym=Gym();var heart_rate_delta_bpm=15
+    var enabled=false;var gym=Gym();var heart_rate_delta_bpm=15
     var sustain_seconds=30;var cooldown_seconds=3600
     init(){}
     enum CodingKeys:String,CodingKey{case enabled,gym,heart_rate_delta_bpm,sustain_seconds,cooldown_seconds}
     init(from decoder:Decoder)throws{
         let c=try decoder.container(keyedBy:CodingKeys.self)
-        enabled=(try? c.decode(Bool.self,forKey:.enabled)) ?? true
+        enabled=(try? c.decode(Bool.self,forKey:.enabled)) ?? false
         gym=(try? c.decode(Gym.self,forKey:.gym)) ?? Gym()
         heart_rate_delta_bpm=(try? c.decode(Int.self,forKey:.heart_rate_delta_bpm)) ?? 15
         sustain_seconds=(try? c.decode(Int.self,forKey:.sustain_seconds)) ?? 30

@@ -157,7 +157,7 @@ struct WorkoutConfig: Codable, Equatable, Sendable {
 struct WeeklyRule: Codable, Equatable, Identifiable, Sendable {
     var weekday:Int; var start:String; var end:String; var timezone:String="Europe/Rome"
     var id:String { "\(weekday)-\(start)-\(end)-\(timezone)" }
-    static let defaults=[WeeklyRule(weekday:1,start:"13:30",end:"14:15"),WeeklyRule(weekday:3,start:"14:45",end:"15:30"),WeeklyRule(weekday:5,start:"08:45",end:"09:30")]
+    static let defaults:[WeeklyRule]=[]
 }
 struct LocalSettings: Codable, Sendable {
     var profile=BodyProfile(); var config=WorkoutConfig(); var weekly_schedule=WeeklyRule.defaults

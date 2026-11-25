@@ -33,7 +33,7 @@ async def state(args:dict,ctx:ToolContext):
     error=await guard(ctx)
     if error:return ToolResult(error,is_error=True)
     value=await asyncio.to_thread(archive().state,ctx.user.id)
-    return result({key:value[key] for key in ('server_time','settings','latest','active_session','sessions','weekly_occurrences')})
+    return result({key:value[key] for key in ('server_time','settings','latest','active_session','sessions','weekly_occurrences','recorded_cardio')})
 
 
 @register('allenamento_scheda','Su richiesta esplicita dell’utente aggiorna la sua scheda: nome attività, giri e fasi con durata, FC minima/massima in BPM e MET facoltativi. Non inventare fasce cardio; chiedi i valori mancanti. Vale per nuove sessioni; le sessioni già iniziate conservano la scheda originale.',{'type':'object','properties':{'config':{'type':'object','properties':{'activity_name':{'type':'string'},'rounds':{'type':'integer'},'work':{'type':'integer'},'rest':{'type':'integer'},'plan':{'type':'array','items':{'type':'object','properties':{'name':{'type':'string'},'duration':{'type':'integer'},'target_min':{'type':['integer','null']},'target_max':{'type':['integer','null']},'met':{'type':['number','null']}},'required':['name','duration'],'additionalProperties':False}}},'additionalProperties':False}},'required':['config'],'additionalProperties':False})
@@ -48,14 +48,14 @@ async def plan(args:dict,ctx:ToolContext):
     except (StoreError,ValueError):return ToolResult('Controlla durate, giri e intervalli BPM: minimo e massimo devono essere entrambi presenti e ordinati.',is_error=True)
 
 
-@register('allenamento_analisi','Legge grafici e statistiche della sessione personale selezionata, inclusi tempo sotto/dentro/sopra fascia, copertura e tempo senza misure. Non attribuire i vuoti a recupero o a una fascia. L’ID deve provenire da allenamento_stato.',{'type':'object','properties':{'session_id':{'type':'string'}},'required':['session_id'],'additionalProperties':False})
+@register('allenamento_analisi','Legge grafici e statistiche della sessione personale selezionata, inclusi tempo sotto/dentro/sopra fascia, copertura e tempo senza misure. Distingui le stime cardio registrate sperimentali e i risultati provvisori tramite cardio_provenance. Non attribuire i vuoti a recupero o a una fascia. L’ID deve provenire da allenamento_stato.',{'type':'object','properties':{'session_id':{'type':'string'}},'required':['session_id'],'additionalProperties':False})
 async def analysis(args:dict,ctx:ToolContext):
     error=await guard(ctx)
     if error:return ToolResult(error,is_error=True)
     if not isinstance(args.get('session_id'),str) or not args['session_id'] or args['session_id']=='last24h':return ToolResult('Scegli una sessione personale.',is_error=True)
     try:
         value=await asyncio.to_thread(archive().analysis,ctx.user.id,args['session_id'])
-        return result({key:value[key] for key in ('activity_name','window_start','workout_end','stats','cardio','steps_in_records')})
+        return result({key:value[key] for key in ('activity_name','window_start','workout_end','stats','cardio','steps_in_records','cardio_provenance')})
     except (StoreError,ValueError):return ToolResult('Sessione non trovata nel tuo profilo.',is_error=True)
 
 

@@ -172,7 +172,7 @@ fn prompts() -> Value {
     json!([
         {"name": "setup_account", "title": "Set up a mailbox", "description": "Configure an e-mail account from a plain-language description (address, provider, password, preferences).",
          "arguments": [
-            {"name": "description", "description": "E.g. 'la mia mail Aruba info@sirius.it, password …, firma Riccardo'", "required": true},
+            {"name": "description", "description": "E.g. 'la mia mail Aruba info@example.org, password …, firma Utente'", "required": true},
             {"name": "language", "description": "en or it", "required": false}]},
         {"name": "triage_inbox", "title": "Triage the inbox", "description": "Summarise unread mail, group it by urgency and propose replies, archiving and deletions.",
          "arguments": [
@@ -186,7 +186,7 @@ fn prompts() -> Value {
             {"name": "tone", "description": "formal, friendly, short…", "required": false},
             {"name": "language", "description": "en or it", "required": false}]},
         {"name": "configure", "title": "Change settings", "description": "Apply a settings request in plain language: theme, language, sync interval, signature, folders, servers.",
-         "arguments": [{"name": "request", "description": "E.g. 'tema scuro, sincronizza ogni 2 minuti, firma: Riccardo Burrai'", "required": true}]},
+         "arguments": [{"name": "request", "description": "E.g. 'tema scuro, sincronizza ogni 2 minuti, firma: Utente Esempio'", "required": true}]},
     ])
 }
 
@@ -876,15 +876,15 @@ mod tests {
     fn an_agent_configures_an_account_and_works_the_inbox() {
         let mock = MockBackend::demo().require_password("app-pw");
         let mut s = server(&mock);
-        let sg = call(&mut s, "suggest_settings", json!({"email": "riccardo@gmail.com", "language": "it"}));
+        let sg = call(&mut s, "suggest_settings", json!({"email": "utente@gmail.com", "language": "it"}));
         assert_eq!(sg["provider"], "Gmail");
         assert!(sg["notes"][0].as_str().unwrap().contains("password per le app"));
         // Wrong password: the account is saved, the test reports the failure.
-        let v = call(&mut s, "add_account", json!({"email": "riccardo@gmail.com", "password": "nope", "name": "Personale"}));
+        let v = call(&mut s, "add_account", json!({"email": "utente@gmail.com", "password": "nope", "name": "Personale"}));
         assert!(v["test"].as_str().unwrap().starts_with("failed"), "{v}");
         assert!(v["account"]["has_password"] == true);
-        call(&mut s, "set_password", json!({"id": "riccardo-gmail-com", "password": "app-pw"}));
-        let t = call(&mut s, "test_account", json!({"id": "riccardo-gmail-com"}));
+        call(&mut s, "set_password", json!({"id": "utente-gmail-com", "password": "app-pw"}));
+        let t = call(&mut s, "test_account", json!({"id": "utente-gmail-com"}));
         assert_eq!(t["ok"], true);
         // Unknown domain: probed, then tested.
         let v = call(&mut s, "add_account", json!({"email": "mario@sirius-example.it", "password": "app-pw", "signature": "Mario"}));
@@ -908,27 +908,27 @@ mod tests {
         assert_eq!(call(&mut s, "get_preferences", json!({}))["preferences"]["theme"], "dark");
         assert!(fails(&mut s, "set_preferences", json!({"theme": "neon"})).contains("theme"));
         // Mail.
-        let v = call(&mut s, "sync", json!({"account": "riccardo-gmail-com"}));
+        let v = call(&mut s, "sync", json!({"account": "utente-gmail-com"}));
         assert!(v["first_page"].as_str().unwrap().contains("Riunione"));
-        let boxes = call(&mut s, "list_mailboxes", json!({"account": "riccardo-gmail-com"}));
+        let boxes = call(&mut s, "list_mailboxes", json!({"account": "utente-gmail-com"}));
         assert!(boxes["text"].as_str().unwrap().contains("INBOX [inbox]"));
-        let list = call(&mut s, "list_messages", json!({"account": "riccardo-gmail-com", "unread_only": true}));
+        let list = call(&mut s, "list_messages", json!({"account": "utente-gmail-com", "unread_only": true}));
         assert_eq!(list["count"], 4);
         let uid = list["messages"][0]["uid"].as_u64().unwrap();
-        let m = call(&mut s, "read_message", json!({"uid": uid, "account": "riccardo-gmail-com"}));
+        let m = call(&mut s, "read_message", json!({"uid": uid, "account": "utente-gmail-com"}));
         let text = m["text"].as_str().unwrap();
         assert!(text.starts_with("From: ") && text.contains("Subject: ") && text.contains("lunedì"), "{text}");
         assert!(m.get("html").is_none());
-        let found = call(&mut s, "search", json!({"query": "fattura has:attachment", "account": "riccardo-gmail-com"}));
+        let found = call(&mut s, "search", json!({"query": "fattura has:attachment", "account": "utente-gmail-com"}));
         assert_eq!(found["count"], 1);
-        let r = call(&mut s, "reply", json!({"uid": uid, "body": "Va bene per lunedì.", "account": "riccardo-gmail-com"}));
+        let r = call(&mut s, "reply", json!({"uid": uid, "body": "Va bene per lunedì.", "account": "utente-gmail-com"}));
         assert_eq!(r["sent"], true);
         assert_eq!(mock.sent().len(), 1);
-        call(&mut s, "mark", json!({"uids": [uid], "starred": true, "account": "riccardo-gmail-com"}));
+        call(&mut s, "mark", json!({"uids": [uid], "starred": true, "account": "utente-gmail-com"}));
         assert!(mock.flags_of("INBOX", uid as u32).unwrap().flagged);
-        call(&mut s, "archive", json!({"uids": [uid], "account": "riccardo-gmail-com"}));
+        call(&mut s, "archive", json!({"uids": [uid], "account": "utente-gmail-com"}));
         assert_eq!(mock.count("Archive"), 1);
-        let sent = call(&mut s, "send_mail", json!({"to": "luca@example.com", "subject": "Ciao", "body": "Test", "account": "riccardo-gmail-com"}));
+        let sent = call(&mut s, "send_mail", json!({"to": "luca@example.com", "subject": "Ciao", "body": "Test", "account": "utente-gmail-com"}));
         assert_eq!(sent["sent"], true);
         assert!(fails(&mut s, "send_mail", json!({"to": "", "subject": "x", "body": "y"})).contains("to"));
         assert!(fails(&mut s, "mark", json!({"uids": [1]})).contains("read"));

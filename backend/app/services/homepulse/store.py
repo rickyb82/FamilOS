@@ -29,6 +29,7 @@ from .motion import parse_motion_record, parse_activity_record
 from .breathing import decode_breathing_record
 from .workout import validate_profile, validate_plan, composition, schedule, energy_for_interval
 from .sleep import normalize_period, merge_period, verified_run, MAX_PERIODS_PER_RUN, NATIVE_ABI
+from . import recorded
 
 
 class StoreError(ValueError):
@@ -67,8 +68,8 @@ def defaults():
     return {'profile':{**validate_profile({}), 'resting_hr':None},
             'config':{'work':40,'rest':20,'rounds':8,'hrmax':None,'plan':[], 'activity_name':None,'activity_id':None},
             'weekly_schedule':[],
-            'auto_detection':{'enabled':False,'gym':{'id':'serendip-prato','name':'Serendip Prato',
-                'address':'Via Giuseppe Valentini 20, 59100 Prato, Italia', 'latitude':None,'longitude':None,'radius_m':150},
+            'auto_detection':{'enabled':False,'gym':{'id':'primary-gym','name':'La mia palestra',
+                'address':'Imposta indirizzo palestra', 'latitude':None,'longitude':None,'radius_m':150},
                 'heart_rate_delta_bpm':15,'sustain_seconds':30,'cooldown_seconds':3600}}
 
 
@@ -161,10 +162,14 @@ class HomePulseStore:
             CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY,owner_id TEXT NOT NULL,device_id TEXT NOT NULL,event_id TEXT NOT NULL,sequence INTEGER NOT NULL,captured_at REAL NOT NULL,received_at REAL NOT NULL,kind TEXT NOT NULL,payload TEXT NOT NULL,digest TEXT NOT NULL,decode_error TEXT,UNIQUE(device_id,event_id));
             CREATE INDEX IF NOT EXISTS events_owner_time ON events(owner_id,captured_at,id);
             CREATE INDEX IF NOT EXISTS events_owner_decode ON events(owner_id,decode_error);
+            CREATE INDEX IF NOT EXISTS events_recorded_upgrade ON events(id) WHERE kind='recorded_cardio';
+            CREATE TABLE IF NOT EXISTS homepulse_projection_features(name TEXT PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS history(id INTEGER PRIMARY KEY,owner_id TEXT NOT NULL,ring_id TEXT NOT NULL,raw_hex TEXT NOT NULL,digest TEXT NOT NULL,tag INTEGER NOT NULL,cursor INTEGER,received_at REAL NOT NULL,UNIQUE(owner_id,ring_id,digest));
             CREATE INDEX IF NOT EXISTS history_owner_cursor ON history(owner_id,ring_id,cursor,id);
             CREATE TABLE IF NOT EXISTS points(id INTEGER PRIMARY KEY,owner_id TEXT NOT NULL,kind TEXT NOT NULL,t REAL NOT NULL,value REAL NOT NULL,source TEXT NOT NULL,quality REAL,metadata TEXT NOT NULL,identity TEXT NOT NULL,UNIQUE(owner_id,kind,identity));
             CREATE INDEX IF NOT EXISTS points_owner_kind_time ON points(owner_id,kind,t,id);
+            CREATE INDEX IF NOT EXISTS points_recorded_source ON points(owner_id,source,identity);
+            CREATE TABLE IF NOT EXISTS recorded_cardio_runs(owner_id TEXT NOT NULL,device_id TEXT NOT NULL,token TEXT NOT NULL,revision INTEGER NOT NULL,result_digest TEXT NOT NULL,final INTEGER NOT NULL,started_at REAL NOT NULL,available_until REAL NOT NULL,signal_check INTEGER NOT NULL,point_count INTEGER NOT NULL,computed_at REAL NOT NULL,PRIMARY KEY(owner_id,device_id,token));
             CREATE TABLE IF NOT EXISTS sessions(owner_id TEXT NOT NULL,id TEXT NOT NULL,activity_name TEXT,started_at REAL NOT NULL,ended_at REAL,active_seconds REAL NOT NULL,status TEXT NOT NULL,auto_detected INTEGER NOT NULL DEFAULT 0,provisional INTEGER NOT NULL DEFAULT 0,config TEXT NOT NULL,profile TEXT NOT NULL,last_event_at REAL NOT NULL,source TEXT NOT NULL,PRIMARY KEY(owner_id,id));
             CREATE TABLE IF NOT EXISTS processing(owner_id TEXT PRIMARY KEY,history_count INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL,last_processed_at REAL,error TEXT);
             CREATE TABLE IF NOT EXISTS processing_features(owner_id TEXT NOT NULL,feature TEXT NOT NULL,PRIMARY KEY(owner_id,feature));
@@ -174,6 +179,7 @@ class HomePulseStore:
             CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events BEGIN SELECT RAISE(ABORT,'events are append-only'); END;
             CREATE TRIGGER IF NOT EXISTS history_no_delete BEFORE DELETE ON history BEGIN SELECT RAISE(ABORT,'history is append-only'); END;
             ''')
+        with self.connection(True) as db:recorded.replay_pending_upgrade(db)
 
     @contextmanager
     def connection(self, transaction=False):
@@ -275,6 +281,8 @@ class HomePulseStore:
             elif len(raw)>=4 and raw[0]==47 and raw[2]==37 and raw[3]==3:
                 value=parse_exercise_latest(raw)
                 self._point(db,owner,'exercise',stamp,value['heart_rate_value_raw'],'oura-exercise-raw',identity,metadata=value)
+        elif kind=='recorded_cardio':
+            recorded.project(db,owner,device,payload,stamp)
         elif kind=='workout':
             session_id=_identity(payload.get('session_id'))
             # Mobile background batches may finish out of order. Rebuild the
@@ -378,14 +386,15 @@ class HomePulseStore:
                 row=db.execute('SELECT * FROM points WHERE owner_id=? AND kind=? AND t<=? ORDER BY t DESC,id DESC LIMIT 1',(owner,kind,now+5)).fetchone()
                 if row:
                     metadata=json.loads(row['metadata']);item={'value':row['value'],'captured_at':row['t'],'utc_ms':row['t']*1000,'source':row['source'],'quality':row['quality'],**metadata}
-                    if kind=='heart_rate':item.update(bpm=row['value'],fresh=0<=now-row['t']<=8)
+                    if kind=='heart_rate':item.update(bpm=row['value'],fresh=0<=now-row['t']<=(90 if row['source']==recorded.SOURCE and metadata.get('provisional') else 8))
                     latest[kind]=item
             devices=[dict(row) for row in db.execute('SELECT id,name,created_at,last_seen_at,revoked FROM devices WHERE owner_id=? ORDER BY created_at',(owner,))]
             events=db.execute('SELECT count(*),sum(decode_error IS NOT NULL) FROM events WHERE owner_id=?',(owner,)).fetchone()
             history=db.execute('SELECT count(*) FROM history WHERE owner_id=?',(owner,)).fetchone()[0]
             processing=db.execute('SELECT * FROM processing WHERE owner_id=?',(owner,)).fetchone()
             sessions=self._sessions(db,owner,now)
-        return {'server_time':now,'settings':settings,'latest':latest,'devices':devices,'sessions':sessions,
+            recorded_status=recorded.latest(db,owner)
+        return {'server_time':now,'settings':settings,'latest':latest,'devices':devices,'sessions':sessions,'recorded_cardio':recorded_status,
                 'allowed_activities':ALLOWED_ACTIVITIES,
                 'active_session':next((s for s in sessions if s['status'] in ('active','paused')),None),
                 'weekly_occurrences':occurrences(settings['weekly_schedule'],now),
@@ -419,22 +428,27 @@ class HomePulseStore:
                 start=now-86400 if start is None else _finite(start)
                 end=now if end is None else _finite(end)
             if end<start:raise StoreError('Intervallo grafico non valido')
-            rows=db.execute('SELECT kind,t,value,metadata FROM points WHERE owner_id=? AND t>=? AND t<=? ORDER BY t,id',(owner,start,end)).fetchall()
+            rows=db.execute('SELECT kind,t,value,metadata,source FROM points WHERE owner_id=? AND t>=? AND t<=? ORDER BY t,id',(owner,start,end)).fetchall()
         result={kind:[] for kind in ('heart_rate','spo2','temperature','motion','step_increments','respiratory_rate','heart_rate_outside_display')};quality=[]
         for row in rows:
             kind='step_increments' if row['kind']=='steps' else row['kind']
             if kind not in result:continue
             meta=json.loads(row['metadata'])
-            result[kind].append({'t':row['t'],'v':row['value'],**({'warnings':meta.get('warnings',[]),'flags_raw':meta.get('flags_raw')} if kind=='heart_rate' else {})})
+            result[kind].append({'t':row['t'],'v':row['value'],**({'warnings':meta.get('warnings',[]),'flags_raw':meta.get('flags_raw'),'source':row['source'],**{k:meta[k] for k in ('model','interpolated','experimental','provisional','revision','signal_quality','signal_check') if k in meta}} if kind=='heart_rate' else {})})
             if kind=='heart_rate' and meta.get('warnings'):quality.append({'t':row['t'],**meta})
         if session is not None:
             from .cardio import analyze
             cardio=analyze(start,workout_end or now,json.loads(session['config']),workout_events,result['heart_rate'])
         heart=[p['v'] for p in result['heart_rate'] if workout_end is None or p['t']<=workout_end]
-        return {**result,'cardio':cardio,'window_start':start,'window_end':end,'workout_end':workout_end,'activity_name':activity,
+        provenance={'sources':sorted({p.get('source','unknown') for p in result['heart_rate']}),
+                    'models':sorted({p['model'] for p in result['heart_rate'] if p.get('model')}),
+                    'provisional':any(p.get('provisional') for p in result['heart_rate']),
+                    'interpolated':any(p.get('interpolated') for p in result['heart_rate']),
+                    'experimental':any(p.get('experimental') for p in result['heart_rate'])}
+        return {**result,'cardio':cardio,'cardio_provenance':provenance,'window_start':start,'window_end':end,'workout_end':workout_end,'activity_name':activity,
                 'steps_in_records':sum(p['v'] for p in result['step_increments']),'quality_events':quality,
                 'stats':{'average_bpm':sum(heart)/len(heart) if heart else None,'max_bpm':max(heart) if heart else None},
-                'acquisition_time_alignment':True,'interpolated':False}
+                'acquisition_time_alignment':True,'interpolated':any(p.get('interpolated') for p in result['heart_rate'])}
 
     def manual_session(self,owner,action,session_id=None,activity_name=None,**extra):
         now=time.time();session_id=session_id or uuid.uuid4().hex

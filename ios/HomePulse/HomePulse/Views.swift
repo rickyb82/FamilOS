@@ -85,7 +85,7 @@ struct HomeView:View {
     var body:some View{NavigationStack{ScrollView{VStack(spacing:18){
         HStack{VStack(alignment:.leading){Text("Il tuo corpo, qui").font(.largeTitle.bold());Text(model.ownerName.map{"Ciao, \($0)"} ?? "Benvenuto in Home Pulse").foregroundStyle(.secondary)};Spacer();Image(systemName:"waveform.path.ecg").font(.largeTitle).foregroundStyle(.teal)}
         RingBatteryCard()
-        SelectedCardioCard(ring:model.ring)
+        SelectedCardioCard(ring:model.ring,recorded:model.recorded)
         HStack(alignment:.top,spacing:12){
             Card(title:"Temperatura anello"){
                 let values=model.serverPoints("temperature")
@@ -130,12 +130,15 @@ struct LiveCard:View{
 }
 struct SelectedCardioCard:View{
     @ObservedObject var ring:RingBridge
+    @ObservedObject var recorded:RecordedCardioController
     var body:some View{
-        if ring.recordedWorkoutProbeActive{
-            Card(title:"Cardio registrato · prova"){
-                Text("Verifica dei dati dell’allenamento in corso").font(.title3.bold())
-                Text(ring.recordedHistorySummary).font(.subheadline)
-                Text("Qui comparirà il battito ricavato dai dati registrati, dopo aver verificato il calcolo e il loro ritardo.").font(.caption).foregroundStyle(.secondary)
+        if ring.recordedWorkoutProbeActive || recorded.running{
+            Card(title:"Cardio registrato"){
+                HStack(alignment:.firstTextBaseline){
+                    Text(recorded.result?.latest?.bpm.map{String(Int($0))} ?? "—").font(.system(size:82,weight:.semibold,design:.rounded)).monospacedDigit()
+                    Text("BPM").foregroundStyle(.secondary)
+                }
+                Text(recorded.status).font(.caption).foregroundStyle(.secondary)
             }
         }else{LiveCard(ring:ring)}
     }
@@ -179,7 +182,7 @@ struct WorkoutView:View{
     @EnvironmentObject var model:AppModel;@State private var activity=""
     var body:some View{NavigationStack{TimelineView(.periodic(from:.now,by:1)){context in ScrollView{VStack(spacing:18){
         RingBatteryCard()
-        SelectedCardioCard(ring:model.ring)
+        SelectedCardioCard(ring:model.ring,recorded:model.recorded)
         if let session=model.current{
             let elapsed=session.elapsed(at:context.date),position=WorkoutEngine.position(elapsed:elapsed,config:session.config)
             Card(title:session.provisional ? "Sessione rilevata · da confermare":"Sessione attiva"){
@@ -221,10 +224,10 @@ struct WorkoutView:View{
             Button("Leggi stato cardio attività"){Task{await model.ring.readExercise()}}.disabled(!model.ring.ready || model.ring.busy)
             Button("Arresta registrazione cardio"){Task{await model.ring.stopSport()}}.disabled(!model.ring.ready || model.ring.busy)
         }
-        Card(title:"Prova dai dati registrati"){
+        Card(title:"Cardio registrato offline"){
             Text(model.ring.recordedHistorySummary).font(.subheadline)
-            Text("Recupera progressivamente le tracce dell’allenamento, con il live a riposo sospeso durante la prova. I dati originali restano archiviati e vengono inviati a FamilOS.").font(.caption).foregroundStyle(.secondary)
-            Button("Avvia prova cardio registrato"){Task{await model.startRingSport(recordedOnly:true)}}.disabled(!model.ring.ready || model.ring.busy || model.ring.recordedWorkoutProbeActive)
+            Text("Elabora le tracce direttamente sull’iPhone, anche senza rete. Sincronizza i risultati con FamilOS appena raggiungibile. Il grafico viene aggiornato durante la registrazione e rielaborato alla fine.").font(.caption).foregroundStyle(.secondary)
+            Button("Avvia cardio registrato offline"){Task{await model.startRingSport(recordedOnly:true)}}.disabled(!model.ring.ready || model.ring.busy || model.ring.recordedWorkoutProbeActive)
         }
     }.padding()}.navigationTitle("Allenamento").dismissibleKeyboard()}}}
 }
@@ -313,8 +316,28 @@ struct DiaryView:View{
     }.navigationTitle("Diario").refreshable{await model.refresh()}}}
 }
 struct SessionDetail:View{
+    @EnvironmentObject var model:AppModel
     let session:WorkoutSession
-    var body:some View{ScrollView{VStack(spacing:16){Card(title:session.activityName){Text(session.startedAt,format:.dateTime.day().month().year().hour().minute());Text(session.accumulated.durationText).font(.largeTitle.bold());Text(session.state=="false_detection" ? "Rilevamento escluso":"Sessione salvata")};EnergyCard(session:session,elapsed:session.accumulated);Card(title:"Fasi della sessione"){ForEach(session.config.phases){phase in HStack{Text(phase.name);Spacer();Text(Double(phase.duration).durationText)}}}}.padding()}.navigationTitle("Riepilogo")}
+    var body:some View{ScrollView{VStack(spacing:16){Card(title:session.activityName){Text(session.startedAt,format:.dateTime.day().month().year().hour().minute());Text(session.accumulated.durationText).font(.largeTitle.bold());Text(session.state=="false_detection" ? "Rilevamento escluso":"Sessione salvata")};RecordedSessionSummary(session:session,recorded:model.recorded);EnergyCard(session:session,elapsed:session.accumulated);Card(title:"Fasi della sessione"){ForEach(session.config.phases){phase in HStack{Text(phase.name);Spacer();Text(Double(phase.duration).durationText)}}}}.padding()}.navigationTitle("Riepilogo")}
+}
+struct RecordedSessionSummary:View {
+    @EnvironmentObject var model:AppModel
+    let session:WorkoutSession;@ObservedObject var recorded:RecordedCardioController
+    @State private var points:[Reading]=[];@State private var average:Double?;@State private var maximum:Int?;@State private var found=false;@State private var provisional=false
+    var body:some View{Group{if found{Card(title:"Cardio registrato · offline"){
+        PulseChart(readings:points).frame(height:180)
+        HStack{Text(average.map{"Media \(Int($0)) BPM"} ?? "Segnale insufficiente");Spacer();if let maximum{Text("Picco \(maximum) BPM")}}
+        Text(provisional ? "Elaborazione provvisoria salvata sul telefono":"Elaborazione finale salvata sul telefono").font(.caption).foregroundStyle(.secondary)
+    }}}.task(id:recorded.result?.revision){
+        let id=session.remoteID ?? session.id.uuidString
+        let values=(try? await model.store.perform{$0.recordedResults(workoutID:id)}) ?? []
+        let prepared=await Task.detached(priority:.utility){
+            let rows=values.flatMap{$0.acceptedReadings}.sorted{$0.date<$1.date}
+            let average=rows.isEmpty ? nil:Double(rows.reduce(0){$0+$1.bpm})/Double(rows.count)
+            return(AppModel.displayReadings(rows),average,rows.map{$0.bpm}.max())
+        }.value
+        found = !values.isEmpty;provisional=values.contains{!$0.final};points=prepared.0;average=prepared.1;maximum=prepared.2
+    }}
 }
 struct CalendarView:View{
     @EnvironmentObject var model:AppModel

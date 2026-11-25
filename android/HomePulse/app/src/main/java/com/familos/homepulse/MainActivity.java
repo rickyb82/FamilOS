@@ -504,11 +504,11 @@ public final class MainActivity extends Activity {
         Uri uri = Uri.parse(server);
         if (!"https".equals(uri.getScheme()) || uri.getHost() == null || uri.getUserInfo() != null || uri.getFragment() != null || uri.getQuery() != null) { toast("Inserisci l’indirizzo HTTPS del tuo server FamilOS."); return; }
         if (code.isEmpty()) { toast("Inserisci il codice monouso della dashboard."); return; }
-        if (!"familos.burrai.com".equalsIgnoreCase(uri.getHost())) {
+        {
             new AlertDialog.Builder(this).setTitle("Conferma il tuo server")
                     .setMessage("Associare questo dispositivo al server " + uri.getHost() + "?")
                     .setNegativeButton("Annulla", null).setPositiveButton("Associa", (dialog, which) -> enrollConfirmed(server, code)).show();
-        } else enrollConfirmed(server, code);
+        }
     }
     private void enrollConfirmed(String server, String code) {
         codeInput.setText(""); pendingCode = ""; pendingServer = server;

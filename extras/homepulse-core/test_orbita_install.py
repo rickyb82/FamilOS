@@ -133,8 +133,8 @@ class InstallTests(unittest.TestCase):
         elif 'app.services.homepulse.provision' in args:
             if self.fail_provision:
                 raise RuntimeError('Importazione di prova fallita')
-            stdout = json.dumps({'owner_name': 'Riccardo Burrai', 'events': 5, 'history_records': 9, 'weekly_sessions': 3, 'ring_configured': True}
-                                if self.flat_report else {'owner_name': 'Riccardo Burrai', 'counts': {'rings': 1, 'records': 3, 'plans': 2,
+            stdout = json.dumps({'owner_name': 'Proprietario', 'events': 5, 'history_records': 9, 'weekly_sessions': 3, 'ring_configured': True}
+                                if self.flat_report else {'owner_name': 'Proprietario', 'counts': {'rings': 1, 'records': 3, 'plans': 2,
                                                                                                   'SECRET_KEY': 'do-not-return'}})
         return subprocess.CompletedProcess(args, code, stdout, '')
 
@@ -162,7 +162,7 @@ class InstallTests(unittest.TestCase):
 
         with self.install_context(), patch.object(Path, 'read_bytes', read_bytes), patch.object(Path, 'read_text', read_text):
             result = wellness.install(self.library, bootstrap=self.seed, root=self.root)
-        self.assertEqual(result, {'owner_name': 'Riccardo Burrai', 'counts': {'rings': 1, 'records': 3, 'plans': 2}})
+        self.assertEqual(result, {'owner_name': 'Proprietario', 'counts': {'rings': 1, 'records': 3, 'plans': 2}})
         commands = [args for args, kwargs in self.commands]
         build = next(i for i, args in enumerate(commands) if args[0] == 'build')
         probe = next(i for i, args in enumerate(commands) if wellness.WORKER_PROBE in args)
@@ -226,7 +226,7 @@ class InstallTests(unittest.TestCase):
         self.flat_report = True
         with self.install_context():
             result = wellness.install(self.library, bootstrap=self.seed, root=self.root)
-        self.assertEqual(result, {'owner_name': 'Riccardo Burrai', 'counts': {'events': 5, 'history_records': 9, 'weekly_sessions': 3}})
+        self.assertEqual(result, {'owner_name': 'Proprietario', 'counts': {'events': 5, 'history_records': 9, 'weekly_sessions': 3}})
 
     def test_existing_worker_image_tag_is_preserved_for_rollback(self):
         old = wellness.plan(existing(), self.app)
@@ -250,7 +250,7 @@ class InstallTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 wellness.install(self.library, root=self.root)
             result = wellness.install(self.library, root=self.root, dry_run=True)
-            self.assertEqual(result['owner_name'], 'Riccardo Burrai')
+            self.assertEqual(result['owner_name'], 'Proprietario')
             docker.assert_not_called()
         self.assertEqual(self.cfgpath.read_bytes(), self.original)
         self.assertFalse((self.root / '.migration.lock').exists())

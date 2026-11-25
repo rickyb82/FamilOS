@@ -144,7 +144,7 @@ impl MockBackend {
     /// attachment, a thread, newsletters, sent mail, a draft and something in the trash.
     pub fn demo() -> Self {
         let b = Self::new();
-        let me = Address::new("Riccardo", "riccardo@example.it");
+        let me = Address::new("Utente", "utente@example.it");
         let now = time::now();
         let h = 3_600;
         let msg = |from: Address, subject: &str, body: &str, ago: i64, flags: Flags, att: Option<(&str, &str)>| {
@@ -165,7 +165,7 @@ impl MockBackend {
         msg(
             Address::new("Anna Rossi", "anna.rossi@example.it"),
             "Riunione di lunedì: ordine del giorno",
-            "Ciao Riccardo,\n\nper lunedì alle 10 propongo questi punti:\n1. stato del progetto GridCraft\n2. demo di IdeaCraft al cliente\n3. ferie di novembre\n\nAggiungi pure quello che manca.\n\nAnna",
+            "Ciao Utente,\n\nper lunedì alle 10 propongo questi punti:\n1. stato del progetto GridCraft\n2. demo di IdeaCraft al cliente\n3. ferie di novembre\n\nAggiungi pure quello che manca.\n\nAnna",
             h / 2,
             unread,
             None,
@@ -237,7 +237,7 @@ impl MockBackend {
         msg(
             Address::new("Stefano Galli", "stefano@example.com"),
             "Grazie per la demo di ieri",
-            "Hi Riccardo,\n\nthanks for the walkthrough yesterday — the network validator was the highlight. Let's schedule a follow-up next week.\n\nBest,\nStefano",
+            "Hi Utente,\n\nthanks for the walkthrough yesterday — the network validator was the highlight. Let's schedule a follow-up next week.\n\nBest,\nStefano",
             120 * h,
             read,
             None,
@@ -293,7 +293,7 @@ impl MockBackend {
             &Draft {
                 to: vec![Address::new("Luca Bianchi", "luca@example.com")],
                 subject: "Preventivo rete uffici".into(),
-                body: "Ciao Luca,\n\nin allegato il preventivo per la rete degli uffici: due switch, un access point e il cablaggio.\n\nRiccardo"
+                body: "Ciao Luca,\n\nin allegato il preventivo per la rete degli uffici: due switch, un access point e il cablaggio.\n\nUtente"
                     .into(),
                 ..Draft::default()
             },
@@ -527,7 +527,7 @@ mod tests {
         let raw = b.fetch("INBOX", 1).unwrap();
         assert!(mime::parse(&raw).is_ok());
         assert_eq!(b.fetch("INBOX", 999).unwrap_err(), Error::NoMessage(999));
-        b.send("riccardo@example.it", &["a@b.co".into()], b"raw").unwrap();
+        b.send("utente@example.it", &["a@b.co".into()], b"raw").unwrap();
         assert_eq!(shared.sent().len(), 1);
         assert!(shared.log().iter().any(|l| l.starts_with("move INBOX")));
     }

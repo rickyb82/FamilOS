@@ -2,7 +2,7 @@
 
 Servizio HTTP privato per elaborare offline i record sensoristici dell’anello con ecore3.6.2 estratto dal proprio APK Oura7.10.0. Non esegue l’interfaccia Android, non usa JNI, Bluetooth, account o chiavi. Il processo HTTP non carica la libreria: ogni elaborazione usa un child nuovo, con UserInfo a zero e MAC sintetico. Non espone calorie o metriche che richiedono un profilo personale.
 
-Il port amd64 è stato verificato con fixture sintetiche e con la sola cattura sensoristica autorizzata: 1957/1957 record mappati, quattro medie native98/97/97/97 con qualità1.0,51 date temperatura e92 date movimento/passi. Non è una validazione clinica né un confronto numerico completo con Android. Il manifest `EVIDENCE.json` separa prove riuscite e limiti.
+Il port amd64 è stato verificato con fixture sintetiche. La documentazione pubblica non include catture personali, risultati fisiologici reali o impronte di archivi utente. Il manifest `EVIDENCE.json` separa prove tecniche riuscite e limiti.
 
 Il 24 novembre 2026 è stato verificato anche **l’intero percorso HTTP su Ubuntu amd64 nativo**, con seccomp obbligatorio: 16 record sintetici mappati con identità verificata, `process_true` e deinit riusciti, core 3.6.2. La richiesta POST priva di token ha restituito 401. La prova ha usato un processo temporaneo su loopback, nessun dato personale e nessun servizio persistente installato.
 

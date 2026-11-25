@@ -6,17 +6,17 @@ import {
 
 describe('wellness acquisition time and personal data', () => {
   it('shows Rome time across summer time without reinterpreting wall clock dates', () => {
-    expect(timeLabel(Date.parse('2026-01-15T12:30:00Z') / 1000)).toBe('13:30')
+    expect(timeLabel(Date.parse('2026-01-15T12:30:00Z') / 1000)).toBe('09:00')
     expect(timeLabel(Date.parse('2026-07-15T12:30:00Z') / 1000)).toBe('14:30')
-    expect(epochSeconds('2026-11-24T13:30:00')).toBeNull()
-    expect(epochSeconds('2026-11-24T13:30:00+01:00')).toBe(Date.parse('2026-11-24T12:30:00Z') / 1000)
+    expect(epochSeconds('2026-11-24T09:00:00')).toBeNull()
+    expect(epochSeconds('2026-11-24T09:00:00+01:00')).toBe(Date.parse('2026-11-24T12:30:00Z') / 1000)
     expect(epochSeconds(NaN)).toBeNull()
   })
   it('labels ISO weekdays and preserves user calendar times', () => {
-    const slot = { id: 'a', weekday: 1, start: '13:30', end: '14:15', timezone: 'Europe/Rome', label: 'Palestra' }
-    expect(weeklyLabel(slot)).toBe('Lunedì · 13:30–14:15')
-    expect(weeklyLabel({ ...slot, weekday: 3, start: '14:45', end: '15:30' })).toBe('Mercoledì · 14:45–15:30')
-    expect(weeklyLabel({ ...slot, weekday: 5, start: '08:45', end: '09:30' })).toBe('Venerdì · 08:45–09:30')
+    const slot = { id: 'a', weekday: 1, start: '09:00', end: '09:45', timezone: 'Europe/Rome', label: 'Palestra' }
+    expect(weeklyLabel(slot)).toBe('Lunedì · 09:00–09:45')
+    expect(weeklyLabel({ ...slot, weekday: 3, start: '17:00', end: '17:45' })).toBe('Mercoledì · 17:00–17:45')
+    expect(weeklyLabel({ ...slot, weekday: 5, start: '10:00', end: '10:45' })).toBe('Venerdì · 10:00–10:45')
   })
   it('does not join a signal across a dropout or questionable contact', () => {
     const segments = chartSegments([{ t: 100, v: 90 }, { t: 102, v: 91 }, { t: 120, v: 92 }, { t: 121, v: 94, warnings: ['contact'] }, { t: 122, v: 95 }])
@@ -28,7 +28,7 @@ describe('wellness acquisition time and personal data', () => {
     analysis.spo2 = [{ t: 1700000010, v: 97 }]
     const csv = analysisCsv(analysis)
     expect(csv).toContain('2023-11-14T22:13:20.000Z,heart_rate,80')
-    expect(csv).toContain('2023-11-14T22:13:30.000Z,spo2,97')
+    expect(csv).toContain('2023-11-14T22:09:00.000Z,spo2,97')
   })
   it('exports historical breathing only when supplied and keeps outside-display heart data separate', () => {
     const analysis = demoAnalysis(1800000000)
@@ -49,6 +49,21 @@ describe('wellness acquisition time and personal data', () => {
     expect(heartQuality({ ...heart, warnings: ['contact'] }, 105).reliable).toBe(true)
     expect(heartQuality({ ...heart, ibi_validity_raw: undefined, flags_raw: 2 }, 105).reliable).toBe(false)
     expect(heartQuality({ ...heart, bpm: 251 }, 105).reliable).toBe(false)
+  })
+  it('distinguishes delayed provisional recorded results from fresh IBI packets', () => {
+    const recorded = { bpm:120, captured_at:100, source:'oura-recorded-offline', provisional:true, signal_check:0 }
+    expect(heartQuality(recorded,130).reliable).toBe(true)
+    expect(heartQuality(recorded,191).reliable).toBe(false)
+    expect(heartQuality({ ...recorded, signal_check:-2 },130).reliable).toBe(false)
+    expect(heartQuality({ ...recorded, provisional:false },130).reliable).toBe(false)
+    expect(heartQuality({ ...recorded, source:'oura-ble' },130).reliable).toBe(false)
+  })
+  it('exports recorded model provenance with acquisition instants', () => {
+    const analysis=demoAnalysis(1800000000)
+    analysis.heart_rate=[{t:1700000000,v:123,source:'oura-recorded-offline',model:'WHR-U2.5.1',provisional:true,interpolated:true}]
+    const csv=analysisCsv(analysis)
+    expect(csv).toContain('timestamp_utc,serie,valore,origine,modello,provvisorio,interpolato')
+    expect(csv).toContain('2023-11-14T22:13:20.000Z,heart_rate,123,"oura-recorded-offline","WHR-U2.5.1",true,true')
   })
   it('preserves incompatible declared composition while withholding derived lean mass and BMR', () => {
     const composition = profileComposition({ ...emptyProfile(), weight_kg: 100, body_fat_pct: 33, reported_lean_pct: 60, reported_retention_pct: 7 })

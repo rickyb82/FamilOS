@@ -3,6 +3,94 @@ import SQLite3
 @testable import HomePulse
 
 final class HomePulseTests:XCTestCase {
+    private func cardioFrame(_ tag:UInt8,_ rt:UInt32,_ payload:[UInt8])->Data {
+        Data([tag,UInt8(payload.count+4)]+(0..<4).map{UInt8((rt>>($0*8))&255)}+payload)
+    }
+    private func cardioContext()->RecordedContext {
+        var p=BodyProfile();p.age=40;p.weight_kg=80;p.height_cm=180;p.resting_hr=60
+        return RecordedContext(token:"synthetic-session",ring:"synthetic",afterRow:0,version:3,activity:14,profile:p)
+    }
+    private func cardioRecords()->[RecordedRaw] {
+        [cardioFrame(0x6c,1000,[3,0,0,0]),cardioFrame(0x73,1130,[0,1,110,111,200]),
+         cardioFrame(0x73,1131,[0,2,70,71,10]),cardioFrame(0x74,1132,[100,0,101,0])]
+            .enumerated().map{RecordedRaw(row:Int64($0.offset+1),data:$0.element)}
+    }
+    private var cardioAnchor:Data {cardioFrame(0x42,1000,(0..<8).map{UInt8((UInt64(1_600_000_000)>>($0*8))&255)})}
+    func testRecordedClockUsesTimeSyncNotDownloadDate()throws {
+        let input=try XCTUnwrap(RecordedBuilder.build(context:cardioContext(),records:cardioRecords(),previousAnchor:cardioAnchor))
+        XCTAssertEqual(input.startedAt,1_600_000_000)
+        XCTAssertEqual(input.availableUntil,1_600_000_013.2,accuracy:0.001)
+        XCTAssertEqual(Array(input.ppg.prefix(6)),[2,12,110,111,200,0])
+        XCTAssertEqual(Array(input.accel.prefix(6)),[2,12,70,71,10,0])
+        XCTAssertEqual(input.timeline,[2,4]);XCTAssertEqual(input.intensity,[100,101])
+    }
+    func testRecordedDoesNotInventUTCWithoutTimeSync()throws {
+        XCTAssertThrowsError(try RecordedBuilder.build(context:cardioContext(),records:cardioRecords(),previousAnchor:nil))
+        let reset=[RecordedRaw(row:0,data:cardioFrame(0x41,1,[]))]+cardioRecords()
+        XCTAssertThrowsError(try RecordedBuilder.build(context:cardioContext(),records:reset,previousAnchor:cardioAnchor))
+    }
+    func testRecordedRepeatedFramesDoNotDuplicateCandidates()throws {
+        let rows=cardioRecords(),input=try XCTUnwrap(RecordedBuilder.build(context:cardioContext(),records:rows+rows,previousAnchor:cardioAnchor))
+        XCTAssertEqual(input.ppg.count,30);XCTAssertEqual(input.accel.count,30)
+        XCTAssertEqual(input.intensity,[100,101])
+        XCTAssertTrue(input.ppg[8].isInfinite)
+    }
+    func testRecordedMissingWindowAndAdjacentFragmentsKeepOriginalTimes(){
+        let traces=[RecordedBuilder.Trace(rt:1240,groups:[[110,111,80]]),RecordedBuilder.Trace(rt:1241,groups:[[112,113,90]])]
+        let v=RecordedBuilder.windows(traces,start:1000,period:12,end:24.1)
+        XCTAssertEqual(v.count,60);XCTAssertTrue(v[2].isInfinite)
+        XCTAssertEqual(Array(v[30..<42]),[14,24,110,111,80,0,14,24,112,113,90,0])
+    }
+    func testRecordedInputIdentityDoesNotChangeJustBecauseRevisionAdvanced()throws {
+        var context=cardioContext()
+        let first=try XCTUnwrap(RecordedBuilder.build(context:context,records:cardioRecords(),previousAnchor:cardioAnchor))
+        context.revision=5
+        let same=try XCTUnwrap(RecordedBuilder.build(context:context,records:cardioRecords(),previousAnchor:cardioAnchor))
+        XCTAssertEqual(first.digest,same.digest)
+        context.profile.weight_kg=90
+        let changed=try XCTUnwrap(RecordedBuilder.build(context:context,records:cardioRecords(),previousAnchor:cardioAnchor))
+        XCTAssertNotEqual(first.digest,changed.digest)
+    }
+    func testRecordedSessionEndIsTheRingBoundary()throws {
+        let rows=cardioRecords()+[RecordedRaw(row:5,data:cardioFrame(0x6c,1200,[3,2,0,0])),RecordedRaw(row:6,data:cardioFrame(0x73,1400,[0,1,200,200,200]))]
+        let input=try XCTUnwrap(RecordedBuilder.build(context:cardioContext(),records:rows,previousAnchor:cardioAnchor))
+        XCTAssertEqual(input.endedAt,1_600_000_020);XCTAssertEqual(input.availableUntil,input.endedAt)
+        XCTAssertEqual(input.ppg.count,30)
+    }
+    func testRecordedAnchorIsPinnedAndResetCannotMergeEpochs()throws {
+        let original=try XCTUnwrap(RecordedBuilder.build(context:cardioContext(),records:cardioRecords(),previousAnchor:cardioAnchor))
+        let later=cardioFrame(0x42,1200,(0..<8).map{UInt8((UInt64(1_600_001_000)>>($0*8))&255)})
+        let rows=cardioRecords()+[RecordedRaw(row:5,data:later)]
+        let same=try XCTUnwrap(RecordedBuilder.build(context:cardioContext(),records:rows,previousAnchor:cardioAnchor))
+        XCTAssertEqual(original.startedAt,same.startedAt);XCTAssertEqual(original.digest,same.digest)
+        XCTAssertThrowsError(try RecordedBuilder.build(context:cardioContext(),records:rows+[RecordedRaw(row:6,data:cardioFrame(0x41,1,[]))],previousAnchor:cardioAnchor))
+    }
+    func testRecordedBadSignalAndTailNeverBecomeDisplayedBPM(){
+        var result=RecordedResult(token:"test",revision:1,inputDigest:"test",startedAt:100,availableUntil:110,endedAt:nil,signalCheck:0,points:[RecordedPoint(offset:5,bpm:110,quality:.some(0.9)),RecordedPoint(offset:20,bpm:200,quality:.some(0.9))],ppgWindows:1,accelWindows:1,final:false)
+        XCTAssertEqual(result.latest?.bpm,110)
+        result.signalCheck = -2;XCTAssertNil(result.latest)
+    }
+    func testRecordedCommitPersistsRevisionResultAndUploadTogether()throws {
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString);defer{try? FileManager.default.removeItem(at:folder)}
+        let path=folder.appendingPathComponent("synthetic.sqlite")
+        let store=try EventStore(url:path);var context=cardioContext();context.revision=1;context.workoutID="offline-workout"
+        var result=RecordedResult(token:context.token,revision:1,inputDigest:String(repeating:"a",count:64),workoutID:context.workoutID,startedAt:1_600_000_000,availableUntil:1_600_000_010,endedAt:nil,signalCheck:0,points:[RecordedPoint(offset:2,bpm:110,quality:0.9)],ppgWindows:1,accelWindows:1,final:false)
+        try store.commitRecorded(context:context,result:result)
+        let reopened=try EventStore(url:path)
+        XCTAssertEqual(reopened.load(RecordedContext.self,key:"recorded.context")?.revision,1)
+        XCTAssertEqual(reopened.load(RecordedResult.self,key:"recorded.latest")?.latest?.bpm,110)
+        let batch=try XCTUnwrap(reopened.prepareBatch())
+        XCTAssertEqual(batch.events.count,1);XCTAssertEqual(batch.events[0].kind,"recorded_cardio")
+        XCTAssertEqual(batch.events[0].payload["time_source"].string,"ring-timesync-100ms")
+        XCTAssertEqual(reopened.recordedResults(workoutID:"offline-workout").count,1)
+        result.revision=2;context.revision=2
+        try reopened.commitRecorded(context:context,result:result)
+        XCTAssertEqual(reopened.recordedResults(workoutID:"offline-workout").count,1)
+        XCTAssertEqual(reopened.recordedResults(workoutID:"offline-workout")[0].revision,2)
+        result.token="second-segment";context.token=result.token
+        try reopened.commitRecorded(context:context,result:result)
+        XCTAssertEqual(reopened.recordedResults(workoutID:"offline-workout").count,2)
+    }
     func testRejectedBluetoothAttemptsHaveBoundedBackoff(){
         XCTAssertEqual((1...7).map{RingReconnectPolicy.delay(consecutiveFailures:$0)},[5,10,20,30,60,60,60])
         XCTAssertEqual(RingReconnectPolicy.delay(consecutiveFailures:0),5)
@@ -444,9 +532,9 @@ final class HomePulseTests:XCTestCase {
     }
     func testCalendarUsesRomeAcrossSpringDST(){
         let f=ISO8601DateFormatter();let now=f.date(from:"2026-03-27T00:00:00Z")!
-        let rule=WeeklyRule(weekday:1,start:"13:30",end:"14:15")
+        let rule=WeeklyRule(weekday:1,start:"09:00",end:"09:45")
         let a=WorkoutEngine.occurrences(rules:[rule],after:now,days:7)
-        XCTAssertEqual(a.count,1);XCTAssertEqual(f.string(from:a[0].1),"2026-03-30T11:30:00Z")
+        XCTAssertEqual(a.count,1);XCTAssertEqual(f.string(from:a[0].1),"2026-03-30T07:00:00Z")
         XCTAssertEqual(a[0].2.timeIntervalSince(a[0].1),2700)
     }
     func testQueueSurvivesReopenPartialAcknowledgementAndUnknownACK()throws{
@@ -479,7 +567,7 @@ final class HomePulseTests:XCTestCase {
     }
     func testGeofenceDetectionSustainedFreshSamplesNoDuplicateAndManualPriority(){
         let now=Date(timeIntervalSince1970:1_000)
-        var engine=GymDetectionEngine()
+        var engine=GymDetectionEngine();engine.settings.enabled=true
         let baseline=(0..<6).map{TimedBPM(at:now.addingTimeInterval(Double($0)-10),bpm:60)}
         engine.enter(at:now,recent:baseline)
         XCTAssertEqual(engine.state.baseline,60)
@@ -491,7 +579,7 @@ final class HomePulseTests:XCTestCase {
         engine.resolve();XCTAssertNil(engine.ingest(TimedBPM(at:now.addingTimeInterval(40),bpm:100),now:now.addingTimeInterval(40),manualWorkout:true))
     }
     func testGeofenceMissingBaselineCollectsInsteadOfTriggering(){
-        let now=Date(timeIntervalSince1970:1_000);var engine=GymDetectionEngine();engine.enter(at:now,recent:[])
+        let now=Date(timeIntervalSince1970:1_000);var engine=GymDetectionEngine();engine.settings.enabled=true;engine.enter(at:now,recent:[])
         for i in 0...6{let t=now.addingTimeInterval(Double(i*5));XCTAssertNil(engine.ingest(TimedBPM(at:t,bpm:90),now:t,manualWorkout:false))}
         XCTAssertEqual(engine.state.baseline,90);XCTAssertNil(engine.state.candidateSessionID)
     }
@@ -502,7 +590,7 @@ final class HomePulseTests:XCTestCase {
         XCTAssertEqual(recorded,[sensor]);XCTAssertEqual(framer.opaqueRejected,Data([0xfe,0]))
     }
     func testGeofenceGapRequiresNewBaselineAndRestoredCandidateCannotDuplicate()throws{
-        let now=Date(timeIntervalSince1970:1000);var engine=GymDetectionEngine()
+        let now=Date(timeIntervalSince1970:1000);var engine=GymDetectionEngine();engine.settings.enabled=true
         engine.enter(at:now,recent:(0..<6).map{TimedBPM(at:now.addingTimeInterval(Double($0)-10),bpm:60)})
         _=engine.ingest(TimedBPM(at:now,bpm:80),now:now,manualWorkout:false)
         let later=now.addingTimeInterval(200)
@@ -525,7 +613,7 @@ final class HomePulseTests:XCTestCase {
         let frame=Data(hex:"2f0f280201020000011000000000000000")!
         XCTAssertEqual(try OuraWire.live(frame,api:[2,0,0]).bpm,60000)
         XCTAssertFalse(OuraWire.displaySupported(60000));XCTAssertFalse(OuraWire.displaySupported(19));XCTAssertTrue(OuraWire.displaySupported(250))
-        var engine=GymDetectionEngine();let now=Date();engine.enter(at:now,recent:[])
+        var engine=GymDetectionEngine();engine.settings.enabled=true;let now=Date();engine.enter(at:now,recent:[])
         XCTAssertNil(engine.ingest(TimedBPM(at:now,bpm:300),now:now,manualWorkout:false));XCTAssertTrue(engine.state.baselineSamples.isEmpty)
     }
     func serverSession(_ state:String="paused")throws->JSONValue{

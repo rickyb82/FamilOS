@@ -25,7 +25,7 @@ export type BridgeDevice = { id: string; name: string; last_seen_at?: WellnessDa
 export type WellnessState = {
   server_time: WellnessDate; settings: WellnessSettings
   latest: {
-    heart_rate?: { bpm: number; captured_at: WellnessDate; source: string; warnings?: string[]; flags_raw?: number; ibi_validity_raw?: number } | null
+    heart_rate?: { bpm: number; captured_at: WellnessDate; source: string; warnings?: string[]; flags_raw?: number; ibi_validity_raw?: number; provisional?: boolean; signal_check?: number; model?: string } | null
     heart_rate_outside_display?: { value: number; captured_at: WellnessDate; utc_ms?: number } | null
     respiratory_rate?: { value: number; utc_ms: number } | null
     spo2?: { value: number; utc_ms: number; quality?: number | null } | null
@@ -37,8 +37,9 @@ export type WellnessState = {
   weekly_occurrences: Array<WeeklySlot & { date: string; starts_at: WellnessDate; ends_at: WellnessDate }>
   archive: { events: number; history_records: number; decode_errors: number; processing_status: string }
   active_session?: WellnessSession | null
+  recorded_cardio?: { token:string; revision:number; final:number; started_at:number; available_until:number; signal_check:number; point_count:number; computed_at:number; model:string; source:string } | null
 }
-export type TimePoint = { t: number; v: number; warnings?: string[]; flags_raw?: number }
+export type TimePoint = { t: number; v: number; warnings?: string[]; flags_raw?: number; source?:string; model?:string; interpolated?:boolean; provisional?:boolean; experimental?:boolean; revision?:number; signal_quality?:number; signal_check?:number }
 export type CardioStats = {
   target_seconds: number; below_seconds:number; inside_seconds:number; above_seconds:number; unknown_seconds:number
   elapsed_active_seconds:number; unconfigured_seconds:number; coverage_fraction:number|null
@@ -149,12 +150,13 @@ export function activePhase(config: WorkoutConfig, elapsed: number) {
 export function heartQuality(heart: WellnessState['latest']['heart_rate'], now: number) {
   const captured = epochSeconds(heart?.captured_at)
   const valid = heart != null && Number.isFinite(heart.bpm) && heart.bpm >= 20 && heart.bpm <= 250 && captured != null
-  const fresh = valid && now - captured! <= 8 && now - captured! >= -2
+  const recorded = heart?.source === 'oura-recorded-offline'
+  const fresh = valid && now - captured! <= (recorded && heart?.provisional ? 90 : 8) && now - captured! >= -2
   const flags = heart?.flags_raw
   const hasExplicitIbi = heart?.ibi_validity_raw != null
   const flagged = !hasExplicitIbi && flags != null && !!(flags & (2 | 4 | 8 | 32))
   const invalidIbi = heart?.ibi_validity_raw != null && heart.ibi_validity_raw !== 1
-  return { fresh: !!fresh, reliable: !!fresh && !flagged && !invalidIbi && (hasExplicitIbi || !(heart?.warnings?.some(warning => !/moviment|motion/i.test(warning)))), captured, warnings: heart?.warnings || [] }
+  return { fresh: !!fresh, reliable: !!fresh && (!recorded || heart?.signal_check !== -2) && !flagged && !invalidIbi && (hasExplicitIbi || !(heart?.warnings?.some(warning => !/moviment|motion/i.test(warning)))), captured, warnings: heart?.warnings || [] }
 }
 export function chartSegments(values: TimePoint[], maxGap = 8): TimePoint[][] {
   const sorted = [...values].filter(p => Number.isFinite(p.t) && Number.isFinite(p.v)).sort((a, b) => a.t - b.t)
@@ -207,11 +209,12 @@ export function chartEnvelope(values: TimePoint[], start: number, end: number, c
   return { points: selected.map(item => item.point), segments, min: sorted.length ? min : 0, max: sorted.length ? max : 1 }
 }
 export function analysisCsv(analysis: WellnessAnalysis): string {
-  const lines = ['timestamp_utc,serie,valore']
+  const lines = ['timestamp_utc,serie,valore,origine,modello,provvisorio,interpolato']
   const rows = (['heart_rate', 'spo2', 'temperature', 'motion', 'step_increments', 'respiratory_rate'] as const)
     .flatMap(key => (analysis[key] || []).filter(point => Number.isFinite(point.t) && Number.isFinite(point.v)).map(point => ({ key, ...point })))
     .sort((a, b) => a.t - b.t)
-  for (const row of rows) lines.push(`${new Date(row.t * 1000).toISOString()},${row.key},${row.v}`)
+  const cell=(v:string|undefined)=>JSON.stringify((v || '').replace(/^(?=[=+@-])/,"'"))
+  for (const row of rows) lines.push(`${new Date(row.t * 1000).toISOString()},${row.key},${row.v},${cell(row.source)},${cell(row.model)},${row.provisional == null ? '' : row.provisional},${row.interpolated == null ? '' : row.interpolated}`)
   return lines.join('\n') + '\n'
 }
 

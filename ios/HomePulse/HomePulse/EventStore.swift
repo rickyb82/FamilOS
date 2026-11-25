@@ -28,6 +28,7 @@ final class EventStore: @unchecked Sendable {
         try run("CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY,value BLOB NOT NULL)")
         try run("CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY,body BLOB NOT NULL)")
         try run("CREATE TABLE IF NOT EXISTS history_records(digest TEXT PRIMARY KEY,ring TEXT,raw BLOB,received REAL,steps INTEGER,temp REAL,motion INTEGER)")
+        try run("CREATE INDEX IF NOT EXISTS history_recorded_lookup ON history_records(ring,substr(raw,1,1))")
         try run("CREATE TABLE IF NOT EXISTS readings(id INTEGER PRIMARY KEY AUTOINCREMENT,at REAL NOT NULL,bpm INTEGER NOT NULL)")
         try? FileManager.default.setAttributes([.protectionKey:FileProtectionType.completeUntilFirstUserAuthentication],ofItemAtPath:url.path)
     }
@@ -108,6 +109,7 @@ final class EventStore: @unchecked Sendable {
         if prioritizeLive{
             try selectIDs("SELECT j.event_id FROM journal j INDEXED BY journal_recent_upload JOIN outbox o ON o.event_id=j.event_id WHERE j.kind='sensor_packet' AND j.captured_at>=? AND o.batch_id IS NULL ORDER BY j.sequence LIMIT ?",after:Date().timeIntervalSince1970-8)
             try selectIDs("SELECT j.event_id FROM journal j INDEXED BY journal_recent_upload JOIN outbox o ON o.event_id=j.event_id WHERE j.kind='workout' AND o.batch_id IS NULL ORDER BY j.sequence LIMIT ?")
+            try selectIDs("SELECT j.event_id FROM journal j INDEXED BY journal_recent_upload JOIN outbox o ON o.event_id=j.event_id WHERE j.kind='recorded_cardio' AND o.batch_id IS NULL ORDER BY j.sequence LIMIT ?")
         }
         // FIFO comes straight from the pending index: no repeated sorting or
         // scanning of the backlog, and payloads are read only for selected IDs.
@@ -184,5 +186,37 @@ final class EventStore: @unchecked Sendable {
         let c=try statement("SELECT motion FROM history_records WHERE motion IS NOT NULL ORDER BY rowid DESC LIMIT 1");defer{sqlite3_finalize(c)}
         if sqlite3_step(c)==SQLITE_ROW{result.motionSeconds=Int(sqlite3_column_int(c,0))};return result
     }catch{return HistoricalMetrics()}}}
+
+    func recordedLastRow(ring:String)throws->Int64{try guarded{
+        let s=try statement("SELECT coalesce(max(rowid),0) FROM history_records WHERE ring=?");defer{sqlite3_finalize(s)}
+        bind(ring,s,1);guard sqlite3_step(s)==SQLITE_ROW else{throw AppError.message("Archivio cardio non leggibile")}
+        return sqlite3_column_int64(s,0)
+    }}
+    func recordedInput(context:RecordedContext)throws->([RecordedRaw],Data?){try guarded{
+        let a=try statement("SELECT raw FROM history_records WHERE ring=? AND rowid<=? AND substr(raw,1,1) IN (x'41',x'42') ORDER BY rowid DESC LIMIT 1");defer{sqlite3_finalize(a)}
+        bind(context.ring,a,1);sqlite3_bind_int64(a,2,context.afterRow)
+        let anchor=sqlite3_step(a)==SQLITE_ROW ? data(a,0):nil
+        let s=try statement("SELECT rowid,raw FROM history_records WHERE ring=? AND rowid>? AND substr(raw,1,1) IN (x'41',x'42',x'6c',x'73',x'74') ORDER BY rowid LIMIT 65536");defer{sqlite3_finalize(s)}
+        bind(context.ring,s,1);sqlite3_bind_int64(s,2,context.afterRow)
+        var values:[RecordedRaw]=[];var state=sqlite3_step(s)
+        while state==SQLITE_ROW{values.append(RecordedRaw(row:sqlite3_column_int64(s,0),data:data(s,1)));state=sqlite3_step(s)}
+        guard state==SQLITE_DONE else{throw AppError.message("Tracce cardio non leggibili")}
+        return(values,anchor)
+    }}
+    func commitRecorded(context:RecordedContext,result:RecordedResult)throws{try guarded{try transaction{
+        try put(try JSONEncoder().encode(context),key:"recorded.context")
+        try put(try JSONEncoder().encode(result),key:"recorded.latest")
+        try put(try JSONEncoder().encode(result),key:"recorded.result."+result.token)
+        if let workout=result.workoutID {
+            let key="recorded.workout."+workout
+            var tokens=load([String].self,key:key) ?? []
+            if !tokens.contains(result.token){tokens.append(result.token)}
+            try put(try JSONEncoder().encode(tokens),key:key)
+        }
+        _=try insert(kind:"recorded_cardio",payload:result.payload,at:Date(),eventID:UUID())
+    }}}
+    func recordedResults(workoutID:String)->[RecordedResult]{guarded{
+        (load([String].self,key:"recorded.workout."+workoutID) ?? []).compactMap{load(RecordedResult.self,key:"recorded.result."+$0)}.sorted{$0.startedAt<$1.startedAt}
+    }}
 
 }

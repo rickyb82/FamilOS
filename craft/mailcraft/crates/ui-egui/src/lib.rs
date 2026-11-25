@@ -1058,7 +1058,7 @@ mod tests {
         app.open(first);
         settle(&mut app, &ctx);
         assert!(app.session.current().unwrap().message("INBOX", first).is_some());
-        assert!(app.window_title().contains("riccardo@example.it"));
+        assert!(app.window_title().contains("utente@example.it"));
         frame(&mut app, &ctx, vec![key(egui::Key::R, egui::Modifiers::NONE)]);
         assert!(app.compose.as_ref().is_some_and(|c| c.subject.starts_with("Re: ") && c.body.contains("ha scritto:")));
         app.send_compose();

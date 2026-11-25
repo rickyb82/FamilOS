@@ -77,7 +77,7 @@ inbox, one line per message).
 | `configure` | `request` (required) | Maps a settings request to `set_preferences` / `update_account` / the setup flow |
 
 Example, in Claude Code: *"/setup_account la mia mail Aruba info@sirius-example.it, password
-Xy…, firma «Riccardo Burrai – Sirius Technology», tema scuro"*. The assistant calls
+Xy…, firma «Utente Esempio – Società Esempio», tema scuro"*. The assistant calls
 `suggest_settings` (Aruba: `imaps.aruba.it:993`, `smtps.aruba.it:465`), then `add_account` with
 `test=true`, reports the mailbox count and the SMTP login, and sets the theme.
 

@@ -270,7 +270,7 @@ def _bootstrap(root, source, owner):
             'import os;os.unlink("/tmp/homepulse-seed.json") if os.path.lexists("/tmp/homepulse-seed.json") else None', timeout=12)
 
 
-def install(library, *, bootstrap=None, owner_name='Riccardo Burrai', root=ROOT, dry_run=False):
+def install(library, *, bootstrap=None, owner_name='Proprietario', root=ROOT, dry_run=False):
     root = _no_symlink(root)
     app = root / 'apps/familos'
     if os.geteuid() != 0 and not dry_run:
@@ -400,7 +400,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--library', required=True)
     parser.add_argument('--bootstrap')
-    parser.add_argument('--owner-name', default='Riccardo Burrai')
+    parser.add_argument('--owner-name', default='Proprietario')
     parser.add_argument('--root', type=Path, default=ROOT, help='Radice Orbita; percorso alternativo per test/dry-run')
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args()

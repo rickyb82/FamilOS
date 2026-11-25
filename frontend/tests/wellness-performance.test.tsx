@@ -22,7 +22,7 @@ it('bounds dense plotting and preserves real extrema, timestamps and the full ex
   expect(chart.points.every(p => points[p.t] === p)).toBe(true)
   expect(points).toHaveLength(200000)
   const analysis = { ...model.demoAnalysis(200000), heart_rate: points }
-  expect(model.analysisCsv(analysis)).toContain(',heart_rate,210\n')
+  expect(model.analysisCsv(analysis).split('\n').some(row => row.split(',')[1] === 'heart_rate' && row.split(',')[2] === '210')).toBe(true)
   const { container } = render(<LinePlot points={points} start={0} end={199999} color="green" kind="heart" label="Synthetic dense signal" />)
   expect(container.querySelectorAll('circle').length).toBeLessThanOrEqual(640)
   expect(container.querySelectorAll('polyline')).toHaveLength(1)

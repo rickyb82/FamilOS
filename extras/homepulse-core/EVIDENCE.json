@@ -168,33 +168,6 @@
       "quality_validated": false,
       "final_image_shim_gcc_succeeded": true
     },
-    "authorized_sensor_replay": {
-      "source_file_sha256": "104ada8a1dcd32ac907b9328986223c3dcadd61e83552b7bdfc61ee001d3ff73",
-      "canonical_http_input_sha256": "ba54cd4ce0ebdcbc6ef0ec30054e5e9297e7aa08c413a70bc43c9e1058f1c436",
-      "input_records": 1962,
-      "processed_records": 1957,
-      "excluded_initial_debug_metadata": 5,
-      "mapping_complete": true,
-      "record_identity_verified": true,
-      "process_true": true,
-      "deinit_returned": true,
-      "averages": [
-        98,
-        97,
-        97,
-        97
-      ],
-      "qualities": [
-        1.0,
-        1.0,
-        1.0,
-        1.0
-      ],
-      "temperature_dates": 51,
-      "motion_steps_dates": 92,
-      "breathing_record_in_this_capture": false,
-      "replayed_with_final_image_gcc_shim": true
-    },
     "http_image": {
       "health": {
         "configured": true,
@@ -296,8 +269,8 @@
     "compose.private.yml": "c13e7b22b17714b133620b1c740e2bda64ab1e769308b7623911cd0f91761686",
     "synthetic_fixture.json": "df17304071cab238340bc36ab6c0adf481a0e7848edd3b51b42b9aa34d46286f",
     "test_service.py": "82ef381594a7bd10e4384b7e614a0dabcd23cb2402bc5a41e2afacd0adb18e90",
-    "README.md": "0b6faa681d721c4d86384b3c6655c4ddab1ac3d50f59a680e7f9665bb520706b",
-    "test_orbita_install.py": "cc08aaabc4fb606206dec668c367e37c137f9d917a36785a8bd942ad22b25e8c",
-    "../updater/orbita_support/wellness.py": "5d7fe78a65900fa81fc68a22b055590da2e11e0dd37072a4c5045512b15e2126"
+    "README.md": "21844576ba82e32c5cf7c3fb8d103fa58a72b34aef42cafc34b7b55aa9650382",
+    "test_orbita_install.py": "4db02f2d05c08f360cbb6f228b7d82cab7cbbc697d213214a50d8251297f2879",
+    "../updater/orbita_support/wellness.py": "4e2ffcaf81e86705d7e61421244db31cbd2bbbc270da44878f217276d8932128"
   }
 }

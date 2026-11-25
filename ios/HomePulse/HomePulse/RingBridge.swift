@@ -31,6 +31,8 @@ import Combine
     @Published var lastConnectionError:String?
     var onBattery:((OuraBattery,Date)->Void)?
     var onLive:((OuraLive,Date)->Void)?;var onHistory:(()->Void)?;var onJournal:(()->Void)?
+    var onRecordedPrepare:(()async throws->Void)?
+    var logicalRingID:String?{logicalRing}
     private let statusJournalQueue=DispatchQueue(label:"HomePulse.status-journal",qos:.utility)
     private var central:CBCentralManager!;private var peripheral:CBPeripheral?
     private var writeCharacteristic:CBCharacteristic?;private var notifyCharacteristic:CBCharacteristic?
@@ -483,6 +485,7 @@ import Combine
             let cursorKey="history.cursor.\(logicalRing ?? peripheral?.identifier.uuidString ?? "unknown")"
             recordedCapture?.baselineNextRingTime=try await store.perform{$0.load(UInt32.self,key:cursorKey)}
             guard recordedCapture?.baselineComplete == true else{nextHistoryAt=Date.distantPast;throw AppError.message("Recupero dei dati precedenti in corso: riprova quando lo storico è allineato")}
+            try await onRecordedPrepare?()
         }
         let key=sportKey
         let control=SportControl(restoreMode:current[4],pendingStop:true,restoreLiveMode:liveMode,restoreLiveSubscription:recordedOnly ? liveSubscriptionActive:nil)

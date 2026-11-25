@@ -513,19 +513,19 @@ impl Session {
         let account = Account {
             id: "demo".into(),
             name: "Demo".into(),
-            email: "riccardo@example.it".into(),
-            display_name: "Riccardo".into(),
+            email: "utente@example.it".into(),
+            display_name: "Utente".into(),
             imap: mailcraft_core::account::Server::new("mock.local", 993, mailcraft_core::account::Security::Tls),
             smtp: mailcraft_core::account::Server::new("mock.local", 465, mailcraft_core::account::Security::Tls),
-            signature: "Riccardo\nSirius Technology".into(),
+            signature: "Utente\nSirius Technology".into(),
             color: "#4a6cf7".into(),
             ..Account::default()
         };
         let work = Account {
             id: "lavoro".into(),
             name: "Lavoro".into(),
-            email: "riccardo@sirius-example.it".into(),
-            display_name: "Riccardo Burrai".into(),
+            email: "utente@sirius-example.it".into(),
+            display_name: "Utente Esempio".into(),
             imap: mailcraft_core::account::Server::new("mock.local", 993, mailcraft_core::account::Security::Tls),
             smtp: mailcraft_core::account::Server::new("mock.local", 465, mailcraft_core::account::Security::Tls),
             color: "#22a06b".into(),
@@ -1054,7 +1054,7 @@ mod tests {
     fn session(mock: &MockBackend) -> Session {
         let m = mock.clone();
         let mut s = Session::new(Box::new(move |_| Box::new(m.clone())), None);
-        s.execute("account.add", &json!({"email": "riccardo@example.it", "name": "Demo", "password": "demo", "imap_host": "mock", "imap_port": 993, "smtp_host": "mock", "smtp_port": 465})).unwrap();
+        s.execute("account.add", &json!({"email": "utente@example.it", "name": "Demo", "password": "demo", "imap_host": "mock", "imap_port": 993, "smtp_host": "mock", "smtp_port": 465})).unwrap();
         s
     }
 
@@ -1062,7 +1062,7 @@ mod tests {
     fn reads_acts_and_sends_through_the_mock() {
         let mock = MockBackend::demo();
         let mut s = session(&mock);
-        assert_eq!(s.view().account, "riccardo-example-it");
+        assert_eq!(s.view().account, "utente-example-it");
         let v = s.run_blocking("mail.sync", json!({})).unwrap();
         assert!(v["envelopes"].as_array().unwrap().len() > 5, "{v}");
         let inbox = s.current().unwrap();
@@ -1180,15 +1180,15 @@ mod tests {
         let v = s.execute("contacts.search", &json!({"query": "luc"})).unwrap();
         assert_eq!(v["contacts"][0]["email"], "luca@example.com", "{v}");
         assert!(v["contacts"][0]["display"].as_str().unwrap().contains("Luca Bianchi"));
-        assert!(s.execute("contacts.search", &json!({"query": "riccardo@example"})).unwrap()["contacts"].as_array().unwrap().is_empty());
+        assert!(s.execute("contacts.search", &json!({"query": "utente@example"})).unwrap()["contacts"].as_array().unwrap().is_empty());
         // An HTML signature with a logo: the message goes out as text + HTML with an inline image.
         let logo = mailcraft_core::mime::base64_encode(b"\x89PNG\x00");
-        s.execute("account.update", &json!({"signature": "", "signature_html": format!("<b>Riccardo Burrai</b><br><a href=\"https://sirius.example\">Sirius</a><br><img src=\"data:image/png;base64,{logo}\">")})).unwrap();
+        s.execute("account.update", &json!({"signature": "", "signature_html": format!("<b>Utente Esempio</b><br><a href=\"https://sirius.example\">Sirius</a><br><img src=\"data:image/png;base64,{logo}\">")})).unwrap();
         s.run_blocking("mail.send", json!({"to": "nuovo@cliente.it", "subject": "Offerta", "body": "Ciao,\nin allegato l'offerta."})).unwrap();
         let raw = mock.sent().last().unwrap().2.clone();
         let m = mailcraft_core::mime::parse(&raw).unwrap();
-        assert!(m.text.contains("in allegato l'offerta.") && m.text.contains("-- \nRiccardo Burrai"), "{}", m.text);
-        assert!(m.html.contains("<b>Riccardo Burrai</b>") && m.html.contains("cid:image1@mailcraft"), "{}", m.html);
+        assert!(m.text.contains("in allegato l'offerta.") && m.text.contains("-- \nUtente Esempio"), "{}", m.text);
+        assert!(m.html.contains("<b>Utente Esempio</b>") && m.html.contains("cid:image1@mailcraft"), "{}", m.html);
         assert!(m.attachments.iter().all(|a| a.inline), "the logo is not listed as a file");
         // Someone written to comes first from now on, even with a short prefix.
         let v = s.execute("contacts.search", &json!({"query": "nu"})).unwrap();
@@ -1198,7 +1198,7 @@ mod tests {
         s.run_blocking("mail.reply", json!({"uid": uid, "body": "Grazie!"})).unwrap();
         let m = mailcraft_core::mime::parse(&mock.sent().last().unwrap().2).unwrap();
         assert!(
-            m.html.contains("Grazie!") && m.html.contains("<b>Riccardo Burrai</b>") && m.html.contains("ha scritto") || m.html.contains("wrote"),
+            m.html.contains("Grazie!") && m.html.contains("<b>Utente Esempio</b>") && m.html.contains("ha scritto") || m.html.contains("wrote"),
             "{}",
             m.html
         );
@@ -1212,7 +1212,7 @@ mod tests {
             "INBOX",
             &mailcraft_core::message::Address::new("Anna", "anna@example.it"),
             &mailcraft_core::message::Draft {
-                to: vec![mailcraft_core::message::Address::new("Riccardo", "riccardo@example.it")],
+                to: vec![mailcraft_core::message::Address::new("Utente", "utente@example.it")],
                 subject: "Ciao".into(),
                 body: "testo".into(),
                 ..Default::default()
@@ -1291,7 +1291,7 @@ mod tests {
         let state = v["state"].as_str().unwrap().to_string();
         assert!(s.execute("account.oauthFinish", &json!({"state": "nope", "code": "x"})).is_err());
         let e =
-            s.execute("account.oauthStart", &json!({"id": id, "redirect": "http://192.168.1.5:8080/api/oauth/callback"})).unwrap_err().to_string();
+            s.execute("account.oauthStart", &json!({"id": id, "redirect": "http://192.0.2.10:8080/api/oauth/callback"})).unwrap_err().to_string();
         assert!(e.contains("MAILCRAFT_PUBLIC_URL"), "{e}");
         assert!(s.execute("account.oauthFinish", &json!({"state": state, "error": "access_denied"})).unwrap_err().to_string().contains("refused"));
         // The browser comes back through the loopback listener; pump finishes the sign-in.

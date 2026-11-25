@@ -238,12 +238,12 @@ def test_europe_rome_schedule_keeps_wall_time_across_dst():
     from datetime import datetime
     from zoneinfo import ZoneInfo
     zone=ZoneInfo('Europe/Rome')
-    weekly=[{'id':'mon','weekday':1,'start':'13:30','end':'14:15','timezone':'Europe/Rome','label':'Palestra'}]
+    weekly=[{'id':'mon','weekday':1,'start':'10:00','end':'10:45','timezone':'Europe/Rome','label':'Palestra'}]
     now=datetime(2027,3,22,9,tzinfo=zone).timestamp()
     values=occurrences(weekly,now,days=10)
     assert len(values)==2
     assert all(v['duration_minutes']==45 for v in values)
-    assert all(datetime.fromtimestamp(v['starts_at'],zone).hour==13 for v in values)
+    assert all(datetime.fromtimestamp(v['starts_at'],zone).hour==10 for v in values)
     assert values[1]['starts_at']-values[0]['starts_at']==7*86400-3600
 
 

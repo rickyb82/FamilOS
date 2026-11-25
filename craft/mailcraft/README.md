@@ -8,9 +8,9 @@ triage and answer your mail. Part of the *craft* family (`gridcraft`, `ideacraft
 ┌──────────────┬─────────────────────────────────────┬──────────────────────────┐
 │ ✎ Compose    │ ☐ ★ Anna Rossi   Riunione di lunedì  │ Riunione di lunedì       │
 │ ▸ Inbox    3 │ ☐ ★ Monitoraggio 2 Re: Backup…  📎   │ Anna Rossi <anna@…>      │
-│   Starred    │ ☐ ★ Fatturazione Fattura n° 2026…    │ A: Riccardo              │
+│   Starred    │ ☐ ★ Fatturazione Fattura n° 2026…    │ A: Utente Esempio              │
 │   Sent       │ ☐ ★ Luca Bianchi Re: Preventivo…     │                          │
-│   Drafts     │ …                                    │ Ciao Riccardo, …         │
+│   Drafts     │ …                                    │ Ciao Utente Esempio, …         │
 │   Archive    │                                      │                          │
 │   Trash      │                                      │ [Reply] [Reply all] [Fwd]│
 └──────────────┴─────────────────────────────────────┴──────────────────────────┘
@@ -143,7 +143,7 @@ mailcraft-cli run mail.reply '{"uid": 1234, "body": "Grazie!"}'
 claude mcp add mailcraft -- mailcraft-cli mcp
 ```
 
-Then: *"/setup_account la mia mail Aruba info@sirius-example.it, password …, firma Riccardo"*,
+Then: *"/setup_account la mia mail Aruba info@sirius-example.it, password …, firma Utente Esempio"*,
 *"/triage_inbox"*, *"/write_email a Luca, conferma il sopralluogo di giovedì"*, *"/configure tema
 scuro e sincronizza ogni 2 minuti"*. Tools, prompts and the Claude Desktop configuration are in
 [docs/mcp.md](docs/mcp.md).

@@ -1,6 +1,6 @@
 # Home Pulse per iPhone
 
-App nativa SwiftUI, iOS 17 o successivi. Progetto Xcode senza dipendenze esterne, con SQLite, CoreBluetooth, CoreLocation, notifiche locali e grafici Swift Charts. Il server personale si configura con il QR di associazione; l’indirizzo mostrato prima dell’associazione è un esempio.
+App nativa SwiftUI, iOS 17 o successivi. Progetto Xcode con runtime PyTorch locale opzionale, SQLite, CoreBluetooth, CoreLocation, notifiche locali e grafici Swift Charts. Il server personale si configura con il QR di associazione; l’indirizzo mostrato prima dell’associazione è un esempio.
 
 ## Aprire e verificare
 
@@ -24,11 +24,11 @@ La chiave viene ricevuta esclusivamente dal bootstrap mobile autorizzato. Se man
 
 Allenamento permette di modificare fasi, durata, ripetizioni, obiettivi FC e MET facoltativi. Timer, pausa, ripresa, conclusione e diario funzionano senza server o anello. Il calcolo energetico usa peso e MET dichiarati: kcal lorde `MET × 3,5 × kg / 200 × minuti`, kcal nette con `MET − 1`. I tratti senza peso/MET rimangono senza stima.
 
-La scheda e il profilo vengono fotografati all’avvio della sessione. Il tempo attivo continua fino a Termina anche oltre la scheda: il tratto aggiuntivo resta senza stima MET. Le modifiche successive valgono per la sessione seguente. Il calendario predefinito usa Europe/Rome: lunedì 13:30–14:15, mercoledì 14:45–15:30 e venerdì 08:45–09:30. Il calendario non avvia automaticamente gli allenamenti.
+La scheda e il profilo vengono fotografati all’avvio della sessione. Il tempo attivo continua fino a Termina anche oltre la scheda: il tratto aggiuntivo resta senza stima MET. Le modifiche successive valgono per la sessione seguente. Il calendario iniziale è vuoto e usa Europe/Rome; gli appuntamenti vengono configurati dal proprietario. Il calendario non avvia automaticamente gli allenamenti.
 
 ## Palestra e notifiche
 
-L’indirizzo iniziale è Serendip Prato, Via Giuseppe Valentini 20, 59100 Prato. Nessuna coordinata è inventata: cercare una volta l’indirizzo nell’app e controllare il punto sulla mappa; il punto può essere corretto toccando la mappa o inserendo coordinate. La posizione risolta viene conservata localmente.
+Nessuna palestra è preconfigurata: inserire il proprio indirizzo nelle impostazioni. Nessuna coordinata è inventata: cercare una volta l’indirizzo nell’app e controllare il punto sulla mappa; il punto può essere corretto toccando la mappa o inserendo coordinate. La posizione risolta viene conservata localmente.
 
 Autorizzare posizione Sempre e notifiche nella schermata Palestra. L’app monitora il confine dell’area, senza raccogliere o inviare un percorso GPS continuo. Il rilevamento funziona anche fuori dai tre orari settimanali. Usa una regola tecnica modificabile: riferimento recente, aumento iniziale +15 BPM sostenuto per 30 secondi e almeno sei campioni validi. Un campione vecchio, una lunga interruzione o una sessione manuale attiva non possono avviare una nuova sessione.
 
@@ -138,4 +138,21 @@ La diagnostica di prova aggiunge soltanto contatori di notifiche, ritardi di ela
 
 La prova Cardio registrato usa la registrazione allenamento come sorgente: prima allinea lo storico esposto, poi sospende la sola sottoscrizione live e riporta DAYTIME_HR in AUTOMATIC, conservando modalità e sottoscrizione precedenti nel controllo durevole. Avvia EXERCISE_HR REQUESTED e legge soltanto i nuovi record ogni5 secondi, con pagine fino255 come il client originale; il cursore avanza soltanto dopo la pagina convalidata e archiviata. Il controllo precedente viene ripristinato dopo l’arresto. Una riconnessione durante la prova conserva la scelta della sorgente registrata.
 
-I contatori della prova separano dati iniziali, sessione aperta e arrivi dopo l’arresto; deduplicano gli stessi frame e distinguono0x73tracce spettrali,0x74intensità movimento e0x6cconfini di sessione. Questi record non sono letti direttamente comeBPM. La prova iniziale verifica disponibilità e ritardo; il calcolo BPM dai dati registrati non è ancora attivo. La ricerca sui modelli viene svolta offline sui materiali forniti. Il client non richiede account, API o app ufficiale Oura: il collegamento è Bluetooth diretto, con archivio locale e sincronizzazione al server personale FamilOS. Durante la raccolta la UI non presenta il vecchio numero del live come se provenisse dal flusso registrato.
+I contatori della prova separano dati iniziali, sessione aperta e arrivi dopo l’arresto; deduplicano gli stessi frame e distinguono0x73tracce spettrali,0x74intensità movimento e0x6cconfini di sessione. Questi record non sono letti direttamente comeBPM. Il calcolo locale usa il modello privato WHR U2.5.1 recuperato dalla versione 4.13.2. Il modello e il runtime nativo sono installati nella build iPhone; non sono richiesti server o rete per elaborare le tracce. Il client non richiede account, API o app ufficiale Oura: il collegamento è Bluetooth diretto, con archivio locale e sincronizzazione al server personale FamilOS. Durante la raccolta la UI non presenta il vecchio numero del live come se provenisse dal flusso registrato.
+
+
+## Cardio registrato interamente locale
+
+In Allenamento scegliere l’attività e premere **Avvia cardio registrato offline**. Se non esiste una sessione, viene avviata anche la scheda. Il ponte allinea lo storico prima di fissare il confine della nuova registrazione, sospende il live a riposo e recupera i record incrementali. **Arresta registrazione cardio** chiude soltanto la misura nell’anello; **Termina** chiude anche la sessione della scheda. Il live viene ripristinato dopo lo stop.
+
+Il modello WHR U2.5.1 viene eseguito con il JIT completo LibTorch 1.12.0 sulla CPU dell’iPhone, su un actor distinto dall’interfaccia e dall’archiviazione. Il simulatore usa soltanto il bridge di indisponibilità: non genera finti risultati del modello. La registrazione resta nel journal e il contesto locale permette di riprendere l’elaborazione dopo una riapertura. Ogni elaborazione è limitata a 6 ore e 21.601 punti; questi sono limiti del nostro adattatore, non del sensore.
+
+I record 0x73 mantengono candidati e valori grezzi; finestre a 5×6, periodo 12/12 secondi quando cap3>=3, con endpoint [2,12], [14,24]. La scala ring-time è 100 ms e l’UTC viene soltanto dalle ancore TimeSync 0x42: nessun allineamento all’ora del download. Un reset invalida l’ancora precedente. Intensità 0x74 e confini 0x6c restano distinti dai BPM stimati. Sesso non dichiarato usa l’ingresso 0; età, peso, altezza e FC a riposo vengono dal profilo fotografato all’avvio. Quest’ultima è dichiarata come FC del profilo, non come media notturna misurata. Il modello applica internamente i propri limiti ai dati corporei senza modificare il profilo.
+
+Le uscite conservano il valore continuo, qualità per punto e classe di sessione: signalCheck 0=Good,−1=Average,−2=Bad. La classe Bad non alimenta numero, grafici o statistiche accettate. L’uscita interpolata a 1 secondo resta una stima del modello, non una sequenza di nuove misure indipendenti. I punti oltre il confine temporale disponibile sono conservati nell’uscita originale ma esclusi dalla pubblicazione; gli ultimi punti mancanti non vengono inventati.
+
+L’elaborazione si aggiorna al massimo ogni 15 secondi quando arrivano nuove tracce e iOS concede esecuzione. Ogni revisione viene salvata insieme al suo evento `recorded_cardio` nella transazione locale e inviata al server personale dalla normale coda durevole. FamilOS sostituisce atomicamente la proiezione della stessa sessione/dispositivo con una revisione più recente. Le revisioni precedenti restano negli eventi; un invio fuori ordine non può riaprire un risultato finale. Il recupero durante un aggiornamento include risultati già ricevuti da un server precedente che non conosceva questo tipo di evento. Grafici, statistiche, CSV ed Emily conservano origine, versione e stato provvisorio/finale.
+
+Per preparare una build fisica, fornire privatamente `Research/whr_2_5_1.pt` già decifrato e il runtime ufficiale LibTorch 1.12.0 in `Research/LibTorch/` (`install/include`, `install/lib`, `LICENSE`). Distribuzione ufficiale: https://ossci-ios.s3.amazonaws.com/libtorch_ios_1.12.0.zip; SHA256 c33f77d4c3984ea20aef83d8e755ece5e22cc5233f19459b7c6b3c1085405e80. La fase di build controlla identità e integrità dell’archivio modello, lo copia nell’app firmata e include la licenza del runtime. Nessuna chiave modello viene inclusa nell’app. Tutto Research è escluso da Git e dagli ZIP dei sorgenti.
+
+La compatibilità numerica sintetica e la qualità sui segnali reali del Gen3 sono prove distinte. La modalità è sperimentale finché la prova con l’anello non è completata. Non sono richiesti account, app ufficiale o API Oura. FamilOS resta il server personale di sincronizzazione, senza un servizio Oura intermedio.
