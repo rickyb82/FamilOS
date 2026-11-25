@@ -11,6 +11,8 @@ import Combine
     @Published var exerciseStatus="Registrazione cardio dedicata non avviata"
     private var exerciseStep="idle";private var exerciseAttemptAt:Date?;private var exerciseFailure:JSONValue?
     private var commandReplies:[JSONValue]=[];private var exerciseMode:OuraFeatureStatus?;private var exerciseModeAt:Date?
+    private var setupIssues:[String]=[]
+    private var modeWriteSkips:[JSONValue]=[]
     @Published var batteryLevel:Int?;@Published var batteryAt:Date?
     @Published var batteryStatus="Batteria non ancora letta"
     private let diagnosticWriter:DiagnosticWriter?;private var batteryAttemptAt:Date?;private var batteryReplyHex:String?;private var batteryChargingProgressRaw:Int?
@@ -81,7 +83,7 @@ import Combine
         writeBatteryDiagnostic();central.cancelPeripheralConnection(peripheral)
         return true
     }
-    private func finishOperation(){busy=false;_ = scheduleChargingCheck()}
+    private func finishOperation(){busy=false;_ = scheduleChargingCheck();writeBatteryDiagnostic()}
     func disconnect(){cancelReconnect();reconnectFailures=0;connectionTimeout?.cancel();connectionFailure=nil;chargeWakeDelay=nil;waitingForChargeCheck=false;desired=false;UserDefaults.standard.set(false,forKey:"ringWantsConnection")
         guard let peripheral else{return}
         guard ready,!busy else{ready=false;central.cancelPeripheralConnection(peripheral);return}
@@ -164,12 +166,12 @@ import Combine
     }
     private func receive(_ frame:Data,at receivedAt:Date){
         let b=[UInt8](frame)
-        if ready,b.count>=5,b[0]==0x2f,Int(b[1])+2==b.count,[0x23,0x2a].contains(b[2]),[2,3,4].contains(b[3]){
+        if b.count>=5,b[0]==0x2f,Int(b[1])+2==b.count,[0x23,0x27,0x2a].contains(b[2]),[2,3,4].contains(b[3]){
             commandReplies.append(.object(["at":.number(receivedAt.timeIntervalSince1970),"step":.string(exerciseStep),"feature":.number(Double(b[3])),"reply":.number(Double(b[2])),"result_raw":.number(Double(b[4])),"frame_bytes":.number(Double(b.count)),"prefix_hex":.string(Data(frame.prefix(5)).hex)]))
             if commandReplies.count>16{commandReplies.removeFirst(commandReplies.count-16)}
             writeBatteryDiagnostic()
         }
-        if ready,b.count>=8,b[0]==0x2f,Int(b[1])+2==b.count,b[2]==0x21,b[3]==3{
+        if b.count>=8,b[0]==0x2f,Int(b[1])+2==b.count,b[2]==0x21,b[3]==3{
             // Preserve unknown status values in technical evidence without promoting them to a measurement.
             exerciseMode=OuraFeatureStatus(mode:Int(b[4]),flags:Int(b[5]),state:Int(b[6]),result:Int(b[7]));exerciseModeAt=receivedAt;writeBatteryDiagnostic()
         }
@@ -208,7 +210,7 @@ import Combine
             peripheral.writeValue(request,for:characteristic,type:.withResponse)
         }
     }
-    private func handshake() async {guard !busy else{return};busy=true;defer{authenticating=false;finishOperation()}
+    private func handshake() async {guard !busy else{return};busy=true;setupIssues=[];exerciseStep="handshake";defer{authenticating=false;finishOperation()}
         do{
             status="Lettura firmware…";apiVersion=try OuraWire.firmware(await exchange(Data([8,3,0,0,0]),tag:9))
             var caps:[Int:Int]=[:];var totalPages:Int?
@@ -227,18 +229,40 @@ import Combine
             let encrypted=try OuraWire.cipher(key:key,nonce:Data(nonceFrame[3..<18]))
             let answer=try OuraWire.complete(await exchange(Data([0x2f,17,0x2d])+encrypted,tag:0x2f,extended:0x2e),minimum:4,tag:0x2f,extended:0x2e)
             guard answer[3]==0 else{throw AppError.message("Credenziale anello rifiutata; nessun reset eseguito")}
-            authenticating=false
+            // Authenticated transport remains usable even if an optional feature
+            // rejects setup. Keep its error visible and its pending stop durable.
+            authenticating=false;ready=true
             let sportKey=sportKey
-            if let control=try await store.perform({$0.load(SportControl.self,key:sportKey)}),control.pendingStop {try await restoreSport(control)}
+            exerciseStep="handshake_restore"
+            if let control=try await store.perform({$0.load(SportControl.self,key:sportKey)}),control.pendingStop {
+                do{try await restoreSport(control)}catch{exerciseStatus=error.localizedDescription;setupIssues.append(error.localizedDescription)}
+            }
+            exerciseStep="handshake_spo2"
             do{try await configureAutomaticSpO2()}catch{spo2Status="SpO₂: configurazione rinviata";nextSpO2At=Date().addingTimeInterval(60)}
-            guard caps[2] != nil else{throw AppError.message("Battito live non pubblicizzato dal firmware")}
-            try OuraWire.ack(await exchange(Data([0x2f,3,0x22,2,3]),tag:0x2f,extended:0x23),extended:0x23,feature:2)
-            try OuraWire.ack(await exchange(Data([0x2f,3,0x26,2,2]),tag:0x2f,extended:0x27),extended:0x27,feature:2)
-            ready=true;status="Collegato · attendi un IBI valido"
+            if caps[2] != nil{
+                do{
+                    exerciseStep="handshake_live_mode"
+                    try await setFeatureMode(2,mode:3,operation:"Avvio battito live")
+                    exerciseStep="handshake_live_subscription"
+                    try OuraWire.ack(await exchange(Data([0x2f,3,0x26,2,2]),tag:0x2f,extended:0x27),extended:0x27,feature:2,operation:"Ricezione battito live")
+                }catch{setupIssues.append(error.localizedDescription)}
+            }else{setupIssues.append("Battito live non pubblicizzato dal firmware")}
+            exerciseStep="connected";status="Collegato · attendi un IBI valido"
             nextBatteryAt=Date().addingTimeInterval(60)
             do{try await batteryRead();nextBatteryAt=Date().addingTimeInterval(15)}catch{status="Lettura batteria rinviata"}
             let more=try await historyPages(maxPages:32);nextHistoryAt=Date().addingTimeInterval(more ? 2:60)
+            if !setupIssues.isEmpty{status="Collegato · "+setupIssues.joined(separator:"; ")}
         }catch{status=error.localizedDescription}
+    }
+    private func setFeatureMode(_ feature:UInt8,mode:UInt8,operation:String)async throws{
+        guard capabilities[Int(feature)] != nil else{throw AppError.message(operation+": funzione non pubblicizzata dall’anello")}
+        let current=try await exchange(Data([0x2f,2,0x20,feature]),tag:0x2f,extended:0x21)
+        if try !OuraWire.modeChangeNeeded(current,feature:feature,desired:mode){
+            modeWriteSkips.append(.object(["at":.number(Date().timeIntervalSince1970),"step":.string(exerciseStep),"feature":.number(Double(feature)),"mode":.number(Double(mode))]))
+            if modeWriteSkips.count>8{modeWriteSkips.removeFirst(modeWriteSkips.count-8)}
+            writeBatteryDiagnostic();return
+        }
+        try OuraWire.ack(await exchange(Data([0x2f,3,0x22,feature,mode]),tag:0x2f,extended:0x23),extended:0x23,feature:feature,operation:operation)
     }
     private func configureAutomaticSpO2()async throws{
         guard let version=capabilities[4] else{spo2Status="SpO₂: funzione non pubblicizzata dal firmware";nextSpO2At=Date.distantFuture;return}
@@ -328,6 +352,8 @@ import Combine
         value["valid_ibi_filtered_by_flag_count"] = .number(Double(flagFilteredValidIbiCount))
         value["exercise_step"] = .string(exerciseStep)
         value["command_replies"] = .array(commandReplies)
+        value["setup_issues"] = .array(setupIssues.map{.string($0)})
+        value["mode_write_skips"] = .array(modeWriteSkips)
         if let exerciseAttemptAt{value["exercise_attempt_at"] = .number(exerciseAttemptAt.timeIntervalSince1970)}
         if let exerciseFailure{value["exercise_failure"] = exerciseFailure}
         if let exerciseMode{
@@ -348,26 +374,35 @@ import Combine
         exerciseRaw = .object(value)
     }
     private func restoreSport(_ control:SportControl)async throws{
-        try OuraWire.ack(await exchange(Data([0x2f,3,0x22,3,0]),tag:0x2f,extended:0x23),extended:0x23,feature:3)
-        if control.restoreMode==1{try OuraWire.ack(await exchange(Data([0x2f,3,0x22,3,1]),tag:0x2f,extended:0x23),extended:0x23,feature:3)}
+        let callerStep=exerciseStep;exerciseStep=callerStep+"_off"
+        try await setFeatureMode(3,mode:0,operation:"Ripristino cardio attività")
+        if control.restoreMode==1{
+            exerciseStep=callerStep+"_auto"
+            try await setFeatureMode(3,mode:1,operation:"Ripristino cardio automatico")
+        }
         let key=sportKey
         try await store.perform{try $0.save(Optional<SportControl>.none,key:key)}
+        exerciseStep=callerStep
     }
     func startSport(activity:UInt16,age:Int,resting:Int)async throws{
         guard ready,!busy,capabilities[3] != nil else{throw AppError.message("Anello non pronto per la registrazione cardio")};busy=true;defer{finishOperation()}
         let parameters=try OuraWire.sportParameters(activity:activity,age:age,resting:resting,capabilityVersion:capabilities[3] ?? 0)
         exerciseAttemptAt=Date();exerciseFailure=nil;exerciseStep="query_status";exerciseStatus="Verifica della registrazione cardio…";writeBatteryDiagnostic()
+        let pendingKey=sportKey
+        if let pending=try await store.perform({$0.load(SportControl.self,key:pendingKey)}),pending.pendingStop{
+            exerciseStep="start_pending_restore";try await restoreSport(pending)
+        }
         let current=try OuraWire.complete(await exchange(Data([0x2f,2,0x20,3]),tag:0x2f,extended:0x21),minimum:8,tag:0x2f,extended:0x21)
         guard current[3]==3,(0...1).contains(current[4]) else{throw AppError.message("Registrazione cardio già attiva o stato non modificabile")}
         let key=sportKey
         try await store.perform{try $0.save(SportControl(restoreMode:current[4],pendingStop:true),key:key)}
         do{
             exerciseStep="off";exerciseStatus="Preparazione cardio attività…";writeBatteryDiagnostic()
-            try OuraWire.ack(await exchange(Data([0x2f,3,0x22,3,0]),tag:0x2f,extended:0x23),extended:0x23,feature:3,operation:"Preparazione cardio attività")
+            try await setFeatureMode(3,mode:0,operation:"Preparazione cardio attività")
             exerciseStep="parameters";exerciseStatus="Configurazione cardio attività…";writeBatteryDiagnostic()
             try OuraWire.ack(await exchange(parameters,tag:0x2f,extended:0x2a),extended:0x2a,feature:3,operation:"Parametri cardio attività")
             exerciseStep="requested";exerciseStatus="Avvio cardio attività…";writeBatteryDiagnostic()
-            try OuraWire.ack(await exchange(Data([0x2f,3,0x22,3,2]),tag:0x2f,extended:0x23),extended:0x23,feature:3,operation:"Avvio cardio attività")
+            try await setFeatureMode(3,mode:2,operation:"Avvio cardio attività")
             try await store.perform{try $0.save(SportControl(restoreMode:current[4],pendingStop:false),key:key)}
             exerciseStep="accepted";exerciseStatus="Richiesta di avvio accettata dall’anello";status=exerciseStatus
             nextExerciseAt=Date.distantPast

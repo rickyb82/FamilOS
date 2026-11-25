@@ -67,6 +67,12 @@ enum OuraWire {
         guard bytes[3]==feature,(0...3).contains(bytes[4]),(0...3).contains(bytes[6]) else{throw AppError.message("Stato della funzione anello non riconosciuto")}
         return OuraFeatureStatus(mode:Int(bytes[4]),flags:Int(bytes[5]),state:Int(bytes[6]),result:Int(bytes[7]))
     }
+    static func modeChangeNeeded(_ frame:Data,feature:UInt8,desired:UInt8)throws->Bool{
+        let bytes=try complete(frame,minimum:8,tag:0x2f,extended:0x21)
+        guard bytes[3]==feature,(0...3).contains(bytes[4]),(0...3).contains(desired) else{throw AppError.message("Modalità funzione anello non riconosciuta")}
+        // Original setter compares mode only. Status result is not a query ACK.
+        return bytes[4] != desired
+    }
     static func spo2AutomaticParameters(capabilityVersion:Int)->Data?{
         // Original HealthSpo2 defaults, eight-parameter ABI advertised by Gen3.
         // Version3 adds HFM duration; retain firmware parameters until verified.

@@ -360,6 +360,12 @@ final class HomePulseTests:XCTestCase {
             XCTAssertNil(error as? OuraCommandRejection,"A reply for another feature must not be diagnosed as this command's rejection")
         }
     }
+    func testModeWritesSkipAlreadyAppliedModesWithoutTreatingStatusResultAsAnAck()throws{
+        XCTAssertFalse(try OuraWire.modeChangeNeeded(Data(hex:"2f06210203200220")!,feature:2,desired:3))
+        XCTAssertFalse(try OuraWire.modeChangeNeeded(Data(hex:"2f06210300000020")!,feature:3,desired:0))
+        XCTAssertTrue(try OuraWire.modeChangeNeeded(Data(hex:"2f06210301000220")!,feature:3,desired:0))
+        XCTAssertThrowsError(try OuraWire.modeChangeNeeded(Data(hex:"2f06210203200220")!,feature:3,desired:0))
+    }
     func testExerciseCapabilityUsesUnifiedWireActivityAndPreservesLegacyEncoding()throws{
         for activity:UInt16 in [5,8,12,65535]{
             XCTAssertEqual(try OuraWire.sportParameters(activity:activity,age:40,resting:60,capabilityVersion:3).hex,"2f07290300003c32be")
