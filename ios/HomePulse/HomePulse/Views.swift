@@ -382,7 +382,9 @@ struct SessionDetail:View{
     @State private var analysis:JSONValue = .null
     @State private var loading=true
     var body:some View{ScrollView{VStack(spacing:16){
-        Card(title:session.activityName){Text(session.startedAt,format:.dateTime.day().month().year().hour().minute());Text(session.accumulated.durationText).font(.largeTitle.bold())}
+        Card(title:session.activityName){Text(session.startedAt,format:.dateTime.day().month().year().hour().minute());Text(session.accumulated.durationText).font(.largeTitle.bold())
+            if let average=analysis["stats"]["average_bpm"].number,let maximum=analysis["stats"]["max_bpm"].number{Text("Media \(average,specifier:"%.0f") BPM · picco \(Int(maximum)) BPM").font(.subheadline)}
+        }
         if loading{ProgressView("Caricamento grafici allenamento…")}
         ForEach(diaryMetrics,id:\.0){metric,title in
             let points=ChartSeries.bound(ChartSeries.decode(analysis[metric]).filter{$0.date>=session.startedAt && $0.date<=(session.endedAt ?? Date())})

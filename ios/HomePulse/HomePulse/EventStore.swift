@@ -113,7 +113,9 @@ final class EventStore: @unchecked Sendable {
         let sorted=rows.sorted{$0.date<$1.date};var segment=0;var previous:Date?;var points:[ChartPoint]=[]
         for row in sorted{if let previous,row.date.timeIntervalSince(previous)>8{segment+=1};previous=row.date;points.append(ChartPoint(date:row.date,value:Double(row.bpm),segment:segment))}
         let bounded=ChartSeries.bound(points)
-        return .object(["heart_rate":.array(bounded.map{.object(["t":.number($0.date.timeIntervalSince1970),"v":.number($0.value),"segment":.number(Double($0.segment ?? 0))])}),"window_start":.number(start.timeIntervalSince1970),"window_end":.number(end.timeIntervalSince1970),"offline":.bool(true)])
+        let average=sorted.isEmpty ? nil:Double(sorted.reduce(0){$0+$1.bpm})/Double(sorted.count)
+        let stats:JSONValue = .object(["average_bpm":average.map{.number($0)} ?? .null,"max_bpm":sorted.map(\.bpm).max().map{.number(Double($0))} ?? .null])
+        return .object(["stats":stats,"heart_rate":.array(bounded.map{.object(["t":.number($0.date.timeIntervalSince1970),"v":.number($0.value),"segment":.number(Double($0.segment ?? 0))])}),"window_start":.number(start.timeIntervalSince1970),"window_end":.number(end.timeIntervalSince1970),"offline":.bool(true)])
     }}
     func addReading(_ reading:Reading) throws {try guarded{let s=try statement("INSERT INTO readings(at,bpm) VALUES(?,?)");defer{sqlite3_finalize(s)};sqlite3_bind_double(s,1,reading.date.timeIntervalSince1970);sqlite3_bind_int(s,2,Int32(reading.bpm));try done(s)}}
     func readings(limit:Int=500)->[Reading] {guarded{do{let s=try statement("SELECT at,bpm FROM readings ORDER BY id DESC LIMIT ?");defer{sqlite3_finalize(s)};sqlite3_bind_int(s,1,Int32(limit));var a:[Reading]=[];while sqlite3_step(s)==SQLITE_ROW{a.append(Reading(date:Date(timeIntervalSince1970:sqlite3_column_double(s,0)),bpm:Int(sqlite3_column_int(s,1))))};return a.reversed()}catch{return []}}}
