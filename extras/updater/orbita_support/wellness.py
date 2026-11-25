@@ -200,24 +200,46 @@ def _dc(root, *arguments, **kwargs):
 HEALTH_SCRIPT = "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/api/health',timeout=5); assert r.status==200"
 WORKER_PROBE = '''import json,os,sys,time,urllib.request,urllib.error
 payload=json.load(sys.stdin)
-headers={'Content-Type':'application/json','Authorization':'Bearer '+os.environ['HOME_PULSE_CORE_TOKEN']}
+def fail(reason,**details):
+ print(json.dumps({'ok':False,'reason':reason,**details}));sys.exit(1)
+token=os.getenv('HOME_PULSE_CORE_TOKEN')
+if not token:fail('configuration')
+headers={'Content-Type':'application/json','Authorization':'Bearer '+token}
+health={}
 for attempt in range(10):
  try:
   with urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8081/health',headers=headers),timeout=2) as response: health=json.load(response)
-  if health.get('configured') and health.get('library_sha256')=='163e10037c93ef70bd939641e0d391441e74cb4dd339946cd0a5421b91703f21': break
- except Exception: pass
+  if health.get('configured') and health.get('library_sha256')=='163e10037c93ef70bd939641e0d391441e74cb4dd339946cd0a5421b91703f21':break
+ except urllib.error.HTTPError as exc:
+  try:
+   with exc: health=json.loads(exc.read(4096))
+  except (ValueError,TypeError):pass
+ except (urllib.error.URLError,TimeoutError):pass
  time.sleep(1)
-else: print(json.dumps({'ok':False,'reason':'health'}));sys.exit(1)
-try:
- request=urllib.request.Request('http://127.0.0.1:8081/process',json.dumps(payload).encode(),headers=headers)
- with urllib.request.urlopen(request,timeout=35) as response: result=json.load(response)
- assert result.get('process_true') is True and result.get('deinit_returned') is True
- assert result.get('version')==[3,6,2] and result.get('input_record_count')==16
- assert result.get('mapping',{}).get('complete') is True and result['mapping'].get('record_identity_verified') is True
- assert result.get('sleep_native_abi')=='ecore-3.6.2-linux-x86_64-sleep-output-200-v1'
- assert result.get('sleep_capture_complete') is True and isinstance(result.get('sleep_outputs'),list)
- print(json.dumps({'ok':True,'synthetic_records':16}))
-except Exception: print(json.dumps({'ok':False,'reason':'native_synthetic_probe'}));sys.exit(1)
+else:fail('health',configured=health.get('configured') is True,library_matches=health.get('library_sha256')=='163e10037c93ef70bd939641e0d391441e74cb4dd339946cd0a5421b91703f21')
+for attempt in range(40):
+ try:
+  request=urllib.request.Request('http://127.0.0.1:8081/process',json.dumps(payload).encode(),headers=headers)
+  with urllib.request.urlopen(request,timeout=35) as response:result=json.load(response)
+  break
+ except urllib.error.HTTPError as exc:
+  code=exc.code
+  try:
+   with exc: status=json.loads(exc.read(4096)).get('status')
+  except (ValueError,TypeError,AttributeError):status=None
+  if code==503 and status=='busy':time.sleep(1);continue
+  allowed={'busy','not_configured','timeout','native_job_failed','worker_error','unauthorized','invalid_input','result_mismatch','output_limit'}
+  fail('http',http_status=code,worker_status=status if status in allowed else 'unknown')
+ except (urllib.error.URLError,TimeoutError):fail('http_unavailable')
+else:fail('busy_timeout')
+checks={'process_true':result.get('process_true') is True,'deinit_returned':result.get('deinit_returned') is True,
+ 'version':result.get('version')==[3,6,2],'input_record_count':result.get('input_record_count')==16,
+ 'mapping_complete':result.get('mapping',{}).get('complete') is True,
+ 'record_identity_verified':result.get('mapping',{}).get('record_identity_verified') is True,
+ 'sleep_native_abi':result.get('sleep_native_abi')=='ecore-3.6.2-linux-x86_64-sleep-output-200-v1',
+ 'sleep_capture_complete':result.get('sleep_capture_complete') is True,'sleep_outputs_type':isinstance(result.get('sleep_outputs'),list)}
+if not all(checks.values()):fail('native_contract',checks=checks)
+print(json.dumps({'ok':True,'synthetic_records':16}))
 '''
 
 
@@ -227,13 +249,23 @@ def _health(root):
 
 def _probe(root, fixture):
     result = _dc(root, 'exec', '-T', WORKER, 'python', '-c', WORKER_PROBE,
-                 input=fixture, timeout=50, check=False)
+                 input=fixture, timeout=110, check=False)
     try:
-        ready = json.loads(result.stdout).get('ok') is True
+        report = json.loads(result.stdout)
+        ready = report.get('ok') is True
     except (ValueError, AttributeError):
-        ready = False
+        report = {}; ready = False
     if result.returncode or not ready:
-        raise RuntimeError('Verifica HTTP/nativa sintetica fallita: nessuna misura promossa')
+        allowed = {'configuration','health','http','http_unavailable','busy_timeout','native_contract'}
+        reason = report.get('reason') if report.get('reason') in allowed else 'unknown'
+        details = {'reason': reason}
+        if type(report.get('http_status')) is int:details['http_status'] = report['http_status']
+        for key in ('configured','library_matches'):
+            if type(report.get(key)) is bool:details[key] = report[key]
+        if report.get('worker_status') in ('busy','not_configured','timeout','native_job_failed','worker_error','unauthorized','invalid_input','result_mismatch','output_limit'):details['worker_status'] = report['worker_status']
+        checks = report.get('checks')
+        if isinstance(checks,dict):details['checks'] = {k:v for k,v in checks.items() if k in ('process_true','deinit_returned','version','input_record_count','mapping_complete','record_identity_verified','sleep_native_abi','sleep_capture_complete','sleep_outputs_type') and type(v) is bool}
+        raise RuntimeError('Verifica HTTP/nativa sintetica fallita: '+json.dumps(details)+'; nessuna misura promossa')
 
 
 def _bootstrap(root, source, owner):
