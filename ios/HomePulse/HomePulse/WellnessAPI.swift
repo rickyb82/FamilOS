@@ -37,7 +37,7 @@ final class WellnessAPI:NSObject,URLSessionDataDelegate,URLSessionTaskDelegate,@
             self.mutex.lock();self.fastNetwork=(path.usesInterfaceType(.wifi) || path.usesInterfaceType(.wiredEthernet)) && !path.isConstrained;self.mutex.unlock()
             if path.status == .satisfied{self.upload()}
         }
-        if monitorNetwork{monitor.start(queue:DispatchQueue(label:"HomePulse.network"));_ = background}
+        if monitorNetwork{monitor.start(queue:DispatchQueue(label:"HomePulse.network"));background.getAllTasks{[weak self] tasks in self?.cleanupUploadFiles(protected:Set(tasks.compactMap(\.taskDescription)))}}
     }
     deinit{monitor.cancel();retryWork?.cancel()}
     #if DEBUG
@@ -166,6 +166,14 @@ final class WellnessAPI:NSObject,URLSessionDataDelegate,URLSessionTaskDelegate,@
             if let data=try? JSONSerialization.data(withJSONObject:value){try? ProtectedFileIO.replace(data,at:path)}
         }
     }
+    private func cleanupUploadFiles(protected:Set<String>=[]){
+        diagnosticQueue.async{[weak self] in
+            guard let self else{return};let keep=protected.union(self.store.activeBatchIDs)
+            for url in (try? FileManager.default.contentsOfDirectory(at:self.folder,includingPropertiesForKeys:nil)) ?? [] where url.pathExtension=="json"{
+                if !keep.contains(url.deletingPathExtension().lastPathComponent){try? FileManager.default.removeItem(at:url)}
+            }
+        }
+    }
     private func finishPreparation(){mutex.lock();preparing=false;mutex.unlock()}
     private func recordPreparation(events:Int,milliseconds:Double){mutex.lock();lastBatchEvents=events;lastPreparationMS=milliseconds;mutex.unlock()}
     private func recordRequest(milliseconds:Double){mutex.lock();lastRequestMS=milliseconds;mutex.unlock()}
@@ -176,7 +184,7 @@ final class WellnessAPI:NSObject,URLSessionDataDelegate,URLSessionTaskDelegate,@
         let started=Date(),complete=try store.acknowledge(batchID:batch,accepted:values.compactMap{$0.string})
         mutex.lock();lastAcknowledgementMS=Date().timeIntervalSince(started)*1000;mutex.unlock()
         try? FileManager.default.removeItem(at:folder.appendingPathComponent(batch+".json"))
-        status("Live inviato a FamilOS",http:200);onUpload?();onAcknowledged?()
+        cleanupUploadFiles();status("Live inviato a FamilOS",http:200);onUpload?();onAcknowledged?()
         return !complete
     }
     func urlSession(_ session:URLSession,dataTask:URLSessionDataTask,didReceive data:Data){

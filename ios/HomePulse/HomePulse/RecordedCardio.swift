@@ -204,7 +204,7 @@ actor RecordedModelRunner {
         self.store=store;diagnostic=DiagnosticWriter(url:diagnosticsURL)
         serverDiagnostic=DiagnosticWriter(url:diagnosticsURL.deletingLastPathComponent().appendingPathComponent("recorded-server-status.json"))
         monitorDiagnostic=DiagnosticWriter(url:diagnosticsURL.deletingLastPathComponent().appendingPathComponent("cardio-monitor-status.json"))
-        Task{let saved=try? await store.perform{($0.load(RecordedContext.self,key:"recorded.context"),$0.load(RecordedResult.self,key:"recorded.latest"))}
+        Task{let saved=try? await store.perform{($0.load(RecordedContext.self,key:"recorded.context"),$0.currentRecordedResult())}
             if let saved,context==nil{context=saved.0;result=saved.1;dirty=context != nil;running=saved.0 != nil && saved.1?.final != true;if let result{onResult?(result)};tick()}}
         if ProcessInfo.processInfo.arguments.contains("--recorded-model-self-test") {
             Task{do{let count=try await runner.syntheticSelfTest()

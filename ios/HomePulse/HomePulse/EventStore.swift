@@ -5,6 +5,7 @@ import CryptoKit
 final class EventStore: @unchecked Sendable {
     private var db:OpaquePointer?
     private let lock=NSRecursiveLock()
+    private var retentionRunning=false;private var lastRetentionReport=0.0
     private let ioQueue=DispatchQueue(label:"HomePulse.archive",qos:.userInitiated)
     private let transient=unsafeBitCast(-1,to:sqlite3_destructor_type.self)
     init(url:URL) throws {
@@ -27,11 +28,25 @@ final class EventStore: @unchecked Sendable {
         try run("CREATE TABLE IF NOT EXISTS batches(batch_id TEXT PRIMARY KEY,body BLOB NOT NULL)")
         try run("CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY,value BLOB NOT NULL)")
         try run("CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY,body BLOB NOT NULL)")
-        try run("CREATE TABLE IF NOT EXISTS history_records(digest TEXT PRIMARY KEY,ring TEXT,raw BLOB,received REAL,steps INTEGER,temp REAL,motion INTEGER)")
+        try run("CREATE TABLE IF NOT EXISTS history_records(id INTEGER PRIMARY KEY,digest TEXT NOT NULL UNIQUE,ring TEXT,raw BLOB,received REAL,steps INTEGER,temp REAL,motion INTEGER)")
         try run("CREATE INDEX IF NOT EXISTS history_recorded_lookup ON history_records(ring,substr(raw,1,1))")
         try run("CREATE TABLE IF NOT EXISTS recorded_segments(token TEXT PRIMARY KEY,started REAL NOT NULL,through REAL NOT NULL,body BLOB NOT NULL)")
         try run("CREATE INDEX IF NOT EXISTS recorded_segments_time ON recorded_segments(started,through)")
         try run("INSERT OR IGNORE INTO recorded_segments(token,started,through,body) SELECT substr(key,17),json_extract(CAST(value AS TEXT),'$.startedAt'),json_extract(CAST(value AS TEXT),'$.availableUntil'),value FROM kv WHERE key LIKE 'recorded.result.%' AND json_valid(CAST(value AS TEXT))")
+        try run("CREATE TABLE IF NOT EXISTS history_receipts(digest BLOB PRIMARY KEY) WITHOUT ROWID")
+        try run("CREATE TABLE IF NOT EXISTS retention_state(name TEXT PRIMARY KEY,value INTEGER NOT NULL)")
+        try run("INSERT OR IGNORE INTO retention_state VALUES('history.highwater',(SELECT coalesce(max(rowid),0) FROM history_records))")
+        try run("CREATE TABLE IF NOT EXISTS recorded_receipts(token TEXT PRIMARY KEY,revision INTEGER NOT NULL,final INTEGER NOT NULL)")
+        let historyColumns=try statement("PRAGMA table_info(history_records)");var hasSynced=false;var stableHistory=false
+        while sqlite3_step(historyColumns)==SQLITE_ROW{if text(historyColumns,1)=="synced"{hasSynced=true};if text(historyColumns,1)=="id"{stableHistory=true}};sqlite3_finalize(historyColumns)
+        if !hasSynced{try run("ALTER TABLE history_records ADD COLUMN synced INTEGER NOT NULL DEFAULT 0")}
+        if !stableHistory{try transaction{
+            try run("CREATE TABLE history_records_stable(id INTEGER PRIMARY KEY,digest TEXT NOT NULL UNIQUE,ring TEXT,raw BLOB,received REAL,steps INTEGER,temp REAL,motion INTEGER,synced INTEGER NOT NULL DEFAULT 0)")
+            try run("INSERT INTO history_records_stable SELECT rowid,digest,ring,raw,received,steps,temp,motion,synced FROM history_records")
+            try run("DROP TABLE history_records");try run("ALTER TABLE history_records_stable RENAME TO history_records")
+            try run("CREATE INDEX history_recorded_lookup ON history_records(ring,substr(raw,1,1))")
+        }}
+        try run("CREATE INDEX IF NOT EXISTS history_sync_state ON history_records(synced,ring)")
         try run("CREATE TABLE IF NOT EXISTS readings(id INTEGER PRIMARY KEY AUTOINCREMENT,at REAL NOT NULL,bpm INTEGER NOT NULL)")
         try run("CREATE INDEX IF NOT EXISTS readings_time ON readings(at,id)")
         try? FileManager.default.setAttributes([.protectionKey:FileProtectionType.completeUntilFirstUserAuthentication],ofItemAtPath:url.path)
@@ -87,7 +102,8 @@ final class EventStore: @unchecked Sendable {
     @discardableResult func reconcileSessions(_ sessions:[WorkoutSession],active:WorkoutSession?)throws->Bool{
         try guarded{try transaction{
             guard try count("SELECT count(*) FROM outbox o JOIN journal j USING(event_id) WHERE j.kind='workout'")==0 else{return false}
-            for session in sessions where diaryAllows(session){let s=try statement("INSERT OR REPLACE INTO sessions(id,body) VALUES(?,?)");defer{sqlite3_finalize(s)};bind(session.id.uuidString,s,1);bind(try JSONEncoder().encode(session),s,2);try done(s)}
+            try run("DELETE FROM sessions")
+            for session in sessions where diaryAllows(session) && session.id==active?.id{let s=try statement("INSERT OR REPLACE INTO sessions(id,body) VALUES(?,?)");defer{sqlite3_finalize(s)};bind(session.id.uuidString,s,1);bind(try JSONEncoder().encode(session),s,2);try done(s)}
             try put(try JSONEncoder().encode(active),key:"activeWorkout");return true
         }}
     }
@@ -106,9 +122,11 @@ final class EventStore: @unchecked Sendable {
     }}}
     func diaryLocal(start:Date,end:Date)->JSONValue{guarded{
         var rows=recordedResults(start:start,end:end).flatMap{$0.acceptedReadings}.filter{$0.date>=start && $0.date<=end}
-        if let q=try? statement("SELECT at,bpm FROM readings WHERE at>=? AND at<=? ORDER BY at,id"){
+        if let q=try? statement("SELECT captured_at,payload FROM journal j JOIN outbox o USING(event_id) WHERE j.kind='sensor_packet' AND captured_at>=? AND captured_at<=? ORDER BY captured_at,sequence"){
             sqlite3_bind_double(q,1,start.timeIntervalSince1970);sqlite3_bind_double(q,2,end.timeIntervalSince1970)
-            while sqlite3_step(q)==SQLITE_ROW{rows.append(Reading(date:Date(timeIntervalSince1970:sqlite3_column_double(q,0)),bpm:Int(sqlite3_column_int(q,1))))};sqlite3_finalize(q)
+            while sqlite3_step(q)==SQLITE_ROW{
+                if let payload=try? JSONDecoder().decode(JSONValue.self,from:data(q,1)),let hex=payload["raw_hex"].string,let raw=Data(hex:hex),let reading=try? OuraWire.live(raw,api:payload["api_version"].array.compactMap{$0.number.map{Int($0)}}),let bpm=reading.bpm,(20...250).contains(bpm){rows.append(Reading(date:Date(timeIntervalSince1970:sqlite3_column_double(q,0)),bpm:bpm))}
+            };sqlite3_finalize(q)
         }
         let sorted=rows.sorted{$0.date<$1.date};var segment=0;var previous:Date?;var points:[ChartPoint]=[]
         for row in sorted{if let previous,row.date.timeIntervalSince(previous)>8{segment+=1};previous=row.date;points.append(ChartPoint(date:row.date,value:Double(row.bpm),segment:segment))}
@@ -162,6 +180,10 @@ final class EventStore: @unchecked Sendable {
         guard Set(accepted).isSubset(of:expected) else {throw AppError.message("Conferma server incoerente: dati locali conservati")}
         let acknowledge=try statement("DELETE FROM outbox WHERE event_id=? AND batch_id=?");defer{sqlite3_finalize(acknowledge)}
         for id in Set(accepted){sqlite3_reset(acknowledge);sqlite3_clear_bindings(acknowledge);bind(id,acknowledge,1);bind(batchID,acknowledge,2);try done(acknowledge)}
+        for event in batch.events where Set(accepted).contains(event.event_id){try markServerSaved(event)}
+        let remove=try statement("DELETE FROM journal WHERE event_id=? AND NOT EXISTS(SELECT 1 FROM outbox WHERE outbox.event_id=journal.event_id)");defer{sqlite3_finalize(remove)}
+        for id in Set(accepted){sqlite3_reset(remove);sqlite3_clear_bindings(remove);bind(id,remove,1);try done(remove)}
+        try pruneServerCopies()
         let q=try statement("UPDATE outbox SET batch_id=NULL WHERE batch_id=?");defer{sqlite3_finalize(q)};bind(batchID,q,1);try done(q)
         let b=try statement("DELETE FROM batches WHERE batch_id=?");defer{sqlite3_finalize(b)};bind(batchID,b,1);try done(b)
         return expected.isSubset(of:Set(accepted))
@@ -192,13 +214,15 @@ final class EventStore: @unchecked Sendable {
         for frame in frames {
             let bytes=[UInt8](frame)
             let digest=Data(SHA256.hash(data:Data((ring ?? "unknown").utf8)+frame)).hex
-            let h=try statement("INSERT OR IGNORE INTO history_records(digest,ring,raw,received,steps,temp,motion) VALUES(?,?,?,?,?,?,?)")
+            if let bytes=Data(hex:digest){let seen=try statement("SELECT 1 FROM history_receipts WHERE digest=?");bind(bytes,seen,1);let known=sqlite3_step(seen)==SQLITE_ROW;sqlite3_finalize(seen);if known{continue}}
+            let h=try statement("INSERT OR IGNORE INTO history_records(digest,ring,raw,received,steps,temp,motion,rowid) VALUES(?,?,?,?,?,?,?,(SELECT value+1 FROM retention_state WHERE name='history.highwater'))")
             bind(digest,h,1);bind(ring ?? "unknown",h,2);bind(frame,h,3);sqlite3_bind_double(h,4,at.timeIntervalSince1970)
             if bytes.count>=7,bytes[0]==0x50 {sqlite3_bind_int(h,5,Int32(bytes[6]))}else{sqlite3_bind_null(h,5)}
             if (10...20).contains(bytes.count),bytes[0]==0x46,bytes.count%2==0 {let value=Int16(bitPattern:UInt16(bytes[6])|(UInt16(bytes[7])<<8));if value != Int16.min{sqlite3_bind_double(h,6,Double(value)/100)}else{sqlite3_bind_null(h,6)}}else{sqlite3_bind_null(h,6)}
             if (10...12).contains(bytes.count),bytes[0]==0x47 {sqlite3_bind_int(h,7,Int32(bytes[6]&31))}else{sqlite3_bind_null(h,7)}
             try done(h);let inserted=sqlite3_changes(db)>0;sqlite3_finalize(h)
             if !inserted {continue}
+            try run("UPDATE retention_state SET value=last_insert_rowid() WHERE name='history.highwater'")
             var p:[String:JSONValue]=["raw_hex":.string(frame.hex),"api_version":.array(api.map{.number(Double($0))})]
             if let ring {p["logical_ring_id"] = .string(ring)}
             var identity=[UInt8](Data(SHA256.hash(data:Data(digest.utf8))).prefix(16));identity[6]=(identity[6]&15)|0x50;identity[8]=(identity[8]&63)|0x80
@@ -217,7 +241,7 @@ final class EventStore: @unchecked Sendable {
     }catch{return HistoricalMetrics()}}}
 
     func recordedLastRow(ring:String)throws->Int64{try guarded{
-        let s=try statement("SELECT coalesce(max(rowid),0) FROM history_records WHERE ring=?");defer{sqlite3_finalize(s)}
+        let s=try statement("SELECT max(coalesce((SELECT max(rowid) FROM history_records WHERE ring=?),0),(SELECT value FROM retention_state WHERE name='history.highwater'))");defer{sqlite3_finalize(s)}
         bind(ring,s,1);guard sqlite3_step(s)==SQLITE_ROW else{throw AppError.message("Archivio cardio non leggibile")}
         return sqlite3_column_int64(s,0)
     }}
@@ -247,17 +271,10 @@ final class EventStore: @unchecked Sendable {
     }}
     func commitRecorded(context:RecordedContext,result:RecordedResult)throws{try guarded{try transaction{
         try put(try JSONEncoder().encode(context),key:"recorded.context")
-        try put(try JSONEncoder().encode(result),key:"recorded.latest")
+        try put(try JSONEncoder().encode(result.token),key:"recorded.latest.token")
         let body=try JSONEncoder().encode(result)
-        try put(body,key:"recorded.result."+result.token)
         let segment=try statement("INSERT INTO recorded_segments(token,started,through,body) VALUES(?,?,?,?) ON CONFLICT(token) DO UPDATE SET started=excluded.started,through=excluded.through,body=excluded.body");defer{sqlite3_finalize(segment)}
         bind(result.token,segment,1);sqlite3_bind_double(segment,2,result.startedAt);sqlite3_bind_double(segment,3,result.availableUntil);bind(body,segment,4);try done(segment)
-        if let workout=result.workoutID {
-            let key="recorded.workout."+workout
-            var tokens=load([String].self,key:key) ?? []
-            if !tokens.contains(result.token){tokens.append(result.token)}
-            try put(try JSONEncoder().encode(tokens),key:key)
-        }
         _=try insert(kind:"recorded_cardio",payload:result.payload,at:Date(),eventID:UUID())
     }}}
     func recordedResults(start:Date,end:Date)->[RecordedResult]{guarded{
@@ -270,7 +287,108 @@ final class EventStore: @unchecked Sendable {
         }catch{return []}
     }}
     func recordedResults(workoutID:String)->[RecordedResult]{guarded{
-        (load([String].self,key:"recorded.workout."+workoutID) ?? []).compactMap{load(RecordedResult.self,key:"recorded.result."+$0)}.sorted{$0.startedAt<$1.startedAt}
+        do{let s=try statement("SELECT body FROM recorded_segments WHERE json_extract(CAST(body AS TEXT),'$.workoutID')=? ORDER BY started");defer{sqlite3_finalize(s)};bind(workoutID,s,1);var rows:[RecordedResult]=[];while sqlite3_step(s)==SQLITE_ROW{rows.append(try JSONDecoder().decode(RecordedResult.self,from:data(s,0)))};return rows}catch{return []}
+    }}
+
+    func currentRecordedResult()->RecordedResult?{guarded{
+        if let token=load(String.self,key:"recorded.latest.token"),let s=try? statement("SELECT body FROM recorded_segments WHERE token=?"){
+            defer{sqlite3_finalize(s)};bind(token,s,1)
+            if sqlite3_step(s)==SQLITE_ROW{return try? JSONDecoder().decode(RecordedResult.self,from:data(s,0))}
+        }
+        return load(RecordedResult.self,key:"recorded.latest")
+    }}
+    var activeBatchIDs:Set<String>{guarded{do{let s=try statement("SELECT batch_id FROM batches");defer{sqlite3_finalize(s)};var ids=Set<String>();while sqlite3_step(s)==SQLITE_ROW{ids.insert(text(s,0))};return ids}catch{return []}}}
+    private func markServerSaved(_ event:StoredEvent)throws{
+        if event.kind=="ring_history",let hex=event.payload["raw_hex"].string,let raw=Data(hex:hex){
+            let ring=event.payload["logical_ring_id"].string ?? "unknown"
+            let digest=Data(SHA256.hash(data:Data(ring.utf8)+raw))
+            let receipt=try statement("INSERT OR IGNORE INTO history_receipts VALUES(?)");defer{sqlite3_finalize(receipt)};bind(digest,receipt,1);try done(receipt)
+            let q=try statement("UPDATE history_records SET synced=1 WHERE digest=?");defer{sqlite3_finalize(q)};bind(digest.hex,q,1);try done(q)
+        }else if event.kind=="recorded_cardio",let token=event.payload["token"].string,let revision=event.payload["revision"].number{
+            let q=try statement("INSERT INTO recorded_receipts VALUES(?,?,?) ON CONFLICT(token) DO UPDATE SET revision=excluded.revision,final=excluded.final WHERE excluded.revision>=recorded_receipts.revision");defer{sqlite3_finalize(q)}
+            bind(token,q,1);sqlite3_bind_int(q,2,Int32(revision));sqlite3_bind_int(q,3,event.payload["final"] == .bool(true) ? 1:0);try done(q)
+        }
+    }
+    private func pruneServerCopies()throws{
+        // Keep the in-flight model window and its exact preceding time/reset
+        // anchor. Everything else can be recovered from the authoritative server.
+        let context=load(RecordedContext.self,key:"recorded.context"),latest=currentRecordedResult()
+        let current=context?.token ?? ""
+        let receipt=try statement("SELECT revision,final FROM recorded_receipts WHERE token=?");bind(current,receipt,1)
+        let terminalSaved=sqlite3_step(receipt)==SQLITE_ROW && sqlite3_column_int(receipt,1)==1 && Int(sqlite3_column_int(receipt,0)) >= (latest?.revision ?? Int.max)
+        sqlite3_finalize(receipt)
+        var protected:[Int64]=[]
+        let anchors=try statement("SELECT max(rowid) FROM history_records WHERE substr(raw,1,1) IN (x'41',x'42') GROUP BY ring")
+        while sqlite3_step(anchors)==SQLITE_ROW{protected.append(sqlite3_column_int64(anchors,0))};sqlite3_finalize(anchors)
+        if let context{
+            let q=try statement("SELECT max(rowid) FROM history_records WHERE ring=? AND rowid<=? AND substr(raw,1,1) IN (x'41',x'42')");bind(context.ring,q,1);sqlite3_bind_int64(q,2,context.afterRow)
+            if sqlite3_step(q)==SQLITE_ROW{protected.append(sqlite3_column_int64(q,0))};sqlite3_finalize(q)
+        }
+        let exclusions=protected.isEmpty ? "0":protected.map(String.init).joined(separator:",")
+        var sql="DELETE FROM history_records WHERE synced=1 AND rowid NOT IN ("+exclusions+")"
+        if let context{
+            sql += terminalSaved ? " AND NOT(ring=? AND rowid>? AND substr(raw,1,1)=x'6c')":" AND NOT(ring=? AND rowid>? AND substr(raw,1,1) IN (x'41',x'42',x'6c',x'73',x'74'))"
+            let q=try statement(sql);bind(context.ring,q,1);sqlite3_bind_int64(q,2,context.afterRow);try done(q);sqlite3_finalize(q)
+        }else{try run(sql)}
+        // An acknowledged final current segment needs only transition metadata.
+        if terminalSaved,var result=latest,!result.points.isEmpty{
+            result.points=[];let q=try statement("UPDATE recorded_segments SET body=? WHERE token=?");bind(try JSONEncoder().encode(result),q,1);bind(current,q,2);try done(q);sqlite3_finalize(q)
+        }
+        let q=try statement("DELETE FROM recorded_segments WHERE token!=? AND EXISTS(SELECT 1 FROM recorded_receipts r WHERE r.token=recorded_segments.token AND r.revision>=json_extract(CAST(body AS TEXT),'$.revision'))");bind(current,q,1);try done(q);sqlite3_finalize(q)
+        let sessions=try statement("SELECT id,body FROM sessions");var remove:[String]=[]
+        while sqlite3_step(sessions)==SQLITE_ROW{
+            let value=try JSONDecoder().decode(WorkoutSession.self,from:data(sessions,1))
+            if ["running","paused"].contains(value.state){continue}
+            let pending=try statement("SELECT 1 FROM journal j JOIN outbox o USING(event_id) WHERE j.kind='workout' AND json_extract(CAST(j.payload AS TEXT),'$.session_id')=? LIMIT 1")
+            bind(value.remoteID ?? value.id.uuidString,pending,1);let unsent=sqlite3_step(pending)==SQLITE_ROW;sqlite3_finalize(pending)
+            if !unsent{remove.append(text(sessions,0))}
+        };sqlite3_finalize(sessions)
+        for id in remove{let q=try statement("DELETE FROM sessions WHERE id=?");bind(id,q,1);try done(q);sqlite3_finalize(q)}
+        if let active=load(WorkoutSession.self,key:"activeWorkout"),!["running","paused"].contains(active.state){try run("DELETE FROM kv WHERE key='activeWorkout'")}
+    }
+    func retentionStep(limit:Int=4000)throws->Bool{try guarded{
+        try transaction{
+            try run("INSERT OR IGNORE INTO retention_state VALUES('legacy.end',(SELECT coalesce(max(sequence),0) FROM journal))")
+            try run("INSERT OR IGNORE INTO retention_state VALUES('legacy.cursor',0)")
+            if load(String.self,key:"recorded.latest.token")==nil,let latest=load(RecordedResult.self,key:"recorded.latest"){try put(try JSONEncoder().encode(latest.token),key:"recorded.latest.token")}
+            // Legacy results already migrated to recorded_segments at open.
+            try run("DELETE FROM kv WHERE key='recorded.latest' OR key LIKE 'recorded.result.%' OR key LIKE 'recorded.workout.%' OR key='bootstrap' OR key LIKE 'analysis.%' OR key LIKE 'sleep.%' OR key GLOB 'diary.[0-9]*h'")
+            try run("DELETE FROM readings")
+            let q=try statement("SELECT j.sequence,j.event_id,j.captured_at,j.kind,CASE WHEN j.kind IN ('ring_history','recorded_cardio') THEN j.payload ELSE NULL END,EXISTS(SELECT 1 FROM outbox o WHERE o.event_id=j.event_id) FROM journal j WHERE j.sequence>(SELECT value FROM retention_state WHERE name='legacy.cursor') AND j.sequence<=(SELECT value FROM retention_state WHERE name='legacy.end') ORDER BY j.sequence LIMIT ?")
+            sqlite3_bind_int(q,1,Int32(max(1,min(limit,10000))));var rows:[(Int64,String,Double,String,Data?,Bool)]=[]
+            while sqlite3_step(q)==SQLITE_ROW{rows.append((sqlite3_column_int64(q,0),text(q,1),sqlite3_column_double(q,2),text(q,3),sqlite3_column_type(q,4)==SQLITE_NULL ? nil:data(q,4),sqlite3_column_int(q,5)==1))};sqlite3_finalize(q)
+            let remove=try statement("DELETE FROM journal WHERE event_id=? AND NOT EXISTS(SELECT 1 FROM outbox WHERE outbox.event_id=journal.event_id)");defer{sqlite3_finalize(remove)}
+            for row in rows where !row.5{
+                if let bytes=row.4{let payload=try JSONDecoder().decode(JSONValue.self,from:bytes);try markServerSaved(StoredEvent(event_id:row.1,sequence:row.0,captured_at:row.2,kind:row.3,payload:payload))}
+                sqlite3_reset(remove);sqlite3_clear_bindings(remove);bind(row.1,remove,1);try done(remove)
+            }
+            if let last=rows.last{let update=try statement("UPDATE retention_state SET value=? WHERE name='legacy.cursor'");sqlite3_bind_int64(update,1,last.0);try done(update);sqlite3_finalize(update)}
+            try pruneServerCopies()
+            return rows.count<max(1,min(limit,10000))
+        }
+    }}
+    func startRetentionMaintenance(diagnostic:DiagnosticWriter){
+        let start=guarded{if retentionRunning{return false};retentionRunning=true;return true};guard start else{return}
+        func step(){ioQueue.async{[weak self] in
+            guard let self else{return}
+            do{
+                let complete=try self.retentionStep()
+                if complete{try self.compactIfNeeded()}
+                if complete || Date().timeIntervalSince1970-self.lastRetentionReport>=5{self.lastRetentionReport=Date().timeIntervalSince1970;diagnostic.submit(self.storageStatus(maintenanceComplete:complete))}
+                if !complete{step()}else{self.guarded{self.retentionRunning=false}}
+            }catch{diagnostic.submit(.object(["at":.number(Date().timeIntervalSince1970),"maintenance_complete":.bool(false),"cleanup_deferred":.bool(true)]));self.guarded{self.retentionRunning=false}}
+        }}
+        step()
+    }
+    func compactIfNeeded()throws{try guarded{
+        let q=try statement("PRAGMA freelist_count");let free=sqlite3_step(q)==SQLITE_ROW ? sqlite3_column_int(q,0):0;sqlite3_finalize(q)
+        if free>2048 && pendingCount==0{try run("PRAGMA wal_checkpoint(TRUNCATE)");try run("VACUUM");try run("PRAGMA wal_checkpoint(TRUNCATE)")}
+    }}
+    func storageStatus(maintenanceComplete:Bool)->JSONValue{guarded{
+        var values:[String:JSONValue]=["at":.number(Date().timeIntervalSince1970),"maintenance_complete":.bool(maintenanceComplete),"pending_events":.number(Double(pendingCount)),"journal_events":.number(Double(journalCount))]
+        for (name,table) in [("history_payload_rows","history_records"),("deduplication_hashes","history_receipts"),("model_result_rows","recorded_segments"),("sensor_reading_copies","readings")]{values[name] = .number(Double((try? count("SELECT count(*) FROM "+table)) ?? -1))}
+        if let q=try? statement("PRAGMA database_list"),sqlite3_step(q)==SQLITE_ROW{let path=text(q,2);sqlite3_finalize(q);let size=(try? FileManager.default.attributesOfItem(atPath:path)[.size] as? NSNumber)?.doubleValue ?? 0;values["database_bytes"] = .number(size)}
+        return .object(values)
     }}
 
 }

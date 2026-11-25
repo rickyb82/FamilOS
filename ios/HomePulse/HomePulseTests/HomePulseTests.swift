@@ -3,6 +3,81 @@ import SQLite3
 @testable import HomePulse
 
 final class HomePulseTests:XCTestCase {
+    func testLegacyHistoryPositionsSurviveMigrationAndDatabaseCompaction()throws{
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString);defer{try? FileManager.default.removeItem(at:folder)}
+        try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true)
+        let path=folder.appendingPathComponent("legacy.sqlite");var db:OpaquePointer?;XCTAssertEqual(sqlite3_open(path.path,&db),SQLITE_OK)
+        let anchor=cardioFrame(0x42,990,(0..<8).map{UInt8((UInt64(1_600_000_000)>>($0*8))&255)}),trace=cardioFrame(0x73,1012,[0,1,100])
+        let sql="CREATE TABLE history_records(digest TEXT PRIMARY KEY,ring TEXT,raw BLOB,received REAL,steps INTEGER,temp REAL,motion INTEGER);INSERT INTO history_records(rowid,digest,ring,raw) VALUES(10,'a','synthetic',X'\(anchor.hex)'),(40,'b','synthetic',X'\(trace.hex)');"
+        XCTAssertEqual(sqlite3_exec(db,sql,nil,nil,nil),SQLITE_OK);sqlite3_close(db)
+        let store=try EventStore(url:path);var context=cardioContext();context.afterRow=10
+        XCTAssertEqual(sqlite3_open(path.path,&db),SQLITE_OK);XCTAssertEqual(sqlite3_exec(db,"VACUUM",nil,nil,nil),SQLITE_OK);sqlite3_close(db)
+        XCTAssertEqual(try store.recordedInput(context:context).0.map(\.row),[40]);XCTAssertEqual(try store.recordedInput(context:context).1,anchor)
+        try store.archiveHistory(frames:[cardioFrame(0x74,1020,[100,0])],nextCursor:1021,key:"cursor",api:[2,0,0],ring:"synthetic")
+        XCTAssertGreaterThan(try store.recordedLastRow(ring:"synthetic"),40)
+    }
+    func testAcknowledgedHistoryIsRemovedAndHashPreventsRedownloadDuplicates()throws{
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString);defer{try? FileManager.default.removeItem(at:folder)}
+        let path=folder.appendingPathComponent("synthetic.sqlite"),store=try EventStore(url:path)
+        let frame=Data(hex:"50050200000005")!
+        try store.archiveHistory(frames:[frame],nextCursor:3,key:"cursor",api:[2,0,0],ring:"synthetic")
+        let oldRow=try store.recordedLastRow(ring:"synthetic"),batch=try XCTUnwrap(store.prepareBatch())
+        try store.acknowledge(batchID:batch.batch_id,accepted:batch.events.map(\.event_id))
+        XCTAssertEqual(store.journalCount,0);XCTAssertEqual(store.pendingCount,0)
+        XCTAssertEqual(store.storageStatus(maintenanceComplete:true)["history_payload_rows"].number,0)
+        XCTAssertEqual(store.storageStatus(maintenanceComplete:true)["deduplication_hashes"].number,1)
+        let reopened=try EventStore(url:path)
+        try reopened.archiveHistory(frames:[frame],nextCursor:3,key:"cursor",api:[2,0,0],ring:"synthetic")
+        XCTAssertEqual(reopened.pendingCount,0)
+        try reopened.archiveHistory(frames:[Data(hex:"50050300000006")!],nextCursor:4,key:"cursor",api:[2,0,0],ring:"synthetic")
+        XCTAssertGreaterThan(try reopened.recordedLastRow(ring:"synthetic"),oldRow)
+    }
+    func testActiveModelWindowSurvivesACKThenFinalReleasesTracesOnly()throws{
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString);defer{try? FileManager.default.removeItem(at:folder)}
+        let store=try EventStore(url:folder.appendingPathComponent("synthetic.sqlite"))
+        let anchor=cardioFrame(0x42,990,(0..<8).map{UInt8((UInt64(1_600_000_000)>>($0*8))&255)})
+        try store.archiveHistory(frames:[anchor],nextCursor:1000,key:"cursor",api:[2,0,0],ring:"synthetic")
+        var context=cardioContext();context.afterRow=try store.recordedLastRow(ring:"synthetic")
+        try store.save(context,key:"recorded.context")
+        let frames=[cardioFrame(0x6c,1000,[3,0]),cardioFrame(0x73,1012,[0,1,100]),cardioFrame(0x74,1012,[100,0]),cardioFrame(0x6c,1030,[3,11])]
+        try store.archiveHistory(frames:frames,nextCursor:1031,key:"cursor",api:[2,0,0],ring:"synthetic")
+        let raw=try XCTUnwrap(store.prepareBatch());try store.acknowledge(batchID:raw.batch_id,accepted:raw.events.map(\.event_id))
+        XCTAssertEqual(try store.recordedInput(context:context).0.count,4)
+        let result=RecordedResult(token:context.token,revision:1,inputDigest:"synthetic",startedAt:1_600_000_001,availableUntil:1_600_000_030,endedAt:1_600_000_030,signalCheck:0,points:[RecordedPoint(offset:1,bpm:100,quality:1)],ppgWindows:1,accelWindows:1,final:true)
+        context.revision=1;try store.commitRecorded(context:context,result:result)
+        let model=try XCTUnwrap(store.prepareBatch());try store.acknowledge(batchID:model.batch_id,accepted:model.events.map(\.event_id))
+        XCTAssertEqual(store.currentRecordedResult()?.final,true);XCTAssertTrue(store.currentRecordedResult()?.points.isEmpty == true)
+        XCTAssertEqual(try store.recordedInput(context:context).0.map{$0.data.first},[0x6c,0x6c])
+        XCTAssertEqual(try store.recordedInput(context:context).1,anchor)
+        try store.archiveHistory(frames:[cardioFrame(0x6c,1040,[3,0])],nextCursor:1041,key:"cursor",api:[2,0,0],ring:"synthetic")
+        XCTAssertNotNil(try store.recordedNextSessionRow(context:context))
+    }
+    func testLegacyCleanupPreservesUnsentAndRemovesServerCaches()throws{
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString);defer{try? FileManager.default.removeItem(at:folder)}
+        let path=folder.appendingPathComponent("synthetic.sqlite"),store=try EventStore(url:path)
+        let saved=try store.append(kind:"sensor_packet",payload:.object(["raw_hex":.string("00")]))
+        let pending=try store.append(kind:"sensor_packet",payload:.object(["raw_hex":.string("01")]))
+        var db:OpaquePointer?;XCTAssertEqual(sqlite3_open(path.path,&db),SQLITE_OK);defer{sqlite3_close(db)}
+        XCTAssertEqual(sqlite3_exec(db,"DELETE FROM outbox WHERE event_id='\(saved.event_id)'",nil,nil,nil),SQLITE_OK)
+        for key in ["bootstrap","analysis.last24h","analysis.session.synthetic","sleep.last14d","diary.2h","diary.168h"]{try store.save("old-health-copy",key:key)}
+        try store.save("necessary-settings",key:"settings");try store.addReading(Reading(date:Date(),bpm:100))
+        while try !store.retentionStep(limit:1){}
+        XCTAssertEqual(store.pendingCount,1);XCTAssertEqual(store.journalCount,1)
+        XCTAssertEqual(try store.prepareBatch()?.events.map(\.event_id),[pending.event_id])
+        XCTAssertNil(store.load(String.self,key:"bootstrap"));XCTAssertNil(store.load(String.self,key:"diary.168h"))
+        XCTAssertEqual(store.load(String.self,key:"settings"),"necessary-settings");XCTAssertTrue(store.readings().isEmpty)
+    }
+    func testACKCleanupRollsBackIfLocalDeletionCannotCommit()throws{
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString);defer{try? FileManager.default.removeItem(at:folder)}
+        let path=folder.appendingPathComponent("synthetic.sqlite"),store=try EventStore(url:path)
+        try store.archiveHistory(frames:[Data(hex:"50050200000005")!],nextCursor:3,key:"cursor",api:[2,0,0],ring:"synthetic")
+        let batch=try XCTUnwrap(store.prepareBatch());var db:OpaquePointer?;XCTAssertEqual(sqlite3_open(path.path,&db),SQLITE_OK);defer{sqlite3_close(db)}
+        XCTAssertEqual(sqlite3_exec(db,"CREATE TRIGGER synthetic_disk_failure BEFORE DELETE ON journal BEGIN SELECT RAISE(ABORT,'synthetic');END",nil,nil,nil),SQLITE_OK)
+        XCTAssertThrowsError(try store.acknowledge(batchID:batch.batch_id,accepted:batch.events.map(\.event_id)))
+        XCTAssertEqual(store.pendingCount,1);XCTAssertEqual(store.journalCount,1)
+        XCTAssertEqual(store.storageStatus(maintenanceComplete:false)["deduplication_hashes"].number,0)
+        XCTAssertEqual(try store.prepareBatch()?.batch_id,batch.batch_id)
+    }
     func testDiaryCleanupRetainsOverlapAndFutureAndDoesNotRestoreDeletedSessions()throws{
         let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString);defer{try? FileManager.default.removeItem(at:folder)}
         let store=try EventStore(url:folder.appendingPathComponent("synthetic.sqlite"))
@@ -164,7 +239,7 @@ final class HomePulseTests:XCTestCase {
         try store.commitRecorded(context:context,result:result)
         let reopened=try EventStore(url:path)
         XCTAssertEqual(reopened.load(RecordedContext.self,key:"recorded.context")?.revision,1)
-        XCTAssertEqual(reopened.load(RecordedResult.self,key:"recorded.latest")?.latest?.bpm,110)
+        XCTAssertEqual(reopened.currentRecordedResult()?.latest?.bpm,110)
         let batch=try XCTUnwrap(reopened.prepareBatch())
         XCTAssertEqual(batch.events.count,1);XCTAssertEqual(batch.events[0].kind,"recorded_cardio")
         XCTAssertEqual(batch.events[0].payload["time_source"].string,"ring-timesync-100ms")
@@ -318,7 +393,7 @@ final class HomePulseTests:XCTestCase {
         api.onAcknowledged={done.fulfill()};api.setForeground(true)
         await fulfillment(of:[done],timeout:5)
         await api.stopForTesting()
-        XCTAssertEqual(counts,[1000,1000,1]);XCTAssertEqual(seen.count,2001);XCTAssertEqual(store.pendingCount,0);XCTAssertEqual(store.journalCount,2001)
+        XCTAssertEqual(counts,[1000,1000,1]);XCTAssertEqual(seen.count,2001);XCTAssertEqual(store.pendingCount,0);XCTAssertEqual(store.journalCount,0)
     }
     func testSleepSpO2IsBoundToItsNativePeriod(){
         let value:JSONValue = .object(["id":.string("synthetic-spo2-sleep"),"started_at":.number(1000),"ended_at":.number(4600),"time_in_bed_seconds":.number(3600),"spo2":.object(["display_percentage":.number(98),"sample_count":.number(2),"live":.bool(false)])])
@@ -362,7 +437,7 @@ final class HomePulseTests:XCTestCase {
         let encoder=JSONEncoder();encoder.outputFormatting = .sortedKeys
         XCTAssertEqual(try encoder.encode(try store.prepareBatch()),try encoder.encode(Optional(batch)))
         XCTAssertTrue(try store.acknowledge(batchID:batch.batch_id,accepted:batch.events.map{$0.event_id}))
-        XCTAssertEqual(store.pendingCount,2373);XCTAssertEqual(store.journalCount,2501)
+        XCTAssertEqual(store.pendingCount,2373);XCTAssertEqual(store.journalCount,2373)
         let next=try XCTUnwrap(store.prepareBatch(limit:1))
         XCTAssertEqual(next.events.first?.event_id,ids[127])
         XCTAssertEqual(next.events.first?.payload["raw_hex"].string,String(repeating:"ab",count:4096))
@@ -391,7 +466,7 @@ final class HomePulseTests:XCTestCase {
         api.onAcknowledged={done.fulfill()};api.setForeground(true)
         await fulfillment(of:[done],timeout:5)
         await api.stopForTesting()
-        XCTAssertEqual(store.pendingCount,0);XCTAssertEqual(store.journalCount,1)
+        XCTAssertEqual(store.pendingCount,0);XCTAssertEqual(store.journalCount,0)
     }
 
     func testBluetoothWakeSendsExactBatchWithoutForeground()async throws{
@@ -417,7 +492,7 @@ final class HomePulseTests:XCTestCase {
         api.onAcknowledged={done.fulfill()};api.noteBluetoothActivity()
         await fulfillment(of:[done],timeout:5)
         await api.stopForTesting()
-        XCTAssertEqual(store.pendingCount,0);XCTAssertEqual(store.journalCount,1)
+        XCTAssertEqual(store.pendingCount,0);XCTAssertEqual(store.journalCount,0)
     }
 
     func testImmediateBatchPrioritizesLiveAndPreservesHistoryForReplay()throws{
@@ -431,7 +506,7 @@ final class HomePulseTests:XCTestCase {
         XCTAssertEqual(try store.prepareBatch(prioritizeLive:true)?.batch_id,first.batch_id)
         try store.acknowledge(batchID:first.batch_id,accepted:[live.event_id])
         let remaining=try XCTUnwrap(store.prepareBatch(prioritizeLive:true))
-        XCTAssertEqual(remaining.events.map{$0.event_id},[old.event_id]);XCTAssertEqual(store.journalCount,2)
+        XCTAssertEqual(remaining.events.map{$0.event_id},[old.event_id]);XCTAssertEqual(store.journalCount,1)
     }
 
     func testDisplayRetainsActualHeartValueAcrossMotionInvalidPacketsAndSilence()throws{
@@ -642,7 +717,7 @@ final class HomePulseTests:XCTestCase {
         XCTAssertThrowsError(try reopened.acknowledge(batchID:batch.batch_id,accepted:[UUID().uuidString]))
         XCTAssertEqual(reopened.pendingCount,2)
         try reopened.acknowledge(batchID:batch.batch_id,accepted:[e1.event_id])
-        XCTAssertEqual(reopened.pendingCount,1);XCTAssertEqual(reopened.journalCount,2)
+        XCTAssertEqual(reopened.pendingCount,1);XCTAssertEqual(reopened.journalCount,1)
         let retry=try XCTUnwrap(reopened.prepareBatch());XCTAssertEqual(retry.events.count,1)
         XCTAssertEqual(retry.events[0].event_id,batch.events[1].event_id)
         XCTAssertEqual(retry.events[0].sequence,batch.events[1].sequence)
@@ -732,7 +807,7 @@ final class HomePulseTests:XCTestCase {
         XCTAssertEqual(store.pendingWorkoutCount,0)
         try store.reconcileSessions([remote],active:remote)
         XCTAssertEqual(store.load(WorkoutSession.self,key:"activeWorkout")?.id,remote.id)
-        XCTAssertEqual(store.journalCount,1);XCTAssertEqual(store.pendingCount,0)
+        XCTAssertEqual(store.journalCount,0);XCTAssertEqual(store.pendingCount,0)
         try store.reconcileSessions([],active:nil);XCTAssertNil(store.load(WorkoutSession.self,key:"activeWorkout"))
     }
 

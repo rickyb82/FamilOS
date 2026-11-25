@@ -14,7 +14,7 @@ struct AppArchiveSnapshot:Sendable {
         let settings=store.load(LocalSettings.self,key:"settings") ?? LocalSettings()
         let active=store.load(WorkoutSession.self,key:"activeWorkout").flatMap{store.diaryAllows($0) ? $0:nil}
         let coordinate=store.load([Double].self,key:"gymCoordinate.\(settings.auto_detection.gym.id)")
-        return Self(settings:settings,current:active.flatMap{["running","paused"].contains($0.state) ? $0:nil},sessions:store.sessions(),readings:store.readings(),metrics:store.metrics(),bootstrap:store.load(JSONValue.self,key:"bootstrap") ?? .null,analysis:store.load(JSONValue.self,key:"analysis.last24h") ?? .null,sleep:store.load(JSONValue.self,key:"sleep.last14d") ?? .null,owner:store.load(String.self,key:"ownerName"),logicalRing:store.load(String.self,key:"logicalRing"),battery:store.load(RingBatterySnapshot.self,key:"ringBattery.latest"),batteryAlert:store.load(BatteryAlertState.self,key:"ringBattery.alert") ?? BatteryAlertState(),fullAlert:store.load(BatteryFullAlertState.self,key:"ringBattery.fullAlert") ?? BatteryFullAlertState(),pending:store.pendingCount,journalCount:store.journalCount,continuousCardio:store.load(Bool.self,key:"cardio.continuous.enabled") ?? true,detection:store.load(DetectionState.self,key:"gymDetection") ?? DetectionState(),coordinates:coordinate.map{[settings.auto_detection.gym.id:$0]} ?? [:])
+        return Self(settings:settings,current:active.flatMap{["running","paused"].contains($0.state) ? $0:nil},sessions:store.sessions(),readings:[],metrics:store.metrics(),bootstrap:.null,analysis:.null,sleep:.null,owner:store.load(String.self,key:"ownerName"),logicalRing:store.load(String.self,key:"logicalRing"),battery:store.load(RingBatterySnapshot.self,key:"ringBattery.latest"),batteryAlert:store.load(BatteryAlertState.self,key:"ringBattery.alert") ?? BatteryAlertState(),fullAlert:store.load(BatteryFullAlertState.self,key:"ringBattery.fullAlert") ?? BatteryFullAlertState(),pending:store.pendingCount,journalCount:store.journalCount,continuousCardio:store.load(Bool.self,key:"cardio.continuous.enabled") ?? true,detection:store.load(DetectionState.self,key:"gymDetection") ?? DetectionState(),coordinates:coordinate.map{[settings.auto_detection.gym.id:$0]} ?? [:])
     }
 }
 
@@ -60,10 +60,13 @@ struct AppArchiveSnapshot:Sendable {
     let store:EventStore;let api:WellnessAPI;let ring:RingBridge;let gym:GymDetection
     let recorded:RecordedCardioController
     private var ticking:Task<Void,Never>?;private var refreshing=false
+    private var nextStorageMaintenance=Date.distantPast
     private var refreshingArchive=false;private var archiveNeedsMetrics=false;private var lastArchiveRefresh=Date.distantPast
     private let notificationDiagnostics:DiagnosticWriter
+    private let storageDiagnostics:DiagnosticWriter
     private let diaryDiagnostics:DiagnosticWriter
     init(store:EventStore,folder:URL,snapshot:AppArchiveSnapshot){
+        storageDiagnostics=DiagnosticWriter(url:folder.appendingPathComponent("storage-status.json"))
         diaryDiagnostics=DiagnosticWriter(url:folder.appendingPathComponent("diary-status.json"))
         self.store=store;notificationDiagnostics=DiagnosticWriter(url:folder.appendingPathComponent("notification-status.json"))
         settings=snapshot.settings;persistedSettings=snapshot.settings;continuousCardio=snapshot.continuousCardio
@@ -74,12 +77,13 @@ struct AppArchiveSnapshot:Sendable {
         enrolled=SecureStore.credentials() != nil
         current=snapshot.current;sessions=snapshot.sessions;readingBuffer=snapshot.readings;readings=Self.displayReadings(snapshot.readings,average:snapshot.current==nil);metrics=snapshot.metrics
         serverData=snapshot.bootstrap;analysisData=snapshot.analysis;sleepData=snapshot.sleep;ownerName=snapshot.owner
+        store.startRetentionMaintenance(diagnostic:storageDiagnostics)
         refreshChartCache()
         if let logical=snapshot.logicalRing{ring.configure(logicalRing:logical)}
         gym.apply(settings.auto_detection)
         api.onStatus={[weak self] status in Task{@MainActor in self?.uploadStatus=status}}
         api.onUpload={[weak self] in Task{@MainActor in self?.refreshArchiveStatus()}}
-        api.onAcknowledged={[weak self] in Task{@MainActor in self?.refreshArchiveStatus()}}
+        api.onAcknowledged={[weak self] in Task{@MainActor in self?.refreshArchiveStatus();self?.maintainStorage()}}
         ring.onLive={[weak self] value,time in self?.api.noteBluetoothActivity();self?.receive(value,at:time)}
         ring.onHistory={[weak self] in self?.archiveNeedsMetrics=true;self?.recorded.historyChanged()}
         ring.onRecordedPrepare={[weak self] activity in
@@ -123,14 +127,18 @@ struct AppArchiveSnapshot:Sendable {
             }
         }
     }
+    private func maintainStorage(){
+        guard Date()>=nextStorageMaintenance else{return};nextStorageMaintenance=Date().addingTimeInterval(10)
+        store.startRetentionMaintenance(diagnostic:storageDiagnostics)
+    }
     private func refreshArchiveStatus(){
         guard !refreshingArchive,Date().timeIntervalSince(lastArchiveRefresh)>=1 else{return}
         refreshingArchive=true;lastArchiveRefresh=Date()
         let includeMetrics=archiveNeedsMetrics;archiveNeedsMetrics=false;let store=store
         Task{[weak self] in
-            let value=try? await store.perform{( $0.pendingCount,$0.journalCount,includeMetrics ? $0.metrics():nil )}
+            let value=try? await store.perform{( $0.pendingCount,$0.journalCount,includeMetrics ? $0.metrics():nil,$0.sessions() )}
             guard let self else{return}
-            if let value{pending=value.0;journalCount=value.1;if let historical=value.2{metrics=historical}};refreshingArchive=false
+            if let value{pending=value.0;journalCount=value.1;if let historical=value.2{metrics=historical};sessions=value.3};refreshingArchive=false
         }
     }
     func refreshBatteryNotificationStatus()async{
@@ -204,8 +212,7 @@ struct AppArchiveSnapshot:Sendable {
         let averaged=normalAverage.accept(point)
         if let displayed=current == nil ? averaged:hr,heartBPM != displayed{heartBPM=displayed}
         // The original packet is already durable before this callback. Derived
-        // readings and location state are archived without blocking the UI.
-        store.enqueue({try $0.addReading(point)},onError:{[weak self] _ in Task{@MainActor in self?.message="Lettura non salvata; controlla lo spazio disponibile"}})
+        // only the current display stays in memory.
         readingBuffer.append(point);if readingBuffer.count>1000{readingBuffer.removeFirst(readingBuffer.count-1000)}
         if Date().timeIntervalSince(lastChartUpdate)>=0.2{lastChartUpdate=Date();readings=Self.displayReadings(readingBuffer,average:current==nil)}
         gym.accept(point,manualWorkout:current != nil)
@@ -372,7 +379,7 @@ struct AppArchiveSnapshot:Sendable {
             try await syncDiaryCleanup()
             if settings.dirty{try await pushSettings()}else{try await applyBootstrap(await api.request(path:"mobile/bootstrap"))}
             if let analysis=try? await api.request(path:"mobile/analysis"){
-                try await store.perform{try $0.save(analysis,key:"analysis.last24h")};analysisData=analysis;refreshChartCache()
+                analysisData=analysis;refreshChartCache()
             }
             syncStatus="Dati FamilOS aggiornati";api.upload()
         }catch{syncStatus="Offline · impostazioni e allenamenti disponibili"}
@@ -389,24 +396,9 @@ struct AppArchiveSnapshot:Sendable {
         catch{ /* Keep the request durable while the server update is pending. */ }
     }
     func diaryAnalysis(hours:Int)async->JSONValue{
-        let key="diary.\(hours)h",end=Date(),start=Date().addingTimeInterval(-Double(hours)*3600)
-        if enrolled,let value=try? await api.request(path:"mobile/diary",query:[URLQueryItem(name:"hours",value:String(hours))]){
-            try? await store.perform{try $0.save(value,key:key)};return value
-        }
-        return (try? await store.perform{store in
-            let local=store.diaryLocal(start:start,end:end)
-            let cached=store.load(JSONValue.self,key:key) ?? store.load(JSONValue.self,key:"analysis.last24h") ?? .null
-            var value=cached.object
-            for metric in ["heart_rate","spo2","temperature","respiratory_rate","motion","step_increments"]{
-                var points=ChartSeries.decode(cached[metric]).filter{$0.date>=start && $0.date<=end}
-                if metric=="heart_rate"{points += ChartSeries.decode(local[metric])}
-                var unique:[Date:ChartPoint]=[:];for point in points{unique[point.date]=point}
-                let bounded=ChartSeries.bound(unique.values.sorted{$0.date<$1.date})
-                value[metric] = .array(bounded.map{.object(["t":.number($0.date.timeIntervalSince1970),"v":.number($0.value),"segment":.number(Double($0.segment ?? 0))])})
-            }
-            value["window_start"] = .number(start.timeIntervalSince1970);value["window_end"] = .number(end.timeIntervalSince1970)
-            value["offline"] = .bool(true);return .object(value)
-        }) ?? .null
+        if enrolled,let value=try? await api.request(path:"mobile/diary",query:[URLQueryItem(name:"hours",value:String(hours))]){return value}
+        let end=Date(),start=Date().addingTimeInterval(-Double(hours)*3600)
+        return (try? await store.perform{$0.diaryLocal(start:start,end:end)}) ?? .null
     }
     func workoutAnalysis(_ session:WorkoutSession)async->JSONValue{
         let remote=await sessionAnalysis(session.remoteID ?? session.id.uuidString)
@@ -415,8 +407,8 @@ struct AppArchiveSnapshot:Sendable {
     }
     func refreshSleep()async{
         guard enrolled,!refreshingSleep else{return};refreshingSleep=true;defer{refreshingSleep=false}
-        do{let value=try await api.request(path:"mobile/sleep",query:[URLQueryItem(name:"days",value:"14")]);try await store.perform{try $0.save(value,key:"sleep.last14d")};sleepData=value;sleepStatus=""}
-        catch{sleepStatus=sleepData == .null ? "Sonno non disponibile: riprova quando il server è raggiungibile":"Ultimi dati salvati sul telefono · aggiornamento rinviato"}
+        do{let value=try await api.request(path:"mobile/sleep",query:[URLQueryItem(name:"days",value:"14")]);sleepData=value;sleepStatus=""}
+        catch{sleepStatus=sleepData == .null ? "Sonno non disponibile: riprova quando il server è raggiungibile":"Ultimi dati di questa apertura · aggiornamento rinviato"}
     }
     private func decode<T:Decodable>(_ type:T.Type,_ value:JSONValue)->T?{guard value != .null,let d=try? JSONEncoder().encode(value) else{return nil};return try? JSONDecoder().decode(type,from:d)}
     private var unsavedSettings:Bool{
@@ -455,7 +447,7 @@ struct AppArchiveSnapshot:Sendable {
         var safe=response.object;safe.removeValue(forKey:"ring_binding");safe.removeValue(forKey:"access_token");safe.removeValue(forKey:"device_id")
         let diaryRules=try await store.perform{$0.load([DiaryCleanup].self,key:"diary.cleanups") ?? []}
         if !diaryRules.isEmpty{safe["sessions"] = .array(response["sessions"].array.filter{value in SessionReconciliation.decode(value,receivedAt:Date()).map{session in diaryRules.allSatisfy{$0.allows(session)}} ?? false})}
-        let bootstrap=JSONValue.object(safe);try await store.perform{try $0.save(bootstrap,key:"bootstrap")};serverData=bootstrap;recorded.observeServer(bootstrap["recorded_cardio"]);refreshChartCache()
+        let bootstrap=JSONValue.object(safe);serverData=bootstrap;recorded.observeServer(bootstrap["recorded_cardio"]);refreshChartCache()
     }
     private func refreshChartCache(){
         chartRevision+=1;let revision=chartRevision,analysis=analysisData,bootstrap=serverData
@@ -467,11 +459,8 @@ struct AppArchiveSnapshot:Sendable {
     func serverPoints(_ metric:String)->[ChartPoint]{chartCache[metric] ?? []}
     nonisolated static func chartPoints(_ value:JSONValue)->[ChartPoint]{ChartSeries.bound(ChartSeries.decode(value))}
     func sessionAnalysis(_ id:String)async->JSONValue{
-        let key="analysis.session.\(id)"
-        if enrolled {let items=[URLQueryItem(name:"session_id",value:id)]
-            if let value=try? await api.request(path:"mobile/analysis",query:items){try? await store.perform{try $0.save(value,key:key)};return value}
-        }
-        return (try? await store.perform{$0.load(JSONValue.self,key:key)}) ?? .null
+        guard enrolled else{return .null}
+        return (try? await api.request(path:"mobile/analysis",query:[URLQueryItem(name:"session_id",value:id)])) ?? .null
     }
 
 }

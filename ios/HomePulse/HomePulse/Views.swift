@@ -104,8 +104,8 @@ struct HomeView:View {
         Card(title:"Respirazione storica"){
             if let point=model.serverPoints("respiratory_rate").last{Text("\(point.value,specifier:"%.1f") respiri/min").font(.title2.bold());Text(point.date,style:.relative).font(.caption).foregroundStyle(.secondary)}else{Text("—").font(.largeTitle);Text("In attesa di misure elaborate dall’anello").font(.caption).foregroundStyle(.secondary)}
         }
-        Card(title:"Movimento e passi archiviati"){
-            HStack{metric("Passi nei record",model.metrics.steps.map(String.init) ?? "—");Spacer();metric("Ultimo movimento",model.metrics.motionSeconds.map{"\($0) s"} ?? "—")}
+        Card(title:"Movimento e passi"){
+            HStack{metric(model.serverData["daily_energy"]["steps_in_records"].number == nil ? "Passi da sincronizzare":"Passi oggi",model.serverData["daily_energy"]["steps_in_records"].number.map{String(Int($0))} ?? model.metrics.steps.map(String.init) ?? "—");Spacer();metric("Ultimo movimento",model.serverData["latest"]["motion"]["value"].number.map{"\(Int($0)) s"} ?? model.metrics.motionSeconds.map{"\($0) s"} ?? "—")}
             Text("Dati storici dell’anello. Non rappresentano pedalate o cadenza.").font(.caption).foregroundStyle(.secondary)
         }
         if let active=model.current{Card(title:"Sessione in corso"){Text(active.activityName).font(.title3.bold());TimelineView(.periodic(from:.now,by:1)){context in Text(active.elapsed(at:context.date).durationText).monospacedDigit()};if active.provisional{Text(GymDetection.prompt).font(.subheadline).foregroundStyle(.teal)}}}
@@ -194,7 +194,7 @@ struct SyncCard:View{
     @EnvironmentObject var model:AppModel;@ObservedObject var progress:TransferProgress
     var body:some View{Card(title:"FamilOS"){
         HStack{Image(systemName:model.enrolled ? "checkmark.icloud":"icloud.slash").foregroundStyle(.teal);Text(model.syncStatus);Spacer()}
-        Text("\(progress.pending) eventi in coda · \(progress.journalCount) conservati sul telefono").font(.caption).foregroundStyle(.secondary)
+        Text("\(progress.pending) eventi da inviare").font(.caption).foregroundStyle(.secondary)
         Button("Sincronizza ora"){Task{await model.refresh();model.api.upload()}}.disabled(!model.enrolled)
     }}
 }
@@ -351,7 +351,7 @@ struct DiaryView:View{
         Section{
             Picker("Periodo dei grafici",selection:$range){ForEach(DiaryRange.allCases){item in Text(item.label).tag(item)}}.accessibilityIdentifier("diary-range")
             if loading{ProgressView("Caricamento grafici…")}
-            if analysis["offline"] == .bool(true){Text("Dati salvati sul telefono").font(.caption).foregroundStyle(.secondary)}
+            if analysis["offline"] == .bool(true){Text("Dati locali ancora da sincronizzare").font(.caption).foregroundStyle(.secondary)}
         }
         ForEach(diaryMetrics,id:\.0){metric,title in
             let points=ChartSeries.decode(analysis[metric])
