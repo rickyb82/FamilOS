@@ -132,7 +132,12 @@ struct SelectedCardioCard:View{
     @ObservedObject var ring:RingBridge
     @ObservedObject var recorded:RecordedCardioController
     var body:some View{
-        if ring.recordedWorkoutProbeActive || recorded.running{
+        if ring.spo2ProbeActive {
+            Card(title:"Prova SpO₂"){
+                Text(ring.spo2Status).font(.subheadline)
+                Button("Interrompi prova e ripristina battito"){Task{await ring.stopSpO2Probe()}}.buttonStyle(.borderedProminent)
+            }
+        }else if ring.recordedWorkoutProbeActive || recorded.running{
             Card(title:"Cardio registrato"){
                 HStack(alignment:.firstTextBaseline){
                     Text(recorded.result?.latest?.bpm.map{String(Int($0))} ?? "—").font(.system(size:82,weight:.semibold,design:.rounded)).monospacedDigit()
@@ -150,6 +155,11 @@ struct RingSettingsControls:View{
         Text(ring.batteryStatus).font(.caption).foregroundStyle(.secondary)
         Text(ring.spo2Status).font(.caption).foregroundStyle(.secondary)
         Button("Controlla SpO₂ automatica"){Task{await ring.refreshSpO2()}}.disabled(!ring.ready || ring.busy)
+        if ring.spo2ProbeActive {
+            Button("Interrompi prova SpO₂ e ripristina battito"){Task{await ring.stopSpO2Probe()}}
+        }else{
+            Button("Prova misura SpO₂ diurna · 6 minuti"){Task{do{try await ring.startSpO2Probe()}catch{model.message=error.localizedDescription}}}.disabled(!ring.ready || ring.busy || ring.recordedWorkoutProbeActive)
+        }
         if let error=ring.lastConnectionError{Text(error+" Ritento automaticamente; puoi premere Scollega per fermare i tentativi.").font(.caption).foregroundStyle(.orange)}
         ForEach(model.warnings,id:\.self){Text($0).font(.caption).foregroundStyle(.orange)}
         HStack{Button("Cerca anello"){ring.scan()}.buttonStyle(.borderedProminent);if ring.connected || ring.hasPendingConnection{Button("Scollega"){ring.disconnect()}.buttonStyle(.bordered)}}

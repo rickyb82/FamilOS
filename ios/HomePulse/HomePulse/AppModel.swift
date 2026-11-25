@@ -91,6 +91,21 @@ struct AppArchiveSnapshot:Sendable {
         pending=snapshot.pending;journalCount=snapshot.journalCount
         if current==nil,let id=gym.engine.state.candidateSessionID,let date=gym.engine.state.candidateAt{startWorkout(auto:true,id:id,at:date)}
         ticking=Task{[weak self] in var ticks=0;while !Task.isCancelled{try? await Task.sleep(nanoseconds:1_000_000_000);guard let self else{return};ring.maintenance();recorded.tick();refreshArchiveStatus();ticks+=1;if ticks%30==0{await refresh()}}}
+        if ProcessInfo.processInfo.arguments.contains("--spo2-stop-probe") {
+            Task{[weak self] in for _ in 0..<90 {
+                guard let self else{return}
+                if ring.ready && !ring.busy{await ring.stopSpO2Probe();return}
+                try? await Task.sleep(nanoseconds:1_000_000_000)
+            }}
+        }else if ProcessInfo.processInfo.arguments.contains("--spo2-requested-probe") {
+            Task{[weak self] in
+                for _ in 0..<90 {
+                    guard let self else{return}
+                    if ring.ready && !ring.busy{do{try await ring.startSpO2Probe()}catch{message=error.localizedDescription};return}
+                    try? await Task.sleep(nanoseconds:1_000_000_000)
+                }
+            }
+        }
     }
     private func refreshArchiveStatus(){
         guard !refreshingArchive,Date().timeIntervalSince(lastArchiveRefresh)>=1 else{return}
@@ -322,7 +337,7 @@ struct AppArchiveSnapshot:Sendable {
             if archive.0,!changingWorkout,revision==workoutRevision{current=next;sessions=archive.1;if wasActive,next==nil{gym.resolve()}}
         }
         var safe=response.object;safe.removeValue(forKey:"ring_binding");safe.removeValue(forKey:"access_token");safe.removeValue(forKey:"device_id")
-        let bootstrap=JSONValue.object(safe);try await store.perform{try $0.save(bootstrap,key:"bootstrap")};serverData=bootstrap;refreshChartCache()
+        let bootstrap=JSONValue.object(safe);try await store.perform{try $0.save(bootstrap,key:"bootstrap")};serverData=bootstrap;recorded.observeServer(bootstrap["recorded_cardio"]);refreshChartCache()
     }
     private func refreshChartCache(){
         chartRevision+=1;let revision=chartRevision,analysis=analysisData,bootstrap=serverData

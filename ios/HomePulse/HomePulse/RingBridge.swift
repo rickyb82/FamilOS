@@ -1,6 +1,7 @@
 import Foundation
 import CoreBluetooth
 import Combine
+import UIKit
 
 @MainActor final class RingBridge:NSObject,ObservableObject,@preconcurrency CBCentralManagerDelegate,@preconcurrency CBPeripheralDelegate {
     @Published var status="Anello scollegato" {didSet{if status != oldValue{archiveStatus(status);writeBatteryDiagnostic()}}}
@@ -27,6 +28,12 @@ import Combine
     private var lastLivePacketAt:Date?;private var lastValidLivePacketAt:Date?
     private var livePacketCount=0;private var validLivePacketCount=0;private var stateFilteredValidIbiCount=0;private var flagFilteredValidIbiCount=0
     @Published var spo2Status="SpO₂: configurazione da verificare"
+    @Published var spo2ProbeActive=false
+    private var spo2Probe:SpO2ProbeControl?
+    private var spo2ProbeCounts:[String:Int]=[:];private var spo2ProbeSeen=Set<Data>()
+    private var spo2ProbeLastStatus:OuraFeatureStatus?;private var spo2ProbeCompletedAt:Date?
+    private var previousIdleTimerDisabled:Bool?
+    private var spo2ProbeKey:String{"spo2.probe.\(logicalRing ?? "unbound")"}
     private var spo2Before:OuraFeatureStatus?;private var spo2After:OuraFeatureStatus?
     @Published var lastConnectionError:String?
     var onBattery:((OuraBattery,Date)->Void)?
@@ -179,6 +186,9 @@ import Combine
     private func receive(_ frame:Data,at receivedAt:Date){
         let b=[UInt8](frame)
         if recordedCapture != nil,b.first.map({$0>=0x41}) == true{recordedCapture?.note(frame,at:receivedAt)}
+        if spo2ProbeActive,let tag=b.first,[0x6e,0x6f,0x70,0x78,0x7b].contains(Int(tag)),spo2ProbeSeen.insert(frame).inserted{
+            spo2ProbeCounts[String(format:"%02x",tag),default:0]+=1;writeBatteryDiagnostic()
+        }
         if b.count>=5,b[0]==0x2f,Int(b[1])+2==b.count,[0x23,0x27,0x2a].contains(b[2]),[2,3,4].contains(b[3]){
             commandReplies.append(.object(["at":.number(receivedAt.timeIntervalSince1970),"step":.string(exerciseStep),"feature":.number(Double(b[3])),"reply":.number(Double(b[2])),"result_raw":.number(Double(b[4])),"frame_bytes":.number(Double(b.count)),"prefix_hex":.string(Data(frame.prefix(5)).hex)]))
             if commandReplies.count>16{commandReplies.removeFirst(commandReplies.count-16)}
@@ -263,13 +273,15 @@ import Combine
                 do{try await restoreSport(control)}catch{exerciseStatus=error.localizedDescription;setupIssues.append(error.localizedDescription)}
             }
             exerciseStep="handshake_spo2"
-            do{try await configureAutomaticSpO2()}catch{spo2Status="SpO₂: configurazione rinviata";nextSpO2At=Date().addingTimeInterval(60)}
+            let probeKey=spo2ProbeKey
+            spo2Probe=try await store.perform{$0.load(SpO2ProbeControl.self,key:probeKey)};spo2ProbeActive=spo2Probe != nil
+            do{if spo2Probe != nil{try await maintainSpO2Probe()}else{try await configureAutomaticSpO2()}}catch{spo2Status="SpO₂: ripristino o configurazione rinviati";nextSpO2At=Date().addingTimeInterval(15)}
             if caps[2] != nil{
                 do{
                     exerciseStep="handshake_live_mode"
-                    try await setFeatureMode(2,mode:recordedWorkoutProbeActive ? 1:3,operation:"Configurazione sorgente cardio")
+                    try await setFeatureMode(2,mode:recordedWorkoutProbeActive || spo2ProbeActive ? 1:3,operation:"Configurazione sorgente cardio")
                     exerciseStep="handshake_live_subscription"
-                    try await setLiveSubscription(!recordedWorkoutProbeActive)
+                    try await setLiveSubscription(!recordedWorkoutProbeActive && !spo2ProbeActive)
                 }catch{setupIssues.append(error.localizedDescription)}
             }else{setupIssues.append("Battito live non pubblicizzato dal firmware")}
             exerciseStep="connected";status="Collegato · attendi un IBI valido"
@@ -294,6 +306,7 @@ import Combine
         liveSubscriptionActive=enabled
     }
     private func configureAutomaticSpO2()async throws{
+        guard spo2Probe==nil else{try await maintainSpO2Probe();return}
         guard let version=capabilities[4] else{spo2Status="SpO₂: funzione non pubblicizzata dal firmware";nextSpO2At=Date.distantFuture;return}
         let before=try OuraWire.featureStatus(await exchange(Data([0x2f,2,0x20,4]),tag:0x2f,extended:0x21),feature:4)
         spo2Before=before;let key="spo2.parameters.\(logicalRing ?? "unbound")"
@@ -312,6 +325,62 @@ import Combine
         nextSpO2At=Date().addingTimeInterval(300);writeBatteryDiagnostic()
     }
     func refreshSpO2()async{guard ready,!busy else{return};busy=true;defer{finishOperation()};do{try await configureAutomaticSpO2()}catch{spo2Status="SpO₂: configurazione rinviata";nextSpO2At=Date().addingTimeInterval(60)}}
+    func startSpO2Probe()async throws {
+        guard ready,!busy,capabilities[4] != nil,spo2Probe==nil,!manualControlPending else{throw AppError.message("Per la prova SpO₂ termina prima la registrazione cardio e attendi il collegamento")}
+        busy=true;defer{finishOperation()}
+        let oxygen=try OuraWire.featureStatus(await exchange(Data([0x2f,2,0x20,4]),tag:0x2f,extended:0x21),feature:4)
+        let live=try OuraWire.featureStatus(await exchange(Data([0x2f,2,0x20,2]),tag:0x2f,extended:0x21),feature:2)
+        guard [0,1].contains(oxygen.mode),[0,1,3].contains(live.mode) else{throw AppError.message("Una misura è già attiva nell’anello")}
+        guard !(try await historyPages(maxPages:8)) else{throw AppError.message("Recupero dello storico in corso: riprova fra un momento")}
+        let key=spo2ProbeKey
+        var control=SpO2ProbeControl(restoreMode:UInt8(oxygen.mode),restoreLiveMode:UInt8(live.mode),restoreSubscription:liveSubscriptionActive,restoreAt:Date().addingTimeInterval(360))
+        try await store.perform{[control] in try $0.save(control,key:key)}
+        do {
+            // Persist restoration intent before any configuration mutation.
+            try await configureAutomaticSpO2()
+            spo2Probe=control;spo2ProbeActive=true;spo2ProbeCounts=[:];spo2ProbeSeen=[];spo2ProbeCompletedAt=nil
+            try await setFeatureMode(2,mode:1,operation:"Preparazione prova SpO₂");try await setLiveSubscription(false)
+            try await setFeatureMode(4,mode:2,operation:"Richiesta misura SpO₂")
+            control.requestedAt=Date();control.restoreAt=Date().addingTimeInterval(360);control.restoring=false
+            let saved=control;try await store.perform{try $0.save(saved,key:key)};spo2Probe=control
+            previousIdleTimerDisabled=UIApplication.shared.isIdleTimerDisabled;UIApplication.shared.isIdleTimerDisabled=true
+            spo2Status="Prova SpO₂ avviata · resta fermo per sei minuti"
+            nextSpO2At=Date();nextHistoryAt=Date();writeBatteryDiagnostic()
+        }catch{spo2Probe=control;spo2ProbeActive=true;try? await restoreSpO2Probe();throw error}
+    }
+    private func maintainSpO2Probe()async throws {
+        guard let control=spo2Probe else{return}
+        if control.mustRestore(at:Date()){try await restoreSpO2Probe();return}
+        let state=try OuraWire.featureStatus(await exchange(Data([0x2f,2,0x20,4]),tag:0x2f,extended:0x21),feature:4)
+        spo2ProbeLastStatus=state;spo2After=state
+        spo2Status="Prova SpO₂ · \(Int(max(0,control.restoreAt.timeIntervalSinceNow))) s rimanenti"
+        nextSpO2At=Date().addingTimeInterval(15);writeBatteryDiagnostic()
+    }
+    private func restoreSpO2Probe()async throws {
+        guard var control=spo2Probe else{return};control.restoring=true;spo2Probe=control
+        let key=spo2ProbeKey,saved=control;try await store.perform{try $0.save(saved,key:key)}
+        try await setFeatureMode(4,mode:0,operation:"Arresto misura SpO₂")
+        try await setFeatureMode(4,mode:control.restoreMode,operation:"Ripristino SpO₂")
+        try await setFeatureMode(2,mode:control.restoreLiveMode,operation:"Ripristino battito dopo SpO₂")
+        try await setLiveSubscription(control.restoreSubscription)
+        let restored=try OuraWire.featureStatus(await exchange(Data([0x2f,2,0x20,4]),tag:0x2f,extended:0x21),feature:4)
+        guard restored.mode==Int(control.restoreMode) else{throw AppError.message("Ripristino SpO₂ da confermare")};spo2After=restored
+        try await store.perform{try $0.save(Optional<SpO2ProbeControl>.none,key:key)}
+        spo2Probe=nil;spo2ProbeActive=false;spo2ProbeCompletedAt=Date()
+        UIApplication.shared.isIdleTimerDisabled=previousIdleTimerDisabled ?? false;previousIdleTimerDisabled=nil
+        spo2Status="Prova conclusa · verifica dei nuovi record SpO₂";nextSpO2At=Date().addingTimeInterval(300);nextHistoryAt=Date()
+        writeBatteryDiagnostic()
+    }
+    func stopSpO2Probe()async {
+        guard var control=spo2Probe else{return}
+        // Cancellation must survive a busy transfer or an interrupted link.
+        control.restoring=true;spo2Probe=control;let key=spo2ProbeKey,saved=control
+        do{try await store.perform{try $0.save(saved,key:key)}}catch{spo2Status="Arresto SpO₂ non salvato: riprova";return}
+        spo2Status="Arresto prova SpO₂ e ripristino battito…";nextSpO2At=Date.distantPast
+        guard ready,!busy else{writeBatteryDiagnostic();return}
+        busy=true;defer{finishOperation()}
+        do{try await restoreSpO2Probe()}catch{spo2Status="Ripristino SpO₂ da riprovare";nextSpO2At=Date().addingTimeInterval(10)}
+    }
     func downloadHistory()async{guard ready,!busy else{return};busy=true;defer{finishOperation()};do{let more=try await historyPages(maxPages:32);nextHistoryAt=Date().addingTimeInterval(more ? 2:60)}catch{status=error.localizedDescription;nextHistoryAt=Date().addingTimeInterval(60)}}
     private func historyPages(maxPages:Int)async throws->Bool{
         let key="history.cursor.\(logicalRing ?? peripheral?.identifier.uuidString ?? "unknown")"
@@ -349,7 +418,7 @@ import Combine
         guard ready,!busy,historyDue || exerciseDue || batteryDue || spo2Due else{return}
         if spo2Due{nextSpO2At=now.addingTimeInterval(60)}
         nextExerciseAt=ExercisePolling.nextDeadline(previous:nextExerciseAt,now:now,due:exerciseDue,manualControlPending:manualControlPending)
-        let historyInterval:TimeInterval=(manualControlPending || now<recordedDrainUntil) ? 5:60
+        let historyInterval:TimeInterval=(manualControlPending || spo2ProbeActive || now<recordedDrainUntil) ? 5:60
         if historyDue{nextHistoryAt=now.addingTimeInterval(historyInterval)}
         if batteryDue{nextBatteryAt=now.addingTimeInterval(60)}
         busy=true
@@ -378,6 +447,13 @@ import Combine
         if let lastLivePacketAt{value["last_live_packet_at"] = .number(lastLivePacketAt.timeIntervalSince1970)}
         if let lastValidLivePacketAt{value["last_valid_live_packet_at"] = .number(lastValidLivePacketAt.timeIntervalSince1970)}
         if let spo2Before{value["spo2_mode_before"] = .number(Double(spo2Before.mode))}
+        value["spo2_probe_active"] = .bool(spo2ProbeActive)
+        value["spo2_probe_record_counts"] = .object(spo2ProbeCounts.mapValues{.number(Double($0))})
+        if let probe=spo2Probe {
+            value["spo2_probe_restore_at"] = .number(probe.restoreAt.timeIntervalSince1970)
+            if let at=probe.requestedAt{value["spo2_probe_requested_at"] = .number(at.timeIntervalSince1970)}
+        }
+        if let at=spo2ProbeCompletedAt{value["spo2_probe_completed_at"] = .number(at.timeIntervalSince1970)}
         if let spo2After{value["spo2_mode"] = .number(Double(spo2After.mode));value["spo2_state_raw"] = .number(Double(spo2After.state));value["spo2_result_raw"] = .number(Double(spo2After.result))}
         if let batteryAttemptAt{value["attempt_at"] = .number(batteryAttemptAt.timeIntervalSince1970)}
         if let batteryReplyHex{value["battery_reply_hex"] = .string(batteryReplyHex)}
@@ -465,6 +541,7 @@ import Combine
         exerciseStep=callerStep
     }
     func startSport(activity:UInt16,age:Int,resting:Int,recordedOnly:Bool=false)async throws{
+        guard !spo2ProbeActive else{throw AppError.message("Concludi la prova SpO₂ prima di avviare il cardio registrato")}
         guard ready,!busy,capabilities[3] != nil else{throw AppError.message("Anello non pronto per la registrazione cardio")};busy=true;defer{finishOperation()}
         let parameters=try OuraWire.sportParameters(activity:activity,age:age,resting:resting,capabilityVersion:capabilities[3] ?? 0)
         exerciseAttemptAt=Date();exerciseFailure=nil;exerciseStep="query_status";exerciseStatus="Verifica della registrazione cardio…";writeBatteryDiagnostic()

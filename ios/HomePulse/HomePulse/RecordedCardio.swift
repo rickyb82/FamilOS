@@ -196,9 +196,11 @@ actor RecordedModelRunner {
     private var context:RecordedContext?;private var working=false;private var dirty=false
     private var next=Date.distantPast;private let store:EventStore;private let runner=RecordedModelRunner()
     private let diagnostic:DiagnosticWriter
+    private let serverDiagnostic:DiagnosticWriter
     var onResult:((RecordedResult)->Void)?
     init(store:EventStore,diagnosticsURL:URL){
         self.store=store;diagnostic=DiagnosticWriter(url:diagnosticsURL)
+        serverDiagnostic=DiagnosticWriter(url:diagnosticsURL.deletingLastPathComponent().appendingPathComponent("recorded-server-status.json"))
         Task{let saved=try? await store.perform{($0.load(RecordedContext.self,key:"recorded.context"),$0.load(RecordedResult.self,key:"recorded.latest"))}
             if let saved,context==nil{context=saved.0;result=saved.1;dirty=context != nil;running=saved.0 != nil && saved.1?.final != true;if let result{onResult?(result)};tick()}}
         if ProcessInfo.processInfo.arguments.contains("--recorded-model-self-test") {
@@ -219,6 +221,10 @@ actor RecordedModelRunner {
         context=value;result=nil;running=true;dirty=true;next = .distantPast;status="Attendo le prime tracce cardio dell’anello"
     }
     func historyChanged(){dirty=true;tick()}
+    func observeServer(_ value:JSONValue){
+        guard let count=value["point_count"].number,let revision=value["revision"].number else{return}
+        serverDiagnostic.submit(.object(["at":.number(Date().timeIntervalSince1970),"recorded_projection_received":.bool(true),"point_count":.number(count),"revision":.number(revision),"final":value["final"],"model":value["model"],"health_values_exported":.bool(false)]))
+    }
     func tick(){
         guard !working,dirty,Date()>=next,let context else{return}
         working=true;dirty=false;next=Date().addingTimeInterval(15)

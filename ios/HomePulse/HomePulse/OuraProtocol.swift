@@ -30,6 +30,11 @@ struct OuraBattery:Equatable {
     var isCharging:Bool?{RingChargeState(progress:chargingProgressRaw)?.isCharging}
 }
 struct OuraFeatureStatus:Equatable,Sendable{var mode:Int;var flags:Int;var state:Int;var result:Int}
+struct SpO2ProbeControl:Codable,Sendable {
+    var restoreMode:UInt8;var restoreLiveMode:UInt8;var restoreSubscription:Bool
+    var requestedAt:Date?;var restoreAt:Date;var restoring=true
+    func mustRestore(at now:Date)->Bool{restoring || requestedAt==nil || now>=restoreAt}
+}
 struct OuraExerciseLatest:Sendable{
     var result:Int;var flags:Int?;var state:Int?;var ageRaw:Int?;var qualityRaw:Int?;var lastHrRaw:Int?
 }

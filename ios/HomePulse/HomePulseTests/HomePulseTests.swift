@@ -3,6 +3,16 @@ import SQLite3
 @testable import HomePulse
 
 final class HomePulseTests:XCTestCase {
+    func testSpO2ProbeRestorationSurvivesReopenAndUsesBoundedDeadline()throws {
+        let start=Date(timeIntervalSince1970:1000)
+        var control=SpO2ProbeControl(restoreMode:1,restoreLiveMode:3,restoreSubscription:true,restoreAt:start.addingTimeInterval(360))
+        XCTAssertTrue(control.mustRestore(at:start))
+        control.requestedAt=start;control.restoring=false
+        let restored=try JSONDecoder().decode(SpO2ProbeControl.self,from:JSONEncoder().encode(control))
+        XCTAssertFalse(restored.mustRestore(at:start.addingTimeInterval(359)))
+        XCTAssertTrue(restored.mustRestore(at:start.addingTimeInterval(360)))
+        XCTAssertEqual(restored.restoreMode,1);XCTAssertEqual(restored.restoreLiveMode,3);XCTAssertTrue(restored.restoreSubscription)
+    }
     private func cardioFrame(_ tag:UInt8,_ rt:UInt32,_ payload:[UInt8])->Data {
         Data([tag,UInt8(payload.count+4)]+(0..<4).map{UInt8((rt>>($0*8))&255)}+payload)
     }
