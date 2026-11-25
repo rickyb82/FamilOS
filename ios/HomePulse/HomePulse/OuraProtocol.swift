@@ -30,6 +30,14 @@ struct OuraBattery:Equatable {
     var isCharging:Bool?{RingChargeState(progress:chargingProgressRaw)?.isCharging}
 }
 struct OuraFeatureStatus:Equatable,Sendable{var mode:Int;var flags:Int;var state:Int;var result:Int}
+struct OuraExerciseLatest:Sendable{
+    var result:Int;var flags:Int?;var state:Int?;var ageRaw:Int?;var qualityRaw:Int?;var lastHrRaw:Int?
+}
+enum ExercisePolling{
+    static func nextDeadline(previous:Date,now:Date,due:Bool,manualControlPending:Bool)->Date{
+        due ? now.addingTimeInterval(manualControlPending ? 5:60):previous
+    }
+}
 struct OuraCommandRejection:LocalizedError,Equatable {
     let feature:UInt8;let command:UInt8;let result:UInt8;let operation:String?
     var errorDescription:String?{
@@ -72,6 +80,13 @@ enum OuraWire {
         guard bytes[3]==feature,(0...3).contains(bytes[4]),(0...3).contains(desired) else{throw AppError.message("Modalità funzione anello non riconosciuta")}
         // Original setter compares mode only. Status result is not a query ACK.
         return bytes[4] != desired
+    }
+    static func exerciseLatest(_ frame:Data)throws->OuraExerciseLatest{
+        let bytes=try complete(frame,minimum:5,tag:0x2f,extended:0x25)
+        guard bytes[3]==3 else{throw AppError.message("Risposta cardio attività inattesa")}
+        if bytes.count==5,bytes[4] != 0{return OuraExerciseLatest(result:Int(bytes[4]))}
+        guard bytes.count>=17 else{throw AppError.message("Valori cardio attività incompleti")}
+        return OuraExerciseLatest(result:Int(bytes[4]),flags:Int(bytes[5]),state:Int(bytes[6]),ageRaw:Int(bytes[7])|(Int(bytes[8])<<8),qualityRaw:Int(bytes[9]),lastHrRaw:Int(bytes[13]))
     }
     static func spo2AutomaticParameters(capabilityVersion:Int)->Data?{
         // Original HealthSpo2 defaults, eight-parameter ABI advertised by Gen3.

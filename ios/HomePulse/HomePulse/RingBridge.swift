@@ -13,6 +13,10 @@ import Combine
     private var commandReplies:[JSONValue]=[];private var exerciseMode:OuraFeatureStatus?;private var exerciseModeAt:Date?
     private var setupIssues:[String]=[]
     private var modeWriteSkips:[JSONValue]=[]
+    private var manualControlPending=false
+    private var exerciseLatest:OuraExerciseLatest?;private var exerciseLatestAt:Date?;private var exerciseReadCount=0;private var exerciseHrChangeCount=0;private var previousExerciseHrRaw:Int?
+    private var notifyCount=0;private var lastNotifyAt:Date?;private var nextNotifySnapshotAt=Date.distantPast;private var lastLiveProcessingDelay:TimeInterval?;private var delayedLivePacketCount=0
+    private var displaySupportedLivePacketCount=0;private var lastDisplaySupportedLiveAt:Date?;private var ibiValidityCounts:[Int:Int]=[:]
     @Published var batteryLevel:Int?;@Published var batteryAt:Date?
     @Published var batteryStatus="Batteria non ancora letta"
     private let diagnosticWriter:DiagnosticWriter?;private var batteryAttemptAt:Date?;private var batteryReplyHex:String?;private var batteryChargingProgressRaw:Int?
@@ -152,8 +156,10 @@ import Combine
         if error != nil {failWaiter(AppError.message("Lettura Bluetooth rifiutata"));return}
         if pairingAttempt && !characteristic.isNotifying {peripheral.setNotifyValue(true,for:characteristic);return}
         guard let value=characteristic.value else{return}
+        let receivedAt=Date();notifyCount+=1;lastNotifyAt=receivedAt
+        if receivedAt>=nextNotifySnapshotAt{nextNotifySnapshotAt=receivedAt.addingTimeInterval(5);writeBatteryDiagnostic()}
         let session=packetSession
-        packetJournal.ingest(Data(value),at:Date(),api:apiVersion,ring:logicalRing){[weak self] result in
+        packetJournal.ingest(Data(value),at:receivedAt,api:apiVersion,ring:logicalRing){[weak self] result in
             DispatchQueue.main.async{[weak self] in
                 guard let self,self.packetSession==session else{return}
                 if result.storageFailed{self.desired=false;self.packetSession=UUID();self.central.cancelPeripheralConnection(peripheral)}
@@ -183,7 +189,9 @@ import Combine
         }
         if b.count>=3,b[0]==0x2f,b[2]==0x28,b.count>=4,b[3]==2,ready,!apiVersion.isEmpty {
             livePacketCount+=1;lastLivePacketAt=receivedAt
+            let delay=max(0,Date().timeIntervalSince(receivedAt));lastLiveProcessingDelay=delay;if delay>2{delayedLivePacketCount+=1}
             if let live=try? OuraWire.live(frame,api:apiVersion){
+                ibiValidityCounts[live.validity,default:0]+=1
                 if b.count>=10{
                     let ibi=Int(b[8])|((Int(b[9])&15)<<8)
                     if live.validity==1,ibi>0,ibi<=2000{
@@ -191,7 +199,10 @@ import Combine
                         else if live.flags&1==0{flagFilteredValidIbiCount+=1}
                     }
                 }
-                if live.bpm != nil{validLivePacketCount+=1;lastValidLivePacketAt=receivedAt};onLive?(live,receivedAt)
+                if let bpm=live.bpm{
+                    validLivePacketCount+=1;lastValidLivePacketAt=receivedAt
+                    if OuraWire.displaySupported(bpm){displaySupportedLivePacketCount+=1;lastDisplaySupportedLiveAt=receivedAt}
+                };onLive?(live,receivedAt)
             }
             writeBatteryDiagnostic()
             return
@@ -234,7 +245,9 @@ import Combine
             authenticating=false;ready=true
             let sportKey=sportKey
             exerciseStep="handshake_restore"
-            if let control=try await store.perform({$0.load(SportControl.self,key:sportKey)}),control.pendingStop {
+            let control=try await store.perform({$0.load(SportControl.self,key:sportKey)})
+            manualControlPending=control != nil
+            if let control,control.pendingStop {
                 do{try await restoreSport(control)}catch{exerciseStatus=error.localizedDescription;setupIssues.append(error.localizedDescription)}
             }
             exerciseStep="handshake_spo2"
@@ -308,10 +321,10 @@ import Combine
     func maintenance(){
         let now=Date()
         if scheduleChargingCheck(){return}
-        guard ready,!busy,now>=nextHistoryAt || now>=nextExerciseAt || now>=nextBatteryAt || now>=nextSpO2At else{return}
         let historyDue=now>=nextHistoryAt,exerciseDue=now>=nextExerciseAt && capabilities[3] != nil,batteryDue=now>=nextBatteryAt,spo2Due=now>=nextSpO2At
+        guard ready,!busy,historyDue || exerciseDue || batteryDue || spo2Due else{return}
         if spo2Due{nextSpO2At=now.addingTimeInterval(60)}
-        nextExerciseAt=now.addingTimeInterval(60)
+        nextExerciseAt=ExercisePolling.nextDeadline(previous:nextExerciseAt,now:now,due:exerciseDue,manualControlPending:manualControlPending)
         if historyDue{nextHistoryAt=now.addingTimeInterval(60)}
         if batteryDue{nextBatteryAt=now.addingTimeInterval(60)}
         busy=true
@@ -319,7 +332,7 @@ import Combine
             if spo2Due{do{try await configureAutomaticSpO2()}catch{spo2Status="SpO₂: configurazione rinviata"}}
             if batteryDue{do{try await batteryRead();nextBatteryAt=Date().addingTimeInterval(15)}catch{status="Lettura batteria rinviata"}}
             if exerciseDue{do{try await exerciseRead()}catch{status="Lettura cardio attività rinviata"}}
-            if historyDue{do{let more=try await historyPages(maxPages:32);nextHistoryAt=Date().addingTimeInterval(more ? 2:60)}catch{status=error.localizedDescription}}
+            if historyDue{do{let more=try await historyPages(maxPages:manualControlPending ? 2:32);nextHistoryAt=Date().addingTimeInterval(more ? 2:60)}catch{status=error.localizedDescription}}
         }
     }
     func refreshBattery()async{
@@ -350,6 +363,23 @@ import Combine
         value["valid_live_packet_count"] = .number(Double(validLivePacketCount))
         value["valid_ibi_filtered_by_state_count"] = .number(Double(stateFilteredValidIbiCount))
         value["valid_ibi_filtered_by_flag_count"] = .number(Double(flagFilteredValidIbiCount))
+        value["display_supported_live_packet_count"] = .number(Double(displaySupportedLivePacketCount))
+        value["live_ibi_validity_counts"] = .object(Dictionary(uniqueKeysWithValues:ibiValidityCounts.map{(String($0.key),.number(Double($0.value)))}))
+        value["notify_count"] = .number(Double(notifyCount));value["delayed_live_packet_count"] = .number(Double(delayedLivePacketCount))
+        if let lastNotifyAt{value["last_notify_at"] = .number(lastNotifyAt.timeIntervalSince1970)}
+        if let lastLiveProcessingDelay{value["last_live_processing_delay_ms"] = .number(lastLiveProcessingDelay*1000)}
+        if let lastDisplaySupportedLiveAt{value["last_display_supported_live_at"] = .number(lastDisplaySupportedLiveAt.timeIntervalSince1970)}
+        value["manual_exercise_control_pending"] = .bool(manualControlPending)
+        value["exercise_latest_read_count"] = .number(Double(exerciseReadCount));value["exercise_latest_hr_change_count"] = .number(Double(exerciseHrChangeCount))
+        if let exerciseLatestAt{value["exercise_latest_read_at"] = .number(exerciseLatestAt.timeIntervalSince1970)}
+        if let exerciseLatest{
+            value["exercise_latest_result_raw"] = .number(Double(exerciseLatest.result))
+            if let flags=exerciseLatest.flags{value["exercise_latest_flags_raw"] = .number(Double(flags))}
+            if let state=exerciseLatest.state{value["exercise_latest_state_raw"] = .number(Double(state))}
+            if let age=exerciseLatest.ageRaw{value["exercise_latest_age_raw"] = .number(Double(age))}
+            if let quality=exerciseLatest.qualityRaw{value["exercise_latest_quality_raw"] = .number(Double(quality))}
+            value["exercise_latest_last_hr_nonzero"] = .bool(exerciseLatest.result==0 && (exerciseLatest.lastHrRaw ?? 0)>0)
+        }
         value["exercise_step"] = .string(exerciseStep)
         value["command_replies"] = .array(commandReplies)
         value["setup_issues"] = .array(setupIssues.map{.string($0)})
@@ -363,15 +393,29 @@ import Combine
         if let reconnectAt{value["reconnect_retry_at"] = .number(reconnectAt.timeIntervalSince1970)}
         diagnosticWriter.submit(.object(value))
     }
-    func readExercise()async{guard ready,!busy else{return};busy=true;defer{finishOperation()};do{try await exerciseRead();nextExerciseAt=Date().addingTimeInterval(60)}catch{status=error.localizedDescription}}
+    func readExercise()async{guard ready,!busy else{return};busy=true;defer{finishOperation()};do{try await exerciseRead();nextExerciseAt=ExercisePolling.nextDeadline(previous:nextExerciseAt,now:Date(),due:true,manualControlPending:manualControlPending)}catch{status=error.localizedDescription}}
     private func exerciseRead()async throws{
         let state=try await exchange(Data([0x2f,2,0x20,3]),tag:0x2f,extended:0x21)
         let latest=try await exchange(Data([0x2f,2,0x24,3]),tag:0x2f,extended:0x25)
-        let b=try OuraWire.complete(latest,minimum:5,tag:0x2f,extended:0x25)
-        guard b[3]==3 else{throw AppError.message("Risposta cardio attività inattesa")}
+        let parsed=try OuraWire.exerciseLatest(latest)
         var value:[String:JSONValue]=["status_raw_hex":.string(state.hex),"latest_raw_hex":.string(latest.hex),"validated_live":.bool(false)]
-        if b.count>=17,b[4]==0{value["heart_rate_value_raw"] = .number(Double(b[13]));value["quality_raw"] = .number(Double(b[9]))}
+        if parsed.result==0,let hr=parsed.lastHrRaw,let quality=parsed.qualityRaw{
+            value["heart_rate_value_raw"] = .number(Double(hr));value["quality_raw"] = .number(Double(quality))
+            if let previousExerciseHrRaw,previousExerciseHrRaw != hr{exerciseHrChangeCount+=1};previousExerciseHrRaw=hr
+        }
+        exerciseLatest=parsed;exerciseLatestAt=Date();exerciseReadCount+=1
         exerciseRaw = .object(value)
+        if let exerciseMode{
+            let next:String
+            switch exerciseMode.mode{
+            case 0:next="Registrazione cardio dedicata non attiva"
+            case 1:next="Cardio attività in modalità automatica"
+            case 2:next="Registrazione cardio dedicata richiesta"
+            default:next="Stato cardio attività da verificare"
+            }
+            if exerciseStatus != next{exerciseStatus=next}
+        }
+        writeBatteryDiagnostic()
     }
     private func restoreSport(_ control:SportControl)async throws{
         let callerStep=exerciseStep;exerciseStep=callerStep+"_off"
@@ -382,6 +426,7 @@ import Combine
         }
         let key=sportKey
         try await store.perform{try $0.save(Optional<SportControl>.none,key:key)}
+        manualControlPending=false
         exerciseStep=callerStep
     }
     func startSport(activity:UInt16,age:Int,resting:Int)async throws{
@@ -396,6 +441,7 @@ import Combine
         guard current[3]==3,(0...1).contains(current[4]) else{throw AppError.message("Registrazione cardio già attiva o stato non modificabile")}
         let key=sportKey
         try await store.perform{try $0.save(SportControl(restoreMode:current[4],pendingStop:true),key:key)}
+        manualControlPending=true
         do{
             exerciseStep="off";exerciseStatus="Preparazione cardio attività…";writeBatteryDiagnostic()
             try await setFeatureMode(3,mode:0,operation:"Preparazione cardio attività")
@@ -421,9 +467,12 @@ import Combine
         control.pendingStop=true
         let pendingControl=control
         do{try await store.perform{try $0.save(pendingControl,key:key)}}catch{status="Arresto cardio non salvato: riprova";return}
+        manualControlPending=true
         guard ready else{return}
         if busy{Task{try? await Task.sleep(nanoseconds:1_000_000_000);await stopSport()};return}
         busy=true;defer{finishOperation()}
-        do{try await restoreSport(control)}catch{status="Arresto cardio da confermare alla prossima connessione"}
+        exerciseStep="stop";exerciseStatus="Arresto registrazione cardio…"
+        do{try await restoreSport(control);exerciseStep="stopped";exerciseStatus="Richiesta di arresto cardio accettata";nextExerciseAt=Date.distantPast}
+        catch{exerciseStatus=error.localizedDescription;status="Arresto cardio da confermare alla prossima connessione"}
     }
 }

@@ -366,6 +366,24 @@ final class HomePulseTests:XCTestCase {
         XCTAssertTrue(try OuraWire.modeChangeNeeded(Data(hex:"2f06210301000220")!,feature:3,desired:0))
         XCTAssertThrowsError(try OuraWire.modeChangeNeeded(Data(hex:"2f06210203200220")!,feature:3,desired:0))
     }
+    func testBatteryTicksCannotPostponeExerciseStatusAndManualReadsRemainBounded(){
+        let start=Date(timeIntervalSince1970:1000);var deadline=start.addingTimeInterval(60)
+        for seconds in [15,30,45]{deadline=ExercisePolling.nextDeadline(previous:deadline,now:start.addingTimeInterval(Double(seconds)),due:false,manualControlPending:false)}
+        XCTAssertEqual(deadline,start.addingTimeInterval(60))
+        XCTAssertEqual(ExercisePolling.nextDeadline(previous:deadline,now:deadline,due:true,manualControlPending:false),start.addingTimeInterval(120))
+        let manual=ExercisePolling.nextDeadline(previous:start,now:start,due:true,manualControlPending:true)
+        XCTAssertEqual(manual,start.addingTimeInterval(5))
+        XCTAssertEqual(ExercisePolling.nextDeadline(previous:manual,now:start.addingTimeInterval(2),due:false,manualControlPending:true),manual)
+    }
+    func testExerciseLatestPreservesRawMetadataWithoutDeclaringClinicalValidity()throws{
+        let value=try OuraWire.exerciseLatest(Data(hex:"2f0f25030001020f000407080978020000")!)
+        XCTAssertEqual(value.result,0);XCTAssertEqual(value.flags,1);XCTAssertEqual(value.state,2)
+        XCTAssertEqual(value.ageRaw,15);XCTAssertEqual(value.qualityRaw,4);XCTAssertEqual(value.lastHrRaw,120)
+        let unavailable=try OuraWire.exerciseLatest(Data(hex:"2f03250320")!)
+        XCTAssertEqual(unavailable.result,32);XCTAssertNil(unavailable.lastHrRaw);XCTAssertNil(unavailable.qualityRaw)
+        XCTAssertThrowsError(try OuraWire.exerciseLatest(Data(hex:"2f03250300")!))
+        XCTAssertThrowsError(try OuraWire.exerciseLatest(Data(hex:"2f03250420")!))
+    }
     func testExerciseCapabilityUsesUnifiedWireActivityAndPreservesLegacyEncoding()throws{
         for activity:UInt16 in [5,8,12,65535]{
             XCTAssertEqual(try OuraWire.sportParameters(activity:activity,age:40,resting:60,capabilityVersion:3).hex,"2f07290300003c32be")
