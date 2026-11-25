@@ -120,7 +120,7 @@ I callback di connessione rifiutata non rilanciano subito un’altra richiesta: 
 
 ## Tastiera e preparazione del cardio allenamento
 
-I moduli del profilo, scheda, palestra e allenamento hanno il pulsante Fine sopra la tastiera, invioDone sui campi compatibili e chiusura interattiva con lo scorrimento. Fine conclude l’immissione e nasconde la tastiera; Salvaimpostazioni conserva e sincronizza il profilo. Il test UI inserisce un’età sintetica nel solo archivio isolato, chiude il tastierino numerico e cambia scheda senza riavviare l’app.
+I moduli del profilo, scheda, palestra e allenamento hanno il pulsante Fine sopra la tastiera, invio Done sui campi compatibili e chiusura interattiva con lo scorrimento e chiusura toccando fuori dai campi. Il gesto non consuma i tocchi dei pulsanti e non chiude la tastiera passando a un altro campo. Fine conclude l’immissione e nasconde la tastiera; Salva impostazioni conserva e sincronizza il profilo. Il test UI inserisce un’età sintetica nel solo archivio isolato, chiude il tastierino numerico e cambia scheda senza riavviare l’app.
 
 Con capabilityExerciseHR3 versione positiva, i parametri di registrazione usano attività tecnica UNIFIED0, come il caller originale; lo sport scelto resta nei metadati della sessione. Il risultato grezzo di GetFeatureStatus non viene trattato come ACK del comando successivo. Il grafico locale può aggiornarsi fino a ogni200ms quando riceve nuovi campioni; questo non stabilisce la frequenza del firmware e non genera valori mancanti.
 

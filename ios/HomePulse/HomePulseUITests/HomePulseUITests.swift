@@ -1,6 +1,28 @@
 import XCTest
 
 final class HomePulseUITests:XCTestCase {
+    func testOutsideTapDismissesKeyboardAndKeepsInputAndButtonsWorking(){
+        continueAfterFailure=false
+        let app=XCUIApplication();app.launchArguments=["--uitest-isolated-store"];app.launch()
+        XCTAssertTrue(app.navigationBars["Home Pulse"].waitForExistence(timeout:15))
+        app.tabBars.buttons["Impostazioni"].tap()
+        let age=app.textFields["Età"]
+        for _ in 0..<8{if age.exists && age.isHittable{break};app.swipeUp()}
+        XCTAssertTrue(age.isHittable);age.tap();age.typeText("40")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout:3))
+        let weight=app.textFields["Peso (kg)"]
+        // Select the field above: the keyboard can cover the next row.
+        XCTAssertTrue(weight.isHittable);weight.tap();weight.typeText("84")
+        XCTAssertTrue(app.keyboards.firstMatch.exists,"Switching fields must not dismiss the keyboard")
+        app.navigationBars["Impostazioni"].coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5)).tap()
+        let hidden=XCTNSPredicateExpectation(predicate:NSPredicate(format:"exists == false"),object:app.keyboards.firstMatch)
+        XCTAssertEqual(XCTWaiter.wait(for:[hidden],timeout:3),.completed)
+        XCTAssertEqual(age.value as? String,"40");XCTAssertEqual(weight.value as? String,"84")
+        app.tabBars.buttons["Home"].tap()
+        XCTAssertTrue(app.navigationBars["Home Pulse"].waitForExistence(timeout:3))
+        XCTAssertFalse(app.keyboards.firstMatch.exists)
+        capture(app,"profile-outside-tap-dismissed")
+    }
     func testNumericProfileKeyboardDismissesWithoutClosingApp(){
         continueAfterFailure=false
         let app=XCUIApplication();app.launchArguments=["--uitest-isolated-store"];app.launch()

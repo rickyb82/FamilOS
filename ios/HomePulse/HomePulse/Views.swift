@@ -6,12 +6,52 @@ import UIKit
 private struct DismissibleKeyboard:ViewModifier {
     func body(content:Content)->some View{
         content.scrollDismissesKeyboard(.interactively).submitLabel(.done)
+            .background(OutsideKeyboardDismissal().allowsHitTesting(false))
             .onSubmit{dismiss()}
             .toolbar{ToolbarItemGroup(placement:.keyboard){Spacer();Button("Fine"){dismiss()}.accessibilityIdentifier("homepulse-keyboard-done")}}
     }
     private func dismiss(){UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),to:nil,from:nil,for:nil)}
 }
 extension View{func dismissibleKeyboard()->some View{modifier(DismissibleKeyboard())}}
+
+/// Observe outside taps without consuming a control's normal touch or a scroll.
+private struct OutsideKeyboardDismissal:UIViewRepresentable {
+    final class Host:UIView {
+        var windowChanged:((UIWindow?)->Void)?
+        override func didMoveToWindow(){super.didMoveToWindow();windowChanged?(window)}
+    }
+    final class Coordinator:NSObject,UIGestureRecognizerDelegate {
+        private weak var window:UIWindow?
+        private lazy var tap:UITapGestureRecognizer={
+            let value=UITapGestureRecognizer(target:self,action:#selector(dismiss))
+            value.cancelsTouchesInView=false;value.delaysTouchesBegan=false;value.delaysTouchesEnded=false
+            value.delegate=self;return value
+        }()
+        func attach(to next:UIWindow?){
+            guard window !== next else{return}
+            window?.removeGestureRecognizer(tap);window=next;next?.addGestureRecognizer(tap)
+        }
+        @objc private func dismiss(){window?.endEditing(false)}
+        func gestureRecognizer(_ gestureRecognizer:UIGestureRecognizer,shouldReceive touch:UITouch)->Bool{
+            var view=touch.view
+            while let current=view{
+                // Tapping any text editor should focus it and keep its keyboard.
+                if current is UITextInput{return false}
+                view=current.superview
+            }
+            return true
+        }
+        func gestureRecognizer(_ gestureRecognizer:UIGestureRecognizer,shouldRecognizeSimultaneouslyWith otherGestureRecognizer:UIGestureRecognizer)->Bool{true}
+    }
+    func makeCoordinator()->Coordinator{Coordinator()}
+    func makeUIView(context:Context)->Host{
+        let view=Host();view.isUserInteractionEnabled=false
+        view.windowChanged={[weak coordinator=context.coordinator] window in coordinator?.attach(to:window)}
+        return view
+    }
+    func updateUIView(_ view:Host,context:Context){context.coordinator.attach(to:view.window)}
+    static func dismantleUIView(_ view:Host,coordinator:Coordinator){view.windowChanged=nil;coordinator.attach(to:nil)}
+}
 
 struct RootView:View {
     @EnvironmentObject var model:AppModel
