@@ -198,6 +198,7 @@ struct WorkoutView:View{
             NavigationLink("Calendario allenamenti"){CalendarView()}
         }
         Card(title:"Cardio durante l’attività"){
+            Text(model.ring.exerciseStatus).font(.subheadline).accessibilityIdentifier("ring-exercise-status")
             if !model.allowedActivities.isEmpty{
                 Picker("Attività anello",selection:Binding(get:{model.settings.config.activity_id ?? -1},set:{v in model.settings.config.activity_id=v<0 ? nil:v;if let item=model.allowedActivities.first(where:{$0.0==v}){model.settings.config.activity_name=item.1}})){
                     Text("Scegli attività").tag(-1);ForEach(model.allowedActivities,id:\.0){item in Text(item.1).tag(item.0)}

@@ -349,6 +349,17 @@ final class HomePulseTests:XCTestCase {
         XCTAssertEqual(try OuraWire.sportParameters(activity:5,age:40,resting:60).hex,"2f07290305003c32be")
         XCTAssertThrowsError(try OuraWire.sportParameters(activity:5,age:0,resting:60))
     }
+    func testSportRejectionPreservesUnknownResultAndTheFailedOperation()throws{
+        let frame=Data(hex:"2f032a0320")!
+        XCTAssertThrowsError(try OuraWire.ack(frame,extended:0x2a,feature:3,operation:"Parametri cardio attività")){error in
+            let rejection=error as? OuraCommandRejection
+            XCTAssertEqual(rejection?.result,32);XCTAssertEqual(rejection?.command,0x2a);XCTAssertEqual(rejection?.feature,3)
+            XCTAssertEqual(error.localizedDescription,"Parametri cardio attività: Comando anello rifiutato (esito 32)")
+        }
+        XCTAssertThrowsError(try OuraWire.ack(Data(hex:"2f03230320")!,extended:0x23,feature:2)){error in
+            XCTAssertNil(error as? OuraCommandRejection,"A reply for another feature must not be diagnosed as this command's rejection")
+        }
+    }
     func testExerciseCapabilityUsesUnifiedWireActivityAndPreservesLegacyEncoding()throws{
         for activity:UInt16 in [5,8,12,65535]{
             XCTAssertEqual(try OuraWire.sportParameters(activity:activity,age:40,resting:60,capabilityVersion:3).hex,"2f07290300003c32be")

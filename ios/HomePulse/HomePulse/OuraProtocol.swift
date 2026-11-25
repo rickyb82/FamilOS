@@ -30,6 +30,13 @@ struct OuraBattery:Equatable {
     var isCharging:Bool?{RingChargeState(progress:chargingProgressRaw)?.isCharging}
 }
 struct OuraFeatureStatus:Equatable,Sendable{var mode:Int;var flags:Int;var state:Int;var result:Int}
+struct OuraCommandRejection:LocalizedError,Equatable {
+    let feature:UInt8;let command:UInt8;let result:UInt8;let operation:String?
+    var errorDescription:String?{
+        let prefix=operation.map{$0+": "} ?? ""
+        return prefix+"Comando anello rifiutato (esito \(result))"
+    }
+}
 enum OuraWire {
     static let service="98ed0001-a541-11e4-b6a0-0002a5d5c51b"
     static let write="98ed0002-a541-11e4-b6a0-0002a5d5c51b", notify="98ed0003-a541-11e4-b6a0-0002a5d5c51b"
@@ -50,9 +57,10 @@ enum OuraWire {
         guard (1...16).contains(Int(b[3])),(b.count-4)%2==0 else{throw AppError.message("Capability anello non valide")}
         var v:[Int:Int]=[:];for i in stride(from:4,to:b.count,by:2){if let old=v[Int(b[i])],old != Int(b[i+1]){throw AppError.message("Capability incoerenti")};v[Int(b[i])]=Int(b[i+1])};return(Int(b[3]),v)
     }
-    static func ack(_ frame:Data,extended:UInt8,feature:UInt8)throws {
+    static func ack(_ frame:Data,extended:UInt8,feature:UInt8,operation:String?=nil)throws {
         let b=try complete(frame,minimum:5,tag:0x2f,extended:extended)
-        guard b[3]==feature,b[4]==0 else{throw AppError.message("Comando anello rifiutato (esito \(b[4]))")}
+        guard b[3]==feature else{throw AppError.message("Conferma anello riferita a una funzione diversa")}
+        guard b[4]==0 else{throw OuraCommandRejection(feature:feature,command:extended,result:b[4],operation:operation)}
     }
     static func featureStatus(_ frame:Data,feature:UInt8)throws->OuraFeatureStatus{
         let bytes=try complete(frame,minimum:8,tag:0x2f,extended:0x21)

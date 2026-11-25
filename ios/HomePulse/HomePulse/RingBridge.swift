@@ -8,6 +8,9 @@ import Combine
     @Published var connected=false;@Published var ready=false;@Published var busy=false
     @Published var apiVersion:[Int]=[];@Published var capabilities:[Int:Int]=[:]
     @Published var exerciseRaw:JSONValue = .null
+    @Published var exerciseStatus="Registrazione cardio dedicata non avviata"
+    private var exerciseStep="idle";private var exerciseAttemptAt:Date?;private var exerciseFailure:JSONValue?
+    private var commandReplies:[JSONValue]=[];private var exerciseMode:OuraFeatureStatus?;private var exerciseModeAt:Date?
     @Published var batteryLevel:Int?;@Published var batteryAt:Date?
     @Published var batteryStatus="Batteria non ancora letta"
     private let diagnosticWriter:DiagnosticWriter?;private var batteryAttemptAt:Date?;private var batteryReplyHex:String?;private var batteryChargingProgressRaw:Int?
@@ -161,6 +164,15 @@ import Combine
     }
     private func receive(_ frame:Data,at receivedAt:Date){
         let b=[UInt8](frame)
+        if ready,b.count>=5,b[0]==0x2f,Int(b[1])+2==b.count,[0x23,0x2a].contains(b[2]),[2,3,4].contains(b[3]){
+            commandReplies.append(.object(["at":.number(receivedAt.timeIntervalSince1970),"step":.string(exerciseStep),"feature":.number(Double(b[3])),"reply":.number(Double(b[2])),"result_raw":.number(Double(b[4])),"frame_bytes":.number(Double(b.count)),"prefix_hex":.string(Data(frame.prefix(5)).hex)]))
+            if commandReplies.count>16{commandReplies.removeFirst(commandReplies.count-16)}
+            writeBatteryDiagnostic()
+        }
+        if ready,b.count>=8,b[0]==0x2f,Int(b[1])+2==b.count,b[2]==0x21,b[3]==3{
+            // Preserve unknown status values in technical evidence without promoting them to a measurement.
+            exerciseMode=OuraFeatureStatus(mode:Int(b[4]),flags:Int(b[5]),state:Int(b[6]),result:Int(b[7]));exerciseModeAt=receivedAt;writeBatteryDiagnostic()
+        }
         if b.first==0x0d,ready {
             batteryReplyHex=Data(frame.prefix(5)).hex
             do{let value=try OuraWire.battery(frame);let at=receivedAt;batteryLevel=value.level;batteryAt=at;batteryChargingProgressRaw=value.chargingProgressRaw;batteryStatus="Batteria ricevuta: \(value.level)%";onBattery?(value,at)}
@@ -314,6 +326,14 @@ import Combine
         value["valid_live_packet_count"] = .number(Double(validLivePacketCount))
         value["valid_ibi_filtered_by_state_count"] = .number(Double(stateFilteredValidIbiCount))
         value["valid_ibi_filtered_by_flag_count"] = .number(Double(flagFilteredValidIbiCount))
+        value["exercise_step"] = .string(exerciseStep)
+        value["command_replies"] = .array(commandReplies)
+        if let exerciseAttemptAt{value["exercise_attempt_at"] = .number(exerciseAttemptAt.timeIntervalSince1970)}
+        if let exerciseFailure{value["exercise_failure"] = exerciseFailure}
+        if let exerciseMode{
+            value["exercise_mode"] = .number(Double(exerciseMode.mode));value["exercise_state_raw"] = .number(Double(exerciseMode.state));value["exercise_status_result_raw"] = .number(Double(exerciseMode.result))
+        }
+        if let exerciseModeAt{value["exercise_status_at"] = .number(exerciseModeAt.timeIntervalSince1970)}
         if let reconnectAt{value["reconnect_retry_at"] = .number(reconnectAt.timeIntervalSince1970)}
         diagnosticWriter.submit(.object(value))
     }
@@ -336,18 +356,27 @@ import Combine
     func startSport(activity:UInt16,age:Int,resting:Int)async throws{
         guard ready,!busy,capabilities[3] != nil else{throw AppError.message("Anello non pronto per la registrazione cardio")};busy=true;defer{finishOperation()}
         let parameters=try OuraWire.sportParameters(activity:activity,age:age,resting:resting,capabilityVersion:capabilities[3] ?? 0)
+        exerciseAttemptAt=Date();exerciseFailure=nil;exerciseStep="query_status";exerciseStatus="Verifica della registrazione cardio…";writeBatteryDiagnostic()
         let current=try OuraWire.complete(await exchange(Data([0x2f,2,0x20,3]),tag:0x2f,extended:0x21),minimum:8,tag:0x2f,extended:0x21)
         guard current[3]==3,(0...1).contains(current[4]) else{throw AppError.message("Registrazione cardio già attiva o stato non modificabile")}
         let key=sportKey
         try await store.perform{try $0.save(SportControl(restoreMode:current[4],pendingStop:true),key:key)}
         do{
-            try OuraWire.ack(await exchange(Data([0x2f,3,0x22,3,0]),tag:0x2f,extended:0x23),extended:0x23,feature:3)
-            try OuraWire.ack(await exchange(parameters,tag:0x2f,extended:0x2a),extended:0x2a,feature:3)
-            try OuraWire.ack(await exchange(Data([0x2f,3,0x22,3,2]),tag:0x2f,extended:0x23),extended:0x23,feature:3)
+            exerciseStep="off";exerciseStatus="Preparazione cardio attività…";writeBatteryDiagnostic()
+            try OuraWire.ack(await exchange(Data([0x2f,3,0x22,3,0]),tag:0x2f,extended:0x23),extended:0x23,feature:3,operation:"Preparazione cardio attività")
+            exerciseStep="parameters";exerciseStatus="Configurazione cardio attività…";writeBatteryDiagnostic()
+            try OuraWire.ack(await exchange(parameters,tag:0x2f,extended:0x2a),extended:0x2a,feature:3,operation:"Parametri cardio attività")
+            exerciseStep="requested";exerciseStatus="Avvio cardio attività…";writeBatteryDiagnostic()
+            try OuraWire.ack(await exchange(Data([0x2f,3,0x22,3,2]),tag:0x2f,extended:0x23),extended:0x23,feature:3,operation:"Avvio cardio attività")
             try await store.perform{try $0.save(SportControl(restoreMode:current[4],pendingStop:false),key:key)}
-            status="Registrazione cardio attività richiesta"
+            exerciseStep="accepted";exerciseStatus="Richiesta di avvio accettata dall’anello";status=exerciseStatus
+            nextExerciseAt=Date.distantPast
         }catch{
+            var failure:[String:JSONValue]=["at":.number(Date().timeIntervalSince1970),"step":.string(exerciseStep)]
+            if let rejection=error as? OuraCommandRejection{failure["feature"] = .number(Double(rejection.feature));failure["reply"] = .number(Double(rejection.command));failure["result_raw"] = .number(Double(rejection.result))}
+            exerciseFailure = .object(failure);exerciseStatus=error.localizedDescription;exerciseStep="restore_after_failure";writeBatteryDiagnostic()
             if let control=try? await store.perform({$0.load(SportControl.self,key:key)}){try? await restoreSport(control)}
+            exerciseStep="failed";writeBatteryDiagnostic()
             throw error
         }
     }
