@@ -85,7 +85,7 @@ struct HomeView:View {
     var body:some View{NavigationStack{ScrollView{VStack(spacing:18){
         HStack{VStack(alignment:.leading){Text("Il tuo corpo, qui").font(.largeTitle.bold());Text(model.ownerName.map{"Ciao, \($0)"} ?? "Benvenuto in Home Pulse").foregroundStyle(.secondary)};Spacer();Image(systemName:"waveform.path.ecg").font(.largeTitle).foregroundStyle(.teal)}
         RingBatteryCard()
-        LiveCard(ring:model.ring)
+        SelectedCardioCard(ring:model.ring)
         HStack(alignment:.top,spacing:12){
             Card(title:"Temperatura anello"){
                 let values=model.serverPoints("temperature")
@@ -128,6 +128,18 @@ struct LiveCard:View{
         HStack(alignment:.firstTextBaseline){Text(model.displayedBPM.map(String.init) ?? "—").foregroundStyle(Color.primary).font(.system(size:82,weight:.semibold,design:.rounded)).monospacedDigit();Text("BPM").font(.title3).foregroundStyle(.secondary);Spacer();Image(systemName:"heart.fill").foregroundStyle(.red).font(.title)}
     }}
 }
+struct SelectedCardioCard:View{
+    @ObservedObject var ring:RingBridge
+    var body:some View{
+        if ring.recordedWorkoutProbeActive{
+            Card(title:"Cardio registrato · prova"){
+                Text("Verifica dei dati dell’allenamento in corso").font(.title3.bold())
+                Text(ring.recordedHistorySummary).font(.subheadline)
+                Text("Qui comparirà il battito ricavato dai dati registrati, dopo aver verificato il calcolo e il loro ritardo.").font(.caption).foregroundStyle(.secondary)
+            }
+        }else{LiveCard(ring:ring)}
+    }
+}
 struct RingSettingsControls:View{
     @EnvironmentObject var model:AppModel;@ObservedObject var ring:RingBridge
     var body:some View{VStack(alignment:.leading,spacing:12){
@@ -167,7 +179,7 @@ struct WorkoutView:View{
     @EnvironmentObject var model:AppModel;@State private var activity=""
     var body:some View{NavigationStack{TimelineView(.periodic(from:.now,by:1)){context in ScrollView{VStack(spacing:18){
         RingBatteryCard()
-        LiveCard(ring:model.ring)
+        SelectedCardioCard(ring:model.ring)
         if let session=model.current{
             let elapsed=session.elapsed(at:context.date),position=WorkoutEngine.position(elapsed:elapsed,config:session.config)
             Card(title:session.provisional ? "Sessione rilevata · da confermare":"Sessione attiva"){
@@ -208,6 +220,11 @@ struct WorkoutView:View{
             Button("Avvia registrazione cardio nell’anello"){Task{await model.startRingSport()}}.disabled(!model.ring.ready || model.ring.busy)
             Button("Leggi stato cardio attività"){Task{await model.ring.readExercise()}}.disabled(!model.ring.ready || model.ring.busy)
             Button("Arresta registrazione cardio"){Task{await model.ring.stopSport()}}.disabled(!model.ring.ready || model.ring.busy)
+        }
+        Card(title:"Prova dai dati registrati"){
+            Text(model.ring.recordedHistorySummary).font(.subheadline)
+            Text("Recupera progressivamente le tracce dell’allenamento, con il live a riposo sospeso durante la prova. I dati originali restano archiviati e vengono inviati a FamilOS.").font(.caption).foregroundStyle(.secondary)
+            Button("Avvia prova cardio registrato"){Task{await model.startRingSport(recordedOnly:true)}}.disabled(!model.ring.ready || model.ring.busy || model.ring.recordedWorkoutProbeActive)
         }
     }.padding()}.navigationTitle("Allenamento").dismissibleKeyboard()}}}
 }

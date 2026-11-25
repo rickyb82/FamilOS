@@ -339,6 +339,7 @@ final class HomePulseTests:XCTestCase {
         XCTAssertEqual(try framer.consume(Data(a.dropFirst(3))+b),[a,b])
         XCTAssertEqual(try OuraWire.cursor(b),2)
         XCTAssertEqual(OuraWire.historyRequest(cursor:18645).hex,"1009d548000040ffffffff")
+        XCTAssertEqual(OuraWire.historyRequest(cursor:100,max:255).hex,"100964000000ffffffffff")
     }
     func testCredentialsAndNonceExcludedFromJournalPolicy(){
         XCTAssertTrue(OuraWire.sensitive(Data(hex:"2f102c000102030405060708090a0b0c0d0e")!))
@@ -383,6 +384,35 @@ final class HomePulseTests:XCTestCase {
         XCTAssertEqual(unavailable.result,32);XCTAssertNil(unavailable.lastHrRaw);XCTAssertNil(unavailable.qualityRaw)
         XCTAssertThrowsError(try OuraWire.exerciseLatest(Data(hex:"2f03250300")!))
         XCTAssertThrowsError(try OuraWire.exerciseLatest(Data(hex:"2f03250420")!))
+    }
+    func testRecordedWorkoutCaptureSeparatesBaselineOpenSessionAndStopWithoutDuplicates(){
+        var capture=RecordedWorkoutCapture();let start=Date(timeIntervalSince1970:1000)
+        let trace=Data(hex:"73090b0000000001112233")!,session=Data(hex:"6c080a00000003000000")!
+        capture.note(trace,at:start);capture.phase="recording";capture.requestedAt=start
+        capture.note(trace,at:start.addingTimeInterval(1))
+        XCTAssertEqual(capture.recordingTraceCount,0,"A duplicate from baseline must not look like fresh workout data")
+        capture.note(session,at:start)
+        let fresh=Data(hex:"73090c0000000001112233")!
+        capture.note(fresh,at:start.addingTimeInterval(2));capture.note(fresh,at:start.addingTimeInterval(3))
+        XCTAssertEqual(capture.recordingTraceCount,1);XCTAssertEqual(capture.recordsAfterSessionStart,1)
+        XCTAssertEqual(capture.sessionStartRingTime,10);XCTAssertEqual(capture.firstTraceRingTime,12)
+        capture.phase="after_stop";capture.note(Data(hex:"74060d0000001000")!,at:start.addingTimeInterval(4))
+        XCTAssertEqual(capture.recordingAcmCount,0);XCTAssertEqual(capture.counts["after_stop_74"],1)
+        XCTAssertNil(capture.diagnostic["raw_hex"].string)
+        XCTAssertNil(capture.diagnostic["heart_rate"].number)
+    }
+    func testRecordedWorkoutCaptureRecognizesSessionFlushedOnlyAfterStop(){
+        var capture=RecordedWorkoutCapture();let now=Date(timeIntervalSince1970:1000)
+        capture.phase="recording";capture.requestedAt=now
+        capture.phase="after_stop";capture.stopRequestedAt=now.addingTimeInterval(180)
+        capture.note(Data(hex:"6c080a00000003000000")!,at:now.addingTimeInterval(181))
+        capture.note(Data(hex:"73090c0000000001112233")!,at:now.addingTimeInterval(182))
+        capture.note(Data(hex:"6c08c800000003020000")!,at:now.addingTimeInterval(183))
+        XCTAssertEqual(capture.recordingTraceCount,0)
+        XCTAssertEqual(capture.sessionStartRingTime,10);XCTAssertEqual(capture.lastSessionStatus,2)
+        XCTAssertEqual(capture.recordsAfterSessionStart,1);XCTAssertNil(capture.firstTraceAt)
+        XCTAssertEqual(capture.firstTraceAfterStopRingTime,12)
+        XCTAssertEqual(capture.firstTraceAfterStopAt,now.addingTimeInterval(182))
     }
     func testExerciseCapabilityUsesUnifiedWireActivityAndPreservesLegacyEncoding()throws{
         for activity:UInt16 in [5,8,12,65535]{

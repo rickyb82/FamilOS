@@ -9,6 +9,10 @@ import Combine
     @Published var apiVersion:[Int]=[];@Published var capabilities:[Int:Int]=[:]
     @Published var exerciseRaw:JSONValue = .null
     @Published var exerciseStatus="Registrazione cardio dedicata non avviata"
+    @Published var recordedWorkoutProbeActive=false
+    @Published var recordedHistorySummary="Prova dai dati registrati non avviata"
+    private var recordedCapture:RecordedWorkoutCapture?;private var recordedDrainUntil=Date.distantPast
+    private var liveSubscriptionActive=false;private var lastHistoryBytesLeft:UInt32?;private var lastHistoryRecordCount:Int?
     private var exerciseStep="idle";private var exerciseAttemptAt:Date?;private var exerciseFailure:JSONValue?
     private var commandReplies:[JSONValue]=[];private var exerciseMode:OuraFeatureStatus?;private var exerciseModeAt:Date?
     private var setupIssues:[String]=[]
@@ -37,7 +41,7 @@ import Combine
     private var logicalRing:String?;private var packetSession=UUID();private let packetJournal:PacketJournal
     private var continuation:CheckedContinuation<Data,Error>?
     private var responseMatch:((Data)->Bool)?;private var timeoutTask:Task<Void,Never>?
-    private struct SportControl:Codable,Sendable{var restoreMode:UInt8;var pendingStop:Bool}
+    private struct SportControl:Codable,Sendable{var restoreMode:UInt8;var pendingStop:Bool;var restoreLiveMode:UInt8?=nil;var restoreLiveSubscription:Bool?=nil}
     private var sportKey:String{"sport.control.\(logicalRing ?? "unbound")"}
     private var nextHistoryAt=Date.distantPast;private var nextExerciseAt=Date.distantPast;private var nextBatteryAt=Date.distantPast;private var nextSpO2At=Date.distantPast
     private var pageRecords:[Data]?;private let store:EventStore
@@ -172,6 +176,7 @@ import Combine
     }
     private func receive(_ frame:Data,at receivedAt:Date){
         let b=[UInt8](frame)
+        if recordedCapture != nil,b.first.map({$0>=0x41}) == true{recordedCapture?.note(frame,at:receivedAt)}
         if b.count>=5,b[0]==0x2f,Int(b[1])+2==b.count,[0x23,0x27,0x2a].contains(b[2]),[2,3,4].contains(b[3]){
             commandReplies.append(.object(["at":.number(receivedAt.timeIntervalSince1970),"step":.string(exerciseStep),"feature":.number(Double(b[3])),"reply":.number(Double(b[2])),"result_raw":.number(Double(b[4])),"frame_bytes":.number(Double(b.count)),"prefix_hex":.string(Data(frame.prefix(5)).hex)]))
             if commandReplies.count>16{commandReplies.removeFirst(commandReplies.count-16)}
@@ -247,6 +252,11 @@ import Combine
             exerciseStep="handshake_restore"
             let control=try await store.perform({$0.load(SportControl.self,key:sportKey)})
             manualControlPending=control != nil
+            recordedWorkoutProbeActive=control?.restoreLiveMode != nil && control?.pendingStop == false
+            if recordedWorkoutProbeActive,recordedCapture==nil{
+                recordedCapture=RecordedWorkoutCapture();recordedCapture?.phase="recording";recordedCapture?.countComplete=false
+                recordedHistorySummary="Raccolta ripresa · riferimento iniziale da verificare"
+            }
             if let control,control.pendingStop {
                 do{try await restoreSport(control)}catch{exerciseStatus=error.localizedDescription;setupIssues.append(error.localizedDescription)}
             }
@@ -255,9 +265,9 @@ import Combine
             if caps[2] != nil{
                 do{
                     exerciseStep="handshake_live_mode"
-                    try await setFeatureMode(2,mode:3,operation:"Avvio battito live")
+                    try await setFeatureMode(2,mode:recordedWorkoutProbeActive ? 1:3,operation:"Configurazione sorgente cardio")
                     exerciseStep="handshake_live_subscription"
-                    try OuraWire.ack(await exchange(Data([0x2f,3,0x26,2,2]),tag:0x2f,extended:0x27),extended:0x27,feature:2,operation:"Ricezione battito live")
+                    try await setLiveSubscription(!recordedWorkoutProbeActive)
                 }catch{setupIssues.append(error.localizedDescription)}
             }else{setupIssues.append("Battito live non pubblicizzato dal firmware")}
             exerciseStep="connected";status="Collegato · attendi un IBI valido"
@@ -276,6 +286,10 @@ import Combine
             writeBatteryDiagnostic();return
         }
         try OuraWire.ack(await exchange(Data([0x2f,3,0x22,feature,mode]),tag:0x2f,extended:0x23),extended:0x23,feature:feature,operation:operation)
+    }
+    private func setLiveSubscription(_ enabled:Bool)async throws{
+        try OuraWire.ack(await exchange(Data([0x2f,3,0x26,2,enabled ? 2:0]),tag:0x2f,extended:0x27),extended:0x27,feature:2,operation:"Configurazione ricezione cardio")
+        liveSubscriptionActive=enabled
     }
     private func configureAutomaticSpO2()async throws{
         guard let version=capabilities[4] else{spo2Status="SpO₂: funzione non pubblicizzata dal firmware";nextSpO2At=Date.distantFuture;return}
@@ -301,12 +315,13 @@ import Combine
         let key="history.cursor.\(logicalRing ?? peripheral?.identifier.uuidString ?? "unknown")"
         var cursor=try await store.perform{$0.load(UInt32.self,key:key) ?? 0}
         for _ in 0..<maxPages {
+            let requestMax:UInt8=(recordedWorkoutProbeActive || recordedCapture?.phase=="baseline" || Date()<recordedDrainUntil) ? 255:64
             pageRecords=[]
             let reply:Data
-            do{reply=try await exchange(OuraWire.historyRequest(cursor:cursor),tag:0x11,seconds:25)}catch{pageRecords=nil;throw error}
+            do{reply=try await exchange(OuraWire.historyRequest(cursor:cursor,max:requestMax),tag:0x11,seconds:25)}catch{pageRecords=nil;throw error}
             let records=pageRecords ?? [];pageRecords=nil
             let b=try OuraWire.complete(reply,minimum:3,tag:0x11)
-            guard Int(b[2])==records.count,records.count<=64 else{throw AppError.message("Conteggio storico incoerente: cursore conservato")}
+            guard Int(b[2])==records.count,records.count<=Int(requestMax) else{throw AppError.message("Conteggio storico incoerente: cursore conservato")}
             var next=cursor,previous=cursor
             for record in records {let value=try OuraWire.cursor(record);guard value>=previous,value<UInt32.max else{throw AppError.message("Cursore storico inatteso")};previous=value;next=value+1}
             guard records.isEmpty || next>cursor else{throw AppError.message("Storico senza avanzamento")}
@@ -314,6 +329,13 @@ import Combine
             try await store.perform{try $0.archiveHistory(frames:records,nextCursor:nextCursor,key:key,api:api,ring:ring)}
             if !records.isEmpty{onHistory?()};onJournal?();cursor=next
             let bytesLeft=b.count>=8 ? UInt32(b[4])|(UInt32(b[5])<<8)|(UInt32(b[6])<<16)|(UInt32(b[7])<<24):0
+            lastHistoryBytesLeft=b.count>=8 ? bytesLeft:nil
+            lastHistoryRecordCount=records.count
+            if recordedCapture != nil{
+                recordedCapture?.pages+=1;recordedCapture?.lastPageAt=Date();recordedCapture?.bytesLeft=lastHistoryBytesLeft
+                if let capture=recordedCapture{recordedHistorySummary="\(capture.recordingTraceCount) tracce cardio · \(capture.recordingAcmCount) record movimento acquisiti durante la prova"}
+                writeBatteryDiagnostic()
+            }
             if bytesLeft==0 || records.isEmpty{status="Collegato · storico aggiornato";return false}
         }
         status="Collegato · recupero dello storico in corso";return true
@@ -325,14 +347,15 @@ import Combine
         guard ready,!busy,historyDue || exerciseDue || batteryDue || spo2Due else{return}
         if spo2Due{nextSpO2At=now.addingTimeInterval(60)}
         nextExerciseAt=ExercisePolling.nextDeadline(previous:nextExerciseAt,now:now,due:exerciseDue,manualControlPending:manualControlPending)
-        if historyDue{nextHistoryAt=now.addingTimeInterval(60)}
+        let historyInterval:TimeInterval=(manualControlPending || now<recordedDrainUntil) ? 5:60
+        if historyDue{nextHistoryAt=now.addingTimeInterval(historyInterval)}
         if batteryDue{nextBatteryAt=now.addingTimeInterval(60)}
         busy=true
         Task{defer{finishOperation()}
             if spo2Due{do{try await configureAutomaticSpO2()}catch{spo2Status="SpO₂: configurazione rinviata"}}
             if batteryDue{do{try await batteryRead();nextBatteryAt=Date().addingTimeInterval(15)}catch{status="Lettura batteria rinviata"}}
             if exerciseDue{do{try await exerciseRead()}catch{status="Lettura cardio attività rinviata"}}
-            if historyDue{do{let more=try await historyPages(maxPages:manualControlPending ? 2:32);nextHistoryAt=Date().addingTimeInterval(more ? 2:60)}catch{status=error.localizedDescription}}
+            if historyDue{do{let more=try await historyPages(maxPages:manualControlPending ? 2:32);nextHistoryAt=Date().addingTimeInterval(more ? 2:historyInterval)}catch{status=error.localizedDescription}}
         }
     }
     func refreshBattery()async{
@@ -370,6 +393,9 @@ import Combine
         if let lastLiveProcessingDelay{value["last_live_processing_delay_ms"] = .number(lastLiveProcessingDelay*1000)}
         if let lastDisplaySupportedLiveAt{value["last_display_supported_live_at"] = .number(lastDisplaySupportedLiveAt.timeIntervalSince1970)}
         value["manual_exercise_control_pending"] = .bool(manualControlPending)
+        value["recorded_workout_probe_active"] = .bool(recordedWorkoutProbeActive)
+        value["live_subscription_active"] = .bool(liveSubscriptionActive)
+        if let recordedCapture{value["recorded_workout_capture"] = recordedCapture.diagnostic}
         value["exercise_latest_read_count"] = .number(Double(exerciseReadCount));value["exercise_latest_hr_change_count"] = .number(Double(exerciseHrChangeCount))
         if let exerciseLatestAt{value["exercise_latest_read_at"] = .number(exerciseLatestAt.timeIntervalSince1970)}
         if let exerciseLatest{
@@ -424,12 +450,19 @@ import Combine
             exerciseStep=callerStep+"_auto"
             try await setFeatureMode(3,mode:1,operation:"Ripristino cardio automatico")
         }
+        if let mode=control.restoreLiveMode{
+            exerciseStep=callerStep+"_live_restore";try await setFeatureMode(2,mode:mode,operation:"Ripristino sorgente cardio")
+            try await setLiveSubscription(control.restoreLiveSubscription ?? false)
+        }
         let key=sportKey
         try await store.perform{try $0.save(Optional<SportControl>.none,key:key)}
         manualControlPending=false
+        if recordedWorkoutProbeActive{
+            recordedWorkoutProbeActive=false;recordedCapture?.phase="after_stop";recordedCapture?.stoppedAt=Date();recordedDrainUntil=Date().addingTimeInterval(60);nextHistoryAt=Date.distantPast
+        }
         exerciseStep=callerStep
     }
-    func startSport(activity:UInt16,age:Int,resting:Int)async throws{
+    func startSport(activity:UInt16,age:Int,resting:Int,recordedOnly:Bool=false)async throws{
         guard ready,!busy,capabilities[3] != nil else{throw AppError.message("Anello non pronto per la registrazione cardio")};busy=true;defer{finishOperation()}
         let parameters=try OuraWire.sportParameters(activity:activity,age:age,resting:resting,capabilityVersion:capabilities[3] ?? 0)
         exerciseAttemptAt=Date();exerciseFailure=nil;exerciseStep="query_status";exerciseStatus="Verifica della registrazione cardio…";writeBatteryDiagnostic()
@@ -439,19 +472,39 @@ import Combine
         }
         let current=try OuraWire.complete(await exchange(Data([0x2f,2,0x20,3]),tag:0x2f,extended:0x21),minimum:8,tag:0x2f,extended:0x21)
         guard current[3]==3,(0...1).contains(current[4]) else{throw AppError.message("Registrazione cardio già attiva o stato non modificabile")}
+        var liveMode:UInt8?
+        if !recordedOnly{recordedCapture=nil;recordedDrainUntil=Date.distantPast}
+        if recordedOnly{
+            let live=try OuraWire.complete(await exchange(Data([0x2f,2,0x20,2]),tag:0x2f,extended:0x21),minimum:8,tag:0x2f,extended:0x21)
+            guard live[3]==2,[0,1,3].contains(live[4]) else{throw AppError.message("Sorgente cardio già occupata da un’altra misura")}
+            liveMode=live[4];recordedCapture=RecordedWorkoutCapture();recordedHistorySummary="Sincronizzazione iniziale della prova…"
+            let more=try await historyPages(maxPages:8)
+            recordedCapture?.baselineComplete = !more && (lastHistoryBytesLeft==0 || (lastHistoryBytesLeft==nil && lastHistoryRecordCount==0))
+            let cursorKey="history.cursor.\(logicalRing ?? peripheral?.identifier.uuidString ?? "unknown")"
+            recordedCapture?.baselineNextRingTime=try await store.perform{$0.load(UInt32.self,key:cursorKey)}
+            guard recordedCapture?.baselineComplete == true else{nextHistoryAt=Date.distantPast;throw AppError.message("Recupero dei dati precedenti in corso: riprova quando lo storico è allineato")}
+        }
         let key=sportKey
-        try await store.perform{try $0.save(SportControl(restoreMode:current[4],pendingStop:true),key:key)}
+        let control=SportControl(restoreMode:current[4],pendingStop:true,restoreLiveMode:liveMode,restoreLiveSubscription:recordedOnly ? liveSubscriptionActive:nil)
+        try await store.perform{try $0.save(control,key:key)}
         manualControlPending=true
         do{
+            if recordedOnly{
+                exerciseStep="recorded_only_source";recordedWorkoutProbeActive=true
+                try await setFeatureMode(2,mode:1,operation:"Preparazione cardio registrato");try await setLiveSubscription(false)
+            }
             exerciseStep="off";exerciseStatus="Preparazione cardio attività…";writeBatteryDiagnostic()
             try await setFeatureMode(3,mode:0,operation:"Preparazione cardio attività")
             exerciseStep="parameters";exerciseStatus="Configurazione cardio attività…";writeBatteryDiagnostic()
             try OuraWire.ack(await exchange(parameters,tag:0x2f,extended:0x2a),extended:0x2a,feature:3,operation:"Parametri cardio attività")
             exerciseStep="requested";exerciseStatus="Avvio cardio attività…";writeBatteryDiagnostic()
             try await setFeatureMode(3,mode:2,operation:"Avvio cardio attività")
-            try await store.perform{try $0.save(SportControl(restoreMode:current[4],pendingStop:false),key:key)}
+            var active=control;active.pendingStop=false;let activeControl=active
+            try await store.perform{try $0.save(activeControl,key:key)}
+            if recordedOnly{recordedCapture?.phase="recording";recordedCapture?.requestedAt=Date();recordedHistorySummary="Raccolta progressiva dei dati dell’allenamento…"}
             exerciseStep="accepted";exerciseStatus="Richiesta di avvio accettata dall’anello";status=exerciseStatus
             nextExerciseAt=Date.distantPast
+            nextHistoryAt=Date.distantPast
         }catch{
             var failure:[String:JSONValue]=["at":.number(Date().timeIntervalSince1970),"step":.string(exerciseStep)]
             if let rejection=error as? OuraCommandRejection{failure["feature"] = .number(Double(rejection.feature));failure["reply"] = .number(Double(rejection.command));failure["result_raw"] = .number(Double(rejection.result))}
@@ -471,6 +524,7 @@ import Combine
         guard ready else{return}
         if busy{Task{try? await Task.sleep(nanoseconds:1_000_000_000);await stopSport()};return}
         busy=true;defer{finishOperation()}
+        if recordedWorkoutProbeActive{recordedCapture?.phase="after_stop";recordedCapture?.stopRequestedAt=Date()}
         exerciseStep="stop";exerciseStatus="Arresto registrazione cardio…"
         do{try await restoreSport(control);exerciseStep="stopped";exerciseStatus="Richiesta di arresto cardio accettata";nextExerciseAt=Date.distantPast}
         catch{exerciseStatus=error.localizedDescription;status="Arresto cardio da confermare alla prossima connessione"}

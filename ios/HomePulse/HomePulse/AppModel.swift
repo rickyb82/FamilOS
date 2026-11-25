@@ -216,8 +216,8 @@ struct AppArchiveSnapshot:Sendable {
             let active=current?.id==id;try await commit(session,action:negative ? "false_detection":"activity_updated",active:active);gym.resolve()
         }
     }
-    func startRingSport()async{guard let selected=settings.config.activity_id,allowedActivities.contains(where:{$0.0==selected}),(0...65535).contains(selected),let age=settings.profile.age,let rest=settings.profile.resting_hr else{message="Scegli un’attività compatibile e inserisci età e FC a riposo nel profilo";return}
-        do{try await ring.startSport(activity:UInt16(selected),age:age,resting:rest)}catch{message=error.localizedDescription}
+    func startRingSport(recordedOnly:Bool=false)async{guard let selected=settings.config.activity_id,allowedActivities.contains(where:{$0.0==selected}),(0...65535).contains(selected),let age=settings.profile.age,let rest=settings.profile.resting_hr else{message="Scegli un’attività compatibile e inserisci età e FC a riposo nel profilo";return}
+        do{try await ring.startSport(activity:UInt16(selected),age:age,resting:rest,recordedOnly:recordedOnly)}catch{message=error.localizedDescription}
     }
     func regionEvent(_ inside:Bool){
         let payload:JSONValue = .object(["source":.string("geofence"),"gym_id":.string(settings.auto_detection.gym.id),"event":.string(inside ? "location_arrival":"location_exit")]),date=Date(),api=api

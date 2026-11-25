@@ -38,6 +38,45 @@ enum ExercisePolling{
         due ? now.addingTimeInterval(manualControlPending ? 5:60):previous
     }
 }
+struct RecordedWorkoutCapture{
+    var phase="baseline";var baselineComplete=false;var requestedAt:Date?;var stopRequestedAt:Date?;var stoppedAt:Date?
+    var baselineNextRingTime:UInt32?;var firstTraceAt:Date?;var firstTraceRingTime:UInt32?
+    var sessionStartRingTime:UInt32?;var lastSessionStatus:Int?;var recordsAfterSessionStart=0
+    var pages=0;var lastPageAt:Date?;var bytesLeft:UInt32?;var counts:[String:Int]=[:]
+    var firstTraceAfterStopAt:Date?;var firstTraceAfterStopRingTime:UInt32?
+    var countComplete=true;private var seen=Set<Data>()
+    mutating func note(_ frame:Data,at:Date){
+        guard let rt=try? OuraWire.cursor(frame),!seen.contains(frame) else{return}
+        guard seen.count<5000 else{countComplete=false;return};seen.insert(frame)
+        let bytes=[UInt8](frame),key=phase+"_"+String(format:"%02x",bytes[0]);counts[key,default:0]+=1
+        if phase != "baseline",bytes[0]==0x6c,bytes.count>=8,bytes[6]==3{
+            lastSessionStatus=Int(bytes[7]);if bytes[7]<=1{sessionStartRingTime=rt}
+        }
+        if phase=="recording",bytes[0]==0x73{
+            if firstTraceAt==nil{firstTraceAt=at;firstTraceRingTime=rt}
+        }
+        if phase=="after_stop",bytes[0]==0x73,firstTraceAfterStopAt==nil{firstTraceAfterStopAt=at;firstTraceAfterStopRingTime=rt}
+        if phase != "baseline",bytes[0]==0x73,let start=sessionStartRingTime,rt>=start{recordsAfterSessionStart+=1}
+    }
+    var diagnostic:JSONValue{
+        var value:[String:JSONValue]=["phase":.string(phase),"baseline_complete":.bool(baselineComplete),"counts_complete":.bool(countComplete),"pages":.number(Double(pages)),"records":.object(counts.mapValues{.number(Double($0))}),"ehr_after_observed_start":.number(Double(recordsAfterSessionStart))]
+        if let requestedAt{value["requested_at"] = .number(requestedAt.timeIntervalSince1970)}
+        if let stopRequestedAt{value["stop_requested_at"] = .number(stopRequestedAt.timeIntervalSince1970)}
+        if let stoppedAt{value["stopped_at"] = .number(stoppedAt.timeIntervalSince1970)}
+        if let baselineNextRingTime{value["baseline_next_ring_time"] = .number(Double(baselineNextRingTime))}
+        if let firstTraceAt{value["first_trace_received_at"] = .number(firstTraceAt.timeIntervalSince1970)}
+        if let firstTraceRingTime{value["first_trace_ring_time_seconds"] = .number(Double(firstTraceRingTime))}
+        if let firstTraceAfterStopAt{value["first_trace_after_stop_received_at"] = .number(firstTraceAfterStopAt.timeIntervalSince1970)}
+        if let firstTraceAfterStopRingTime{value["first_trace_after_stop_ring_time_seconds"] = .number(Double(firstTraceAfterStopRingTime))}
+        if let sessionStartRingTime{value["session_start_ring_time_seconds"] = .number(Double(sessionStartRingTime))}
+        if let lastSessionStatus{value["last_session_status_raw"] = .number(Double(lastSessionStatus))}
+        if let lastPageAt{value["last_page_at"] = .number(lastPageAt.timeIntervalSince1970)}
+        if let bytesLeft{value["last_bytes_left"] = .number(Double(bytesLeft))}
+        return .object(value)
+    }
+    var recordingTraceCount:Int{counts["recording_73",default:0]}
+    var recordingAcmCount:Int{counts["recording_74",default:0]}
+}
 struct OuraCommandRejection:LocalizedError,Equatable {
     let feature:UInt8;let command:UInt8;let result:UInt8;let operation:String?
     var errorDescription:String?{
