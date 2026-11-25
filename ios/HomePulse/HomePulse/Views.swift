@@ -1,6 +1,17 @@
 import SwiftUI
 import Charts
 import MapKit
+import UIKit
+
+private struct DismissibleKeyboard:ViewModifier {
+    func body(content:Content)->some View{
+        content.scrollDismissesKeyboard(.interactively).submitLabel(.done)
+            .onSubmit{dismiss()}
+            .toolbar{ToolbarItemGroup(placement:.keyboard){Spacer();Button("Fine"){dismiss()}.accessibilityIdentifier("homepulse-keyboard-done")}}
+    }
+    private func dismiss(){UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),to:nil,from:nil,for:nil)}
+}
+extension View{func dismissibleKeyboard()->some View{modifier(DismissibleKeyboard())}}
 
 struct RootView:View {
     @EnvironmentObject var model:AppModel
@@ -157,7 +168,7 @@ struct WorkoutView:View{
             Button("Leggi stato cardio attività"){Task{await model.ring.readExercise()}}.disabled(!model.ring.ready || model.ring.busy)
             Button("Arresta registrazione cardio"){Task{await model.ring.stopSport()}}.disabled(!model.ring.ready || model.ring.busy)
         }
-    }.padding()}.navigationTitle("Allenamento")}}}
+    }.padding()}.navigationTitle("Allenamento").dismissibleKeyboard()}}}
 }
 struct SleepView:View {
     @EnvironmentObject var model:AppModel;@State private var selectedID:String?
@@ -223,7 +234,7 @@ struct PlanEditor:View{
             Button("Aggiungi fase",systemImage:"plus"){model.settings.config.plan.append(WorkoutPhase())}
         }
         Section{Button("Salva scheda"){Task{await model.saveSettings()}};Text("Obiettivi e MET sono facoltativi e scelti da te. La scheda della sessione già iniziata resta quella salvata all’avvio.").font(.caption).foregroundStyle(.secondary)}
-    }.navigationTitle("Scheda").toolbar{EditButton()}}
+    }.navigationTitle("Scheda").dismissibleKeyboard().toolbar{EditButton()}}
 }
 struct DiaryView:View{
     @EnvironmentObject var model:AppModel
@@ -258,7 +269,7 @@ struct CalendarView:View{
             ForEach(Array(model.settings.weekly_schedule.indices),id:\.self){i in WeeklyEditor(rule:$model.settings.weekly_schedule[i])}
             Button("Salva calendario"){Task{await model.saveSettings()}}
         }
-    }.navigationTitle("Calendario")}}
+    }.navigationTitle("Calendario").dismissibleKeyboard()}}
 }
 struct WeeklyEditor:View{
     @Binding var rule:WeeklyRule
@@ -307,7 +318,7 @@ struct SettingsView:View{
             Text("Regola tecnica modificabile, non zona cardiaca. Usa un livello recente di riferimento e almeno 6 campioni validi; non parte da una vecchia lettura.").font(.caption).foregroundStyle(.secondary)
         }
         Section{Button("Salva impostazioni"){Task{await model.saveSettings()}};Text("Le credenziali restano nel Keychain. La raccolta in background dipende dalle autorizzazioni e dai risvegli concessi da iOS.").font(.caption).foregroundStyle(.secondary)}
-    }.navigationTitle("Impostazioni").sheet(isPresented:$scanning){QRScanner{value in scanning=false;code=value;Task{if let url=URL(string:value){await model.openPairingURL(url)};code=""}}}}}
+    }.navigationTitle("Impostazioni").dismissibleKeyboard().sheet(isPresented:$scanning){QRScanner{value in scanning=false;code=value;Task{if let url=URL(string:value){await model.openPairingURL(url)};code=""}}}}}
 }
 struct GymSettingsView:View{
     @ObservedObject var gym:GymDetection
@@ -329,7 +340,7 @@ struct GymSettingsView:View{
             TextField("Longitudine",text:$longitude).keyboardType(.numbersAndPunctuation)
             Button("Usa queste coordinate"){if let lat=Double(latitude.replacingOccurrences(of:",",with:".")),let lon=Double(longitude.replacingOccurrences(of:",",with:".")){try? gym.setCoordinate(CLLocationCoordinate2D(latitude:lat,longitude:lon))}}
         }
-    }.navigationTitle("Palestra").onAppear{if let c=gym.location{latitude=String(c.latitude);longitude=String(c.longitude)}}}
+    }.navigationTitle("Palestra").dismissibleKeyboard().onAppear{if let c=gym.location{latitude=String(c.latitude);longitude=String(c.longitude)}}}
 }
 func optionalText(_ binding:Binding<String?>)->Binding<String>{Binding(get:{binding.wrappedValue ?? ""},set:{binding.wrappedValue=$0.nilIfEmpty})}
 extension Double {var durationText:String{let value=max(0,Int(self));return value>=3600 ? String(format:"%d:%02d:%02d",value/3600,(value/60)%60,value%60):String(format:"%02d:%02d",value/60,value%60)}}

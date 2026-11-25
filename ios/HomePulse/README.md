@@ -116,3 +116,12 @@ Le fotografie tecniche di batteria/notifiche usano una coda dedicata: attese su 
 Il test UI blocca intenzionalmente per15secondi una scrittura diagnostica in un archivio isolato, passa alla Home dell’iPhone, riattiva l’app e verifica la navigazione prima che la scrittura termini. Il salvataggio di uno stato chiave/valore invariato non modifica nuovamente SQLite; il rilevamento palestra non salva lo stato quando il motore non lo modifica.
 
 I callback di connessione rifiutata non rilanciano subito un’altra richiesta: i tentativi hanno attese5/10/20/30/60secondi e si annullano con Scollega. I controlli di carica pianificati mantengono il collegamento ritardato gestito dal sistema. Una connessione già pendente non viene duplicata e una disconnessione in corso deve terminare prima del tentativo seguente.
+
+
+## Tastiera e preparazione del cardio allenamento
+
+I moduli del profilo, scheda, palestra e allenamento hanno il pulsante Fine sopra la tastiera, invioDone sui campi compatibili e chiusura interattiva con lo scorrimento. Fine conclude l’immissione e nasconde la tastiera; Salvaimpostazioni conserva e sincronizza il profilo. Il test UI inserisce un’età sintetica nel solo archivio isolato, chiude il tastierino numerico e cambia scheda senza riavviare l’app.
+
+Con capabilityExerciseHR3 versione positiva, i parametri di registrazione usano attività tecnica UNIFIED0, come il caller originale; lo sport scelto resta nei metadati della sessione. Il risultato grezzo di GetFeatureStatus non viene trattato come ACK del comando successivo. Il grafico locale può aggiornarsi fino a ogni200ms quando riceve nuovi campioni; questo non stabilisce la frequenza del firmware e non genera valori mancanti.
+
+La diagnostica contiene contatori di pacchetti ricevuti/validi e di IBI validi scartati dai filtri di stato/flag, senza esportare valori cardiaci. Servono a distinguere problemi di ricezione, qualità e presentazione durante le prove di movimento. La validazione del flusso liveExerciseHR resta distinta dalla configurazione accettata dall’anello.

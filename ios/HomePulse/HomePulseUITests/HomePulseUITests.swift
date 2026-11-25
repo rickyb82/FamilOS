@@ -1,6 +1,22 @@
 import XCTest
 
 final class HomePulseUITests:XCTestCase {
+    func testNumericProfileKeyboardDismissesWithoutClosingApp(){
+        continueAfterFailure=false
+        let app=XCUIApplication();app.launchArguments=["--uitest-isolated-store"];app.launch()
+        XCTAssertTrue(app.navigationBars["Home Pulse"].waitForExistence(timeout:15))
+        app.tabBars.buttons["Impostazioni"].tap()
+        let age=app.textFields["Età"]
+        for _ in 0..<8{if age.exists && age.isHittable{break};app.swipeUp()}
+        XCTAssertTrue(age.isHittable);age.tap();age.typeText("40")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout:3))
+        let done=app.buttons["homepulse-keyboard-done"]
+        XCTAssertTrue(done.waitForExistence(timeout:3));done.tap()
+        let hidden=XCTNSPredicateExpectation(predicate:NSPredicate(format:"exists == false"),object:app.keyboards.firstMatch)
+        XCTAssertEqual(XCTWaiter.wait(for:[hidden],timeout:3),.completed)
+        app.tabBars.buttons["Home"].tap();XCTAssertTrue(app.navigationBars["Home Pulse"].exists)
+        capture(app,"profile-keyboard-dismissed")
+    }
     func testReopeningRemainsResponsiveWhileDiagnosticWriteIsBlocked(){
         continueAfterFailure=false
         let app=XCUIApplication();app.launchArguments=["--uitest-isolated-store","--uitest-diagnostic-stall"];app.launch()

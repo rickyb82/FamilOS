@@ -91,9 +91,10 @@ enum OuraWire {
     }
     static func historyRequest(cursor:UInt32,max:UInt8=64)->Data {Data([0x10,9,UInt8(cursor&255),UInt8((cursor>>8)&255),UInt8((cursor>>16)&255),UInt8((cursor>>24)&255),max,255,255,255,255])}
     static func cursor(_ frame:Data)throws->UInt32 {let b=[UInt8](frame);guard b.count>=6,b[0]>=0x41,b[0]<=0x85,Int(b[1])+2==b.count else{throw AppError.message("Cursore storico esteso non supportato")};return UInt32(b[2])|(UInt32(b[3])<<8)|(UInt32(b[4])<<16)|(UInt32(b[5])<<24)}
-    static func sportParameters(activity:UInt16,age:Int,resting:Int)throws->Data {
+    static func sportParameters(activity:UInt16,age:Int,resting:Int,capabilityVersion:Int=0)throws->Data {
         guard (18...100).contains(age),(30...200).contains(resting) else{throw AppError.message("Servono età e FC a riposo valide")}
-        return Data([0x2f,7,0x29,3,UInt8(activity&255),UInt8(activity>>8),UInt8(resting),50,UInt8(230-age)])
+        let wireActivity:UInt16=capabilityVersion>0 ? 0:activity
+        return Data([0x2f,7,0x29,3,UInt8(wireActivity&255),UInt8(wireActivity>>8),UInt8(resting),50,UInt8(230-age)])
     }
 }
 struct OuraFramer {

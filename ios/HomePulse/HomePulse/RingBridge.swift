@@ -12,6 +12,7 @@ import Combine
     @Published var batteryStatus="Batteria non ancora letta"
     private let diagnosticWriter:DiagnosticWriter?;private var batteryAttemptAt:Date?;private var batteryReplyHex:String?;private var batteryChargingProgressRaw:Int?
     private var lastLivePacketAt:Date?;private var lastValidLivePacketAt:Date?
+    private var livePacketCount=0;private var validLivePacketCount=0;private var stateFilteredValidIbiCount=0;private var flagFilteredValidIbiCount=0
     @Published var spo2Status="SpO₂: configurazione da verificare"
     private var spo2Before:OuraFeatureStatus?;private var spo2After:OuraFeatureStatus?
     @Published var lastConnectionError:String?
@@ -167,8 +168,18 @@ import Combine
             writeBatteryDiagnostic()
         }
         if b.count>=3,b[0]==0x2f,b[2]==0x28,b.count>=4,b[3]==2,ready,!apiVersion.isEmpty {
-            lastLivePacketAt=receivedAt
-            if let live=try? OuraWire.live(frame,api:apiVersion){if live.bpm != nil{lastValidLivePacketAt=receivedAt};onLive?(live,receivedAt)}
+            livePacketCount+=1;lastLivePacketAt=receivedAt
+            if let live=try? OuraWire.live(frame,api:apiVersion){
+                if b.count>=10{
+                    let ibi=Int(b[8])|((Int(b[9])&15)<<8)
+                    if live.validity==1,ibi>0,ibi<=2000{
+                        if live.state != 2{stateFilteredValidIbiCount+=1}
+                        else if live.flags&1==0{flagFilteredValidIbiCount+=1}
+                    }
+                }
+                if live.bpm != nil{validLivePacketCount+=1;lastValidLivePacketAt=receivedAt};onLive?(live,receivedAt)
+            }
+            writeBatteryDiagnostic()
             return
         }
         if pageRecords != nil,let first=b.first,first>=0x41 {pageRecords?.append(frame);return}
@@ -299,6 +310,10 @@ import Combine
         if let batteryLevel{value["battery_percentage"] = .number(Double(batteryLevel))}
         if let batteryChargingProgressRaw{value["charging_progress_raw"] = .number(Double(batteryChargingProgressRaw))}
         value["reconnect_failures"] = .number(Double(reconnectFailures))
+        value["live_packet_count"] = .number(Double(livePacketCount))
+        value["valid_live_packet_count"] = .number(Double(validLivePacketCount))
+        value["valid_ibi_filtered_by_state_count"] = .number(Double(stateFilteredValidIbiCount))
+        value["valid_ibi_filtered_by_flag_count"] = .number(Double(flagFilteredValidIbiCount))
         if let reconnectAt{value["reconnect_retry_at"] = .number(reconnectAt.timeIntervalSince1970)}
         diagnosticWriter.submit(.object(value))
     }
@@ -320,9 +335,9 @@ import Combine
     }
     func startSport(activity:UInt16,age:Int,resting:Int)async throws{
         guard ready,!busy,capabilities[3] != nil else{throw AppError.message("Anello non pronto per la registrazione cardio")};busy=true;defer{finishOperation()}
-        let parameters=try OuraWire.sportParameters(activity:activity,age:age,resting:resting)
+        let parameters=try OuraWire.sportParameters(activity:activity,age:age,resting:resting,capabilityVersion:capabilities[3] ?? 0)
         let current=try OuraWire.complete(await exchange(Data([0x2f,2,0x20,3]),tag:0x2f,extended:0x21),minimum:8,tag:0x2f,extended:0x21)
-        guard current[3]==3,current[7]==0,(0...1).contains(current[4]) else{throw AppError.message("Registrazione cardio già attiva o stato non modificabile")}
+        guard current[3]==3,(0...1).contains(current[4]) else{throw AppError.message("Registrazione cardio già attiva o stato non modificabile")}
         let key=sportKey
         try await store.perform{try $0.save(SportControl(restoreMode:current[4],pendingStop:true),key:key)}
         do{

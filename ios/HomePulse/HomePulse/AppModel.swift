@@ -168,7 +168,7 @@ struct AppArchiveSnapshot:Sendable {
         // readings and location state are archived without blocking the UI.
         store.enqueue({try $0.addReading(point)},onError:{[weak self] _ in Task{@MainActor in self?.message="Lettura non salvata; controlla lo spazio disponibile"}})
         readingBuffer.append(point);if readingBuffer.count>1000{readingBuffer.removeFirst(readingBuffer.count-1000)}
-        if Date().timeIntervalSince(lastChartUpdate)>=2{lastChartUpdate=Date();readings=Self.displayReadings(readingBuffer)}
+        if Date().timeIntervalSince(lastChartUpdate)>=0.2{lastChartUpdate=Date();readings=Self.displayReadings(readingBuffer)}
         gym.accept(point,manualWorkout:current != nil)
     }
     nonisolated static func displayReadings(_ source:[Reading])->[Reading]{ChartSeries.indices(values:source.map{Double($0.bpm)},limit:150).map{source[$0]}}

@@ -349,6 +349,12 @@ final class HomePulseTests:XCTestCase {
         XCTAssertEqual(try OuraWire.sportParameters(activity:5,age:40,resting:60).hex,"2f07290305003c32be")
         XCTAssertThrowsError(try OuraWire.sportParameters(activity:5,age:0,resting:60))
     }
+    func testExerciseCapabilityUsesUnifiedWireActivityAndPreservesLegacyEncoding()throws{
+        for activity:UInt16 in [5,8,12,65535]{
+            XCTAssertEqual(try OuraWire.sportParameters(activity:activity,age:40,resting:60,capabilityVersion:3).hex,"2f07290300003c32be")
+        }
+        XCTAssertEqual(try OuraWire.sportParameters(activity:5,age:40,resting:60,capabilityVersion:0).hex,"2f07290305003c32be")
+    }
     func testPhaseBoundariesCompletionAndNoPhantomRecovery()throws{
         var c=WorkoutConfig();c.work=10;c.rest=5;c.rounds=2
         XCTAssertEqual(WorkoutEngine.position(elapsed:10,config:c).name,"Recupero")
