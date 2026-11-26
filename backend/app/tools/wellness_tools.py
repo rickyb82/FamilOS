@@ -114,3 +114,38 @@ async def control(args:dict,ctx:ToolContext):
         value=await asyncio.to_thread(archive().manual_session,ctx.user.id,action,None if action=='start' else args['session_id'],args.get('activity_name'))
         return result({'active_session':value['active_session'],'sessions':value['sessions'][:3]})
     except (StoreError,ValueError):return ToolResult('Comando non applicabile alla tua sessione.',is_error=True)
+
+
+@register('allenamento_sonno','Legge i periodi di sonno del proprio profilo FamilOS, inclusi orari, tempo a letto, sonno totale e fasi quando disponibili, SpO₂ e respiro nel periodo. Usa questo strumento quando l’utente chiede come ha dormito o il sonno di stanotte: i dati sono già sul server, non chiedere screenshot prima di consultarli. date facoltativa YYYY-MM-DD è il giorno di FINE del periodo nel fuso Europe/Rome; una notte può iniziare il giorno precedente. Non sommare periodi sovrapposti come notti distinte. Distingui periodo firmware a letto da sonno totale/fasi; valori nulli non sono misure zero. La media respiratoria è la media dei campioni firmware disponibili, non una misura live. Segui next_offset se has_more è true.',{'type':'object','properties':{'date':{'type':'string'},'days':{'type':'integer','minimum':1,'maximum':90},'offset':{'type':'integer','minimum':0},'limit':{'type':'integer','minimum':1,'maximum':5}},'additionalProperties':False})
+async def sleep(args:dict,ctx:ToolContext):
+    error=await guard(ctx)
+    if error:return ToolResult(error,is_error=True)
+    if set(args)-{'date','days','offset','limit'}:return ToolResult('Parametri sonno non validi.',is_error=True)
+    days=args.get('days',14);offset=args.get('offset',0);limit=args.get('limit',3)
+    if (type(days) is not int or not 1<=days<=90 or type(offset) is not int or not 0<=offset<=10000
+            or type(limit) is not int or not 1<=limit<=5):return ToolResult('Intervallo o pagina sonno non validi.',is_error=True)
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from ..services.homepulse.daily import window
+        import time
+        selected=args.get('date');bounds=None
+        if selected is not None:
+            if not isinstance(selected,str):raise ValueError()
+            _,start,end=window(time.time(),selected);bounds=(start,end)
+            if start>time.time() or end<time.time()-90*86400:raise ValueError()
+        value=await asyncio.to_thread(archive().sleep,ctx.user.id,90 if bounds else days)
+        periods=value['periods']
+        if bounds:periods=[p for p in periods if bounds[0]<=p['ended_at']<bounds[1]]
+        page=[]
+        for period in periods[offset:offset+limit]:
+            item=dict(period)
+            for key in ('started_at','ended_at'):item[key+'_local']=datetime.fromtimestamp(item[key],ZoneInfo('Europe/Rome')).isoformat()
+            page.append(item)
+        more=offset+len(page)<len(periods)
+        return result({'server_time':value['server_time'],'time_zone':'Europe/Rome','date':selected,
+                       'date_rule':'giorno di fine del periodo','periods':page,'total_periods':len(periods),
+                       'returned':len(page),'has_more':more,'next_offset':offset+len(page) if more else None,
+                       'processing_status':value['processing_status'],'processing_error':value.get('processing_error'),
+                       'last_processed_at':value['last_processed_at']})
+    except (StoreError,ValueError,TypeError,OverflowError):return ToolResult('Data sonno non valida: usa YYYY-MM-DD negli ultimi 90 giorni.',is_error=True)

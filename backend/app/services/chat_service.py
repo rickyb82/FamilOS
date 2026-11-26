@@ -37,7 +37,7 @@ settings = get_settings()
 MAX_TOOL_ROUNDS = max(1, int(getattr(settings, "max_tool_rounds", 500) or 500))
 TOOL_RESULT_CHARS = 50_000   # un risultato oltre questa lunghezza viene tagliato, con un avviso al modello
 KEEP_RECENT_RESULTS = 2      # i risultati degli ultimi giri restano sempre interi
-LOCAL_TOOLS = {"allenamento_stato", "allenamento_scheda", "allenamento_analisi", "allenamento_campioni", "allenamento_grafico", "allenamento_energia", "allenamento_controlla", "create_artifact", "update_artifact", "list_artifacts", "delete_artifact", "search_documents", "read_document", "ask_model", "remember", "forget"}
+LOCAL_TOOLS = {"allenamento_stato", "allenamento_scheda", "allenamento_analisi", "allenamento_campioni", "allenamento_grafico", "allenamento_energia", "allenamento_controlla", "allenamento_sonno", "create_artifact", "update_artifact", "list_artifacts", "delete_artifact", "search_documents", "read_document", "ask_model", "remember", "forget"}
 INLINE_DOC_CHARS = settings.rag_inline_max_chars
 
 
@@ -518,7 +518,16 @@ async def run_turn(db: AsyncSession, user: User, conv: Conversation, text: str |
 
     system = await build_system_prompt(user, conv, db)
     if any(t.name.startswith("allenamento_") for t in tools):
+        system += "\nFamilOS dispone del modulo Allenamento e del suo archivio personale. Per il sonno usa allenamento_sonno, anche per stanotte, SpO₂ e respiro del periodo. Consulta lo strumento prima di dichiarare di non avere accesso o chiedere screenshot. Distingui dati mancanti, errori del decoder e permessi della chat; non sommare finestre sovrapposte come due notti. Rispetta i risultati effettivi del tool."
         system += "\nAllenamento: usa allenamento_stato/analisi per riepiloghi e fasce. Quando l’utente chiede un grafico usa allenamento_grafico per mostrarlo nella chat; non limitarti a descriverlo. Per le calorie giornaliere usa allenamento_energia e riferisci metodo e copertura. Per punti intermedi, valori a un minuto preciso o confronti tra intervalli usa allenamento_campioni con la metrica e gli offset richiesti; segui next_cursor finché hai tutti i campioni necessari, senza descrivere una pagina come intera sessione. Distingui i punti interpolati dalle misure indipendenti e rileggi i risultati provvisori dopo la finalizzazione. Usa allenamento_scheda/controlla solo per modifiche richieste. Le fasce BPM sono scelte dall’utente, mai dedotte automaticamente dall’età. I tempi senza misure non appartengono a nessuna fascia. Non salvare dati di salute nella memoria di famiglia."
+    elif user.role != Role.child:
+        from .apps import app_enabled
+        from .homepulse.module import enabled as wellness_enabled
+        if wellness_enabled() and app_enabled(user,"wellness"):
+            if tool_allowed(policy,"allenamento_stato"):
+                system += "\nIl modulo FamilOS Allenamento è installato per questo profilo, ma i suoi strumenti non sono inclusi in questo turno. Per consultare sonno, allenamenti e dati dell’anello indica di abilitare App e server MCP in Impostazioni → Strumenti dell’assistente. Non dire che l’app non esiste o che mancano dati: non li hai ancora consultati. Non chiedere screenshot come prima soluzione."
+            else:
+                system += "\nIl modulo FamilOS Allenamento esiste per questo profilo, ma i permessi della chat non consentono i suoi strumenti. Spiega che va verificata l’abilitazione con l’amministratore; non dichiarare che l’archivio è vuoto o inventare dati."
     # Parte variabile (data/ora, estratti RAG): va DOPO il punto di cache, cosi' il prefisso stabile
     # (tool + prompt di sistema) viene riusato dalla cache del provider a ogni turno.
     from ..policy.permissions import dynamic_context

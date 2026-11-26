@@ -66,7 +66,7 @@ def available_app_ids() -> set[str]:
 # avuti esplicitamente nella scheda del membro (l'Intranet e' riservata ai super amministratori)
 OPT_IN = {a["id"] for a in APPS if a.get("opt_in")}
 # tool "nativi" (non mcp__) che appartengono a un'app
-NATIVE_TOOL_APP = {**{name:"wellness" for name in ("allenamento_stato","allenamento_scheda","allenamento_analisi","allenamento_campioni", "allenamento_grafico", "allenamento_energia","allenamento_controlla")},"write_document": "wordcraft", "write_spreadsheet": "gridcraft", "pdf_tool": "pdfcraft",
+NATIVE_TOOL_APP = {**{name:"wellness" for name in ("allenamento_stato","allenamento_scheda","allenamento_analisi","allenamento_campioni", "allenamento_grafico", "allenamento_energia","allenamento_controlla","allenamento_sonno")},"write_document": "wordcraft", "write_spreadsheet": "gridcraft", "pdf_tool": "pdfcraft",
                    "write_presentation": "deckcraft", "mind_map": "ideacraft", "starlink_status": "starlink"}
 
 

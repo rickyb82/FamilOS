@@ -12,9 +12,13 @@ Seleziona una sessione dal pannello Allenamento per vedere tempo sotto, dentro e
 
 ## Emily
 
-Quattro tool nativi sono disponibili agli adulti abilitati, anche con i modelli locali:
+Otto tool nativi sono disponibili agli adulti abilitati, anche con i modelli locali:
 
 - `allenamento_stato`: scheda, letture e sessioni del profilo corrente.
+- `allenamento_sonno`: periodi personali con orari, durate, fasi disponibili, SpO₂ e respiro.
+- `allenamento_campioni`: punti intermedi completi per metrica e intervallo.
+- `allenamento_grafico`: grafico delle sei metriche e tabella dei campioni in chat.
+- `allenamento_energia`: stima giornaliera con metodo e copertura.
 - `allenamento_scheda`: modifica fasi e fasce su richiesta, per le nuove sessioni.
 - `allenamento_analisi`: riepilogo e tempo nelle fasce di una propria sessione.
 - `allenamento_controlla`: avvio, pausa, ripresa e conclusione su richiesta.
@@ -54,3 +58,8 @@ Il record SleepPeriodInfo2 standard0x6a fornisce media e deviazione respiratoria
 Il pannello Sonno mostra media, minimo, massimo e numero di campioni respiratori nel periodo selezionato. La media è quella delle medie firmware disponibili, distinta dall’aggregazione notturna proprietaria Oura. I dati restano storici, con gli istanti di acquisizione originali.
 
 Ogni grafico ha tre etichette numeriche verticali allineate alla propria griglia, unità esplicita e dettaglio di ora/valore/unità al passaggio o al tocco sui punti. Le scale si adattano ai dati e possono differire fra metriche; le barre partono da zero. La linea di fine allenamento e l’asse temporale condividono la stessa superficie del disegno. Nei periodi di almeno24ore l’asse mostra anche le date. La serie Passi è affiancata a battito, SpO₂, temperatura, movimento e respiro. I campioni originali e le interruzioni restano invariati.
+
+
+La lettura del sonno da Emily usa `allenamento_sonno`, con data di fine del periodo nel fuso Europe/Rome e paginazione esplicita. Il tool consulta lo stesso archivio del pannello Sonno; mantiene valori nulli, sorgente e stato dell’elaborazione. Le finestre sovrapposte non vanno sommate come notti distinte. L’accesso rimane limitato al proprio adulto in una chat personale non condivisa.
+
+Gli strumenti Allenamento appartengono al gruppo **App e server MCP** in Impostazioni → Strumenti dell’assistente. Se il gruppo non è incluso nel turno, il prompt indica questa disattivazione e come verificarla; non dichiara che l’app o i dati siano assenti. Se manca il permesso del profilo, indica invece la verifica con l’amministratore. La patch rispetta gli interruttori e i permessi esistenti.
