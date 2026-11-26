@@ -3,6 +3,31 @@ import SQLite3
 @testable import HomePulse
 
 final class HomePulseTests:XCTestCase {
+    func testPreparedCapturePinsRawBeforeACKAndRejectionPreservesCurrent()throws{
+        let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString);defer{try? FileManager.default.removeItem(at:folder)}
+        let store=try EventStore(url:folder.appendingPathComponent("synthetic.sqlite"))
+        let original=cardioContext();try store.save(original,key:"recorded.context")
+        var pending=cardioContext();pending.token="synthetic-new";pending.afterRow=try store.recordedLastRow(ring:"synthetic")
+        try store.save(pending,key:"recorded.prepared")
+        let trace=cardioFrame(0x73,1100,[0,1,100])
+        try store.archiveHistory(frames:[cardioAnchor,trace],nextCursor:1101,key:"cursor",api:[2,0,0],ring:"synthetic")
+        let batch=try XCTUnwrap(store.prepareBatch());try store.acknowledge(batchID:batch.batch_id,accepted:batch.events.map(\.event_id))
+        XCTAssertTrue(try store.recordedInput(context:pending).0.contains{$0.data==trace})
+        try store.resolvePreparedRecorded(pending,accepted:false)
+        XCTAssertNil(store.load(RecordedContext.self,key:"recorded.prepared"))
+        XCTAssertEqual(store.load(RecordedContext.self,key:"recorded.context")?.token,original.token)
+        try store.save(pending,key:"recorded.prepared");try store.resolvePreparedRecorded(pending,accepted:true)
+        XCTAssertEqual(store.load(RecordedContext.self,key:"recorded.context")?.token,pending.token)
+        XCTAssertNil(store.load(RecordedContext.self,key:"recorded.prepared"))
+        XCTAssertThrowsError(try store.resolvePreparedRecorded(original,accepted:true))
+    }
+    func testInactiveCaptureRecoveryDoesNotDiscardUnfinishedTracesOrResults(){
+        XCTAssertTrue(RecordedBuilder.canReleaseInactive([],hasResult:false))
+        XCTAssertFalse(RecordedBuilder.canReleaseInactive(cardioRecords(),hasResult:false))
+        let closed=cardioRecords()+[RecordedRaw(row:10,data:cardioFrame(0x6c,1200,[3,11]))]
+        XCTAssertTrue(RecordedBuilder.canReleaseInactive(closed,hasResult:false))
+        XCTAssertFalse(RecordedBuilder.canReleaseInactive(closed,hasResult:true))
+    }
     func testReceiptMetadataIsBoundedWithoutLosingPendingEvents()throws{
         let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString);defer{try? FileManager.default.removeItem(at:folder)}
         let path=folder.appendingPathComponent("synthetic.sqlite"),store=try EventStore(url:path)

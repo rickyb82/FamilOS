@@ -252,7 +252,7 @@ struct WorkoutView:View{
             Text("La registrazione dedicata richiede età, FC a riposo e un’attività compatibile. Gli ultimi valori di questa funzione restano separati dal battito live.").font(.caption).foregroundStyle(.secondary)
             Button("Avvia registrazione cardio nell’anello"){Task{await model.startRingSport()}}.disabled(!model.ring.ready || model.ring.busy)
             Button("Leggi stato cardio attività"){Task{await model.ring.readExercise()}}.disabled(!model.ring.ready || model.ring.busy)
-            Button("Arresta registrazione cardio"){Task{await model.stopRingSport()}}.disabled(!model.ring.ready || model.ring.busy)
+            Button(model.continuousCardio ? "Riavvia acquisizione cardio":"Arresta registrazione cardio"){Task{await model.stopRingSport()}}.disabled(!model.ring.ready || model.ring.busy)
         }
         Card(title:"Cardio registrato offline"){
             Text(model.ring.recordedHistorySummary).font(.subheadline)
@@ -279,10 +279,11 @@ struct SleepView:View {
             }
             Card(title:"\(period.clock(period.start)) → \(period.clock(period.end))"){
                 HStack{sleepMetric("Sonno totale",period.total);Spacer();sleepMetric("A letto",period.timeInBed)}
+                if period.firmwareBedtime{Text("Periodo a letto registrato dal firmware. Fasi del sonno da elaborare.").font(.caption).foregroundStyle(.secondary)}
                 if let efficiency=period.efficiency{Text("Efficienza \(efficiency,specifier:"%.0f")%").font(.subheadline).foregroundStyle(.secondary)}
                 if let latency=period.latency{Text("Addormentamento: \(latency.durationText)").font(.subheadline).foregroundStyle(.secondary)}
             }
-            Card(title:"SpO₂ · media sonno"){
+            Card(title:period.firmwareBedtime ? "SpO₂ · media nel periodo a letto":"SpO₂ · media sonno"){
                 if let average=period.spo2["display_percentage"].number{
                     Text(String(format:"%.0f %%",average)).font(.title2.bold())
                     Text("\(Int(period.spo2["sample_count"].number ?? 0)) campioni · minimo \(Int(period.spo2["minimum"].number ?? 0))% · massimo \(Int(period.spo2["maximum"].number ?? 0))%").font(.caption).foregroundStyle(.secondary)

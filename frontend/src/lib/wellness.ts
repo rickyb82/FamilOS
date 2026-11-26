@@ -63,11 +63,11 @@ export type SleepPeriod = {
   latency_seconds: number | null; efficiency: number | null
   phases_30_seconds: string | null; phases_5_minutes: string | null
   spo2?: SpO2Aggregate
-  source: 'oura-ecore'; native_version: [number, number, number]
+  source: 'oura-ecore' | 'oura-ring-bedtime'; display_time_zone?: string; native_version: [number, number, number]
 }
 export type WellnessSleep = {
   server_time: number; window_start: number; window_end: number; periods: SleepPeriod[]
-  processing_status: string; last_processed_at: number | null
+  processing_status: string; last_processed_at: number | null; processing_error?: string | null
 }
 
 export const wellness = {

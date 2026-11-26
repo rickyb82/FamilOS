@@ -28,8 +28,8 @@ from .activity import parse_exercise_latest
 from .motion import parse_motion_record, parse_activity_record
 from .breathing import decode_breathing_record
 from .workout import validate_profile, validate_plan, composition, schedule, energy_for_interval
-from .sleep import normalize_period, merge_period, verified_run, MAX_PERIODS_PER_RUN, NATIVE_ABI
-from . import recorded, spo2
+from .sleep import GEN3_CONTRACT, normalize_bedtime, normalize_period, merge_period, verified_run, MAX_PERIODS_PER_RUN, NATIVE_ABI
+from . import recorded, spo2, processing as history_processing
 
 
 class StoreError(ValueError):
@@ -178,6 +178,10 @@ class HomePulseStore:
             CREATE INDEX IF NOT EXISTS sessions_owner_start ON sessions(owner_id,started_at);
             CREATE TABLE IF NOT EXISTS processing(owner_id TEXT PRIMARY KEY,history_count INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL,last_processed_at REAL,error TEXT);
             CREATE TABLE IF NOT EXISTS processing_features(owner_id TEXT NOT NULL,feature TEXT NOT NULL,PRIMARY KEY(owner_id,feature));
+            CREATE TABLE IF NOT EXISTS processing_checkpoints(owner_id TEXT PRIMARY KEY,last_history_id INTEGER NOT NULL,contract TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS processing_replay(owner_id TEXT NOT NULL,ring_id TEXT NOT NULL,from_cursor INTEGER NOT NULL,PRIMARY KEY(owner_id,ring_id));
+            CREATE TABLE IF NOT EXISTS processing_jobs(owner_id TEXT NOT NULL,contract TEXT NOT NULL,input_sha TEXT NOT NULL,native_digest TEXT NOT NULL,PRIMARY KEY(owner_id,contract,input_sha));
+            CREATE INDEX IF NOT EXISTS history_owner_tag_cursor ON history(owner_id,ring_id,tag,cursor,id);
             CREATE TABLE IF NOT EXISTS native_runs(id INTEGER PRIMARY KEY,owner_id TEXT NOT NULL,created_at REAL NOT NULL,source_input_sha256 TEXT,result TEXT NOT NULL,result_sha256 TEXT NOT NULL,UNIQUE(owner_id,result_sha256));
             CREATE TABLE IF NOT EXISTS spo2_catalog(owner_id TEXT NOT NULL,utc_ms INTEGER NOT NULL,value INTEGER NOT NULL,quality REAL NOT NULL,timezone_raw INTEGER,native_run_id INTEGER NOT NULL,PRIMARY KEY(owner_id,utc_ms));
             CREATE TABLE IF NOT EXISTS spo2_catalog_runs(run_id INTEGER PRIMARY KEY);
@@ -486,10 +490,11 @@ class HomePulseStore:
                 (owner,start,now))]
             for period in periods:
                 period['spo2']=spo2.aggregate(db,owner,period['started_at'],period['ended_at'])
-            processing=db.execute('SELECT status,last_processed_at FROM processing WHERE owner_id=?',(owner,)).fetchone()
+            processing=db.execute('SELECT status,last_processed_at,error FROM processing WHERE owner_id=?',(owner,)).fetchone()
         return {'server_time':now,'window_start':start,'window_end':now,'periods':periods,
                 'processing_status':processing['status'] if processing else 'In attesa di record storici',
-                'last_processed_at':processing['last_processed_at'] if processing else None}
+                'last_processed_at':processing['last_processed_at'] if processing else None,
+                'processing_error':processing['error'] if processing else None}
 
     def backfill_spo2_catalog(self,limit=2):
         """Bounded background migration, using saved outputs without RF/redecode."""
@@ -638,13 +643,42 @@ class HomePulseStore:
             return [row[0] for row in db.execute('''SELECT h.owner_id FROM history h
                 LEFT JOIN processing p ON p.owner_id=h.owner_id
                 LEFT JOIN processing_features f ON f.owner_id=h.owner_id AND f.feature=?
-                GROUP BY h.owner_id HAVING count(*)>coalesce(max(p.history_count),0) OR max(f.feature) IS NULL''', (NATIVE_ABI,))]
+                GROUP BY h.owner_id HAVING count(*)>coalesce(max(p.history_count),0) OR max(f.feature) IS NULL OR h.owner_id NOT IN (SELECT owner_id FROM processing_features WHERE feature=?)''', (NATIVE_ABI,history_processing.CONTRACT))]
 
     def historical_records(self,owner):
         with self.connection() as db:
-            return [dict(row) for row in db.execute('SELECT raw_hex,digest,tag,cursor FROM history WHERE owner_id=? ORDER BY cursor,id',(owner,))]
+            return [dict(row) for row in db.execute('SELECT id,ring_id,raw_hex,digest,tag,cursor FROM history WHERE owner_id=? ORDER BY cursor,id',(owner,))]
 
-    def publish_processed(self,owner,records,result):
+    def processing_snapshot(self,owner):
+        with self.connection() as db:
+            total,last=db.execute('SELECT count(*),coalesce(max(id),0) FROM history WHERE owner_id=?',(owner,)).fetchone()
+            checkpoint=db.execute('SELECT last_history_id FROM processing_checkpoints WHERE owner_id=? AND contract=?',(owner,history_processing.CONTRACT)).fetchone()
+            if checkpoint:
+                rows=db.execute('SELECT h.id,h.ring_id,h.raw_hex,h.digest,h.tag,h.cursor FROM history h LEFT JOIN processing_replay r ON r.owner_id=h.owner_id AND r.ring_id=h.ring_id WHERE h.owner_id=? AND (r.from_cursor IS NULL OR h.cursor>=r.from_cursor OR h.id>?) ORDER BY h.cursor,h.id',(owner,checkpoint[0])).fetchall()
+            else:rows=db.execute('SELECT id,ring_id,raw_hex,digest,tag,cursor FROM history WHERE owner_id=? ORDER BY cursor,id',(owner,)).fetchall()
+            records={row['id']:dict(row) for row in rows}
+            for ring in {row['ring_id'] for row in rows}:
+                positions=[row['cursor'] for row in rows if row['ring_id']==ring and row['cursor'] is not None]
+                if not positions:continue
+                first=min(positions)
+                for tag in (0x41,0x42):
+                    row=db.execute('SELECT id,ring_id,raw_hex,digest,tag,cursor FROM history WHERE owner_id=? AND ring_id=? AND tag=? AND cursor<? ORDER BY cursor DESC,id DESC LIMIT 1',(owner,ring,tag,first)).fetchone()
+                    if row:records[row['id']]=dict(row)
+        return {'records':sorted(records.values(),key=lambda row:(row['cursor'] if row['cursor'] is not None else -1,row['id'])),'total_count':total,'last_history_id':last}
+
+    def cached_processing_job(self,owner,digest):
+        with self.connection() as db:
+            row=db.execute('SELECT n.result FROM processing_jobs j JOIN native_runs n ON n.owner_id=j.owner_id AND n.result_sha256=j.native_digest WHERE j.owner_id=? AND j.contract=? AND j.input_sha=?',(owner,history_processing.CONTRACT,digest)).fetchone()
+            return json.loads(row[0]) if row else None
+
+    def finish_processing(self,owner,snapshot,replay):
+        with self.connection(True) as db:
+            db.execute('INSERT INTO processing VALUES(?,?,?,?,NULL) ON CONFLICT(owner_id) DO UPDATE SET history_count=excluded.history_count,status=excluded.status,last_processed_at=excluded.last_processed_at,error=NULL',(owner,snapshot['total_count'],'Storico elaborato',time.time()))
+            db.execute('INSERT INTO processing_checkpoints VALUES(?,?,?) ON CONFLICT(owner_id) DO UPDATE SET last_history_id=excluded.last_history_id,contract=excluded.contract',(owner,snapshot['last_history_id'],history_processing.CONTRACT))
+            for ring,cursor in replay.items():db.execute('INSERT INTO processing_replay VALUES(?,?,?) ON CONFLICT(owner_id,ring_id) DO UPDATE SET from_cursor=excluded.from_cursor',(owner,ring,cursor))
+            for feature in (NATIVE_ABI,history_processing.CONTRACT):db.execute('INSERT OR IGNORE INTO processing_features VALUES(?,?)',(owner,feature))
+
+    def publish_processed(self,owner,records,result,checkpoint=True):
         success=result.get('status')=='ok' and result.get('process_true') is True and result.get('deinit_returned') is True
         count=len(records);by_hash={row['digest']:row for row in records}
         with self.connection(True) as db:
@@ -654,17 +688,26 @@ class HomePulseStore:
             result_digest=hashlib.sha256(original.encode()).hexdigest()
             db.execute('INSERT OR IGNORE INTO native_runs(owner_id,created_at,source_input_sha256,result,result_sha256) VALUES(?,?,?,?,?)',
                        (owner,time.time(),result.get('source_input_sha256'),original,result_digest))
-            db.execute('INSERT INTO processing VALUES(?,?,?,?,?) ON CONFLICT(owner_id) DO UPDATE SET history_count=excluded.history_count,status=excluded.status,last_processed_at=excluded.last_processed_at,error=excluded.error',
-                       (owner,count if success else 0,'Storico elaborato' if success else 'Elaborazione da completare',time.time(),None if success else result.get('error',result.get('status','core non disponibile'))))
+            if checkpoint or not success:
+                db.execute('INSERT INTO processing VALUES(?,?,?,?,?) ON CONFLICT(owner_id) DO UPDATE SET history_count=CASE WHEN excluded.history_count>0 THEN excluded.history_count ELSE processing.history_count END,status=excluded.status,last_processed_at=excluded.last_processed_at,error=excluded.error',
+                           (owner,count if success else 0,'Storico elaborato' if success else 'Elaborazione da completare',time.time(),None if success else result.get('error',result.get('status','core non disponibile'))))
             if not success:return
-            if result.get('sleep_native_abi')==NATIVE_ABI:
+            if checkpoint:
+                db.execute('INSERT OR IGNORE INTO processing_features VALUES(?,?)',(owner,history_processing.CONTRACT))
+            if verified_run(result) and isinstance(result.get('gen3_sleep'),dict) and result['gen3_sleep'].get('contract')==GEN3_CONTRACT and not checkpoint:
+                db.execute('INSERT OR REPLACE INTO processing_jobs VALUES(?,?,?,?)',(owner,history_processing.CONTRACT,result['source_input_sha256'],result_digest))
+            if checkpoint and result.get('sleep_native_abi')==NATIVE_ABI:
                 # This is a decoder-attempt checkpoint. Failed/empty callbacks
                 # never erase valid periods and do not cause perpetual replay.
                 db.execute('INSERT OR IGNORE INTO processing_features VALUES(?,?)',(owner,NATIVE_ABI))
             sleep_rows=result.get('sleep_outputs',[])
-            if verified_run(result) and isinstance(sleep_rows,list) and len(sleep_rows)<=MAX_PERIODS_PER_RUN:
-                for row in sleep_rows:
-                    try:period=normalize_period(owner,row,time.time())
+            gen3=result.get('gen3_sleep',{})
+            bedtime_rows=gen3.get('periods',[]) if isinstance(gen3,dict) and gen3.get('contract')==GEN3_CONTRACT else []
+            candidates=[(row,normalize_period) for row in sleep_rows] if isinstance(sleep_rows,list) and len(sleep_rows)<=MAX_PERIODS_PER_RUN else []
+            if isinstance(bedtime_rows,list) and len(bedtime_rows)<=MAX_PERIODS_PER_RUN:candidates+=[(row,normalize_bedtime) for row in bedtime_rows]
+            if verified_run(result):
+                for row,normalize in candidates:
+                    try:period=normalize(owner,row,time.time())
                     except (ValueError,TypeError,OverflowError):continue
                     previous=db.execute('SELECT period FROM sleep_periods WHERE owner_id=? AND started_at=?',
                                         (owner,period['started_at'])).fetchone()

@@ -159,7 +159,7 @@ La compatibilità numerica sintetica e la qualità sui segnali reali del Gen3 so
 
 ## Monitoraggio separato dalle sessioni
 
-In Impostazioni, **Cardio attività anche fuori allenamento** controlla il monitoraggio esteso, attivo come impostazione iniziale. La scelta resta salvata sul dispositivo e una disattivazione esplicita viene rispettata agli avvii successivi. Inizia e Termina delimitano le sessioni del diario; Arresta registrazione cardio disabilita anche il monitoraggio esteso. Durante la carica il monitoraggio esteso viene sospeso. Nessuna sessione fittizia viene creata fuori allenamento.
+In Impostazioni, **Cardio attività anche fuori allenamento** controlla il monitoraggio esteso, attivo come impostazione iniziale. La scelta resta salvata sul dispositivo e una disattivazione esplicita viene rispettata agli avvii successivi. Inizia e Termina delimitano le sessioni del diario; il riavvio del segmento non disattiva il monitoraggio esteso. Solo il suo interruttore salva una disattivazione esplicita. Durante la carica il monitoraggio esteso viene sospeso. Nessuna sessione fittizia viene creata fuori allenamento.
 
 Il calcolo usa segmenti limitati: dopo un’ora di tracce recenti conclude il segmento, attende l’elaborazione finale e richiede il successivo. Le eventuali pause di transizione restano vuoti. I nuovi inizi emessi dal firmware dopo una fine acquisizione vengono elaborati con identità separate. La durata della batteria, la ripresa fisica dopo rimozione e il comportamento su un’intera giornata richiedono verifiche sul dispositivo; l’opzione non garantisce misure 24 ore su 24.
 
@@ -191,3 +191,10 @@ La versione 18 conserva sul telefono la coda non ancora confermata da FamilOS. L
 Il calcolo cardio mantiene temporaneamente una sola finestra corrente di tracce, il suo ancoraggio temporale e il risultato necessario al ripristino del monitoraggio. Dopo il risultato finale confermato, le tracce diventano eliminabili e rimangono solo i metadati di transizione finché inizia il segmento seguente. Una cache limitata a8192hash recenti e i cursori evitano di riscaricare/reinviare duplicati: non contengono i payload dei sensori. Gli identificatori delle tracce restano stabili anche dopo la compattazione SQLite.
 
 Lo storico, i grafici ricevuti da FamilOS, le sessioni concluse sincronizzate e le copie ripetute dei risultati non vengono archiviati sul telefono. Profilo, configurazione, credenziali, stato batteria e allenamento attivo restano disponibili per il funzionamento offline. I file temporanei degli upload confermati o abbandonati vengono rimossi.
+
+
+## Ripristino cardio e sonno Gen3
+
+La versione19 prepara un nuovo contesto cardio senza sostituire quello corrente prima dell’ACK dell’anello. Le tracce fra preparazione e conferma restano protette dalla pulizia dopo l’upload. Un avvio fallito conserva il contesto precedente; lo stato pendente viene verificato alla riconnessione. Se l’allineamento iniziale richiede più di8pagine, l’intenzione di avvio resta valida per15minuti e riprende automaticamente. Una cattura vuota o chiusa senza risultati può essere liberata soltanto con storico allineato e feature3 confermata inattiva; i metadati di recupero e i record originali restano nel server.
+
+Il sonno Gen3 recupera i periodi a letto dal record firmware0x76 usando l’orologio verificato dal motore nativo. Questa sorgente mostra inizio, fine e durata a letto; fasi, latenza, efficienza e sonno totale rimangono assenti. Il formato legacy continua a usare la callback originale. Nessun movimento viene trasformato arbitrariamente in una fase del sonno.

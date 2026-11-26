@@ -91,3 +91,6 @@ docker run --rm --platform linux/amd64 --name homepulse-core-witness \
 ```
 
 Il timeout di produzione è applicato dal servizio; per una CLI manuale interrompere soltanto il container col proprio nome se non termina entro30secondi.
+
+
+Il callback sleepinfo sopra descritto appartiene al percorso legacy inizializzato dal record0x49. I record moderni Gen3 non lo inizializzano da soli. `gen3_sleep` espone separatamente il contratto `gen3-bedtime76-native-clock-v1`: finestre firmware0x76, header/start/end nello stesso contatore100ms, UTC derivato dall’originale mapping nativo. Una finestra richiede ancoraggio di avvio, copertura dal suo inizio fino all’header, durata fino a16ore e offset UTC coerente entro un quanto100ms. Copertura parziale, reset, salti d’orologio e framing sconosciuto vengono contati tra i rifiuti. Sono periodi a letto, con sonno totale e fasi nulli. SleepNet moderno e i suoi operatori non sono implementati da questo estrattore.

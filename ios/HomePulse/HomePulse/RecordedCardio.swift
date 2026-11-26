@@ -47,6 +47,12 @@ struct RecordedTensors:Sendable {
 }
 
 enum RecordedBuilder {
+    static func canReleaseInactive(_ records:[RecordedRaw],hasResult:Bool)->Bool{
+        guard !hasResult else{return false}
+        let hasTrace=records.contains{$0.data.first==0x73}
+        let hasEnd=records.contains{let b=[UInt8]($0.data);return b.count>=8 && b[0]==0x6c && b[6]==3 && (2...11).contains(b[7])}
+        return !hasTrace || hasEnd
+    }
     static func tick(_ b:[UInt8])->UInt32? {
         guard b.count>=6,Int(b[1])+2==b.count else{return nil}
         return UInt32(b[2])|UInt32(b[3])<<8|UInt32(b[4])<<16|UInt32(b[5])<<24
@@ -194,7 +200,7 @@ actor RecordedModelRunner {
     @Published private(set) var status="Cardio registrato locale pronto"
     @Published private(set) var running=false
     var continuousMode=false{didSet{monitorDiagnostic.submit(.object(["at":.number(Date().timeIntervalSince1970),"continuous_cardio_enabled":.bool(continuousMode)]))}}
-    private var context:RecordedContext?;private var working=false;private var dirty=false
+    private var context:RecordedContext?;private var prepared:RecordedContext?;private var working=false;private var dirty=false
     private var next=Date.distantPast;private let store:EventStore;private let runner=RecordedModelRunner()
     private let diagnostic:DiagnosticWriter
     private let serverDiagnostic:DiagnosticWriter
@@ -204,8 +210,8 @@ actor RecordedModelRunner {
         self.store=store;diagnostic=DiagnosticWriter(url:diagnosticsURL)
         serverDiagnostic=DiagnosticWriter(url:diagnosticsURL.deletingLastPathComponent().appendingPathComponent("recorded-server-status.json"))
         monitorDiagnostic=DiagnosticWriter(url:diagnosticsURL.deletingLastPathComponent().appendingPathComponent("cardio-monitor-status.json"))
-        Task{let saved=try? await store.perform{($0.load(RecordedContext.self,key:"recorded.context"),$0.currentRecordedResult())}
-            if let saved,context==nil{context=saved.0;result=saved.1;dirty=context != nil;running=saved.0 != nil && saved.1?.final != true;if let result{onResult?(result)};tick()}}
+        Task{let saved=try? await store.perform{($0.load(RecordedContext.self,key:"recorded.context"),$0.currentRecordedResult(),$0.load(RecordedContext.self,key:"recorded.prepared"))}
+            if let saved,context==nil{context=saved.0;result=saved.1;prepared=saved.2;dirty=context != nil;running=saved.0 != nil && saved.1?.final != true;if let result{onResult?(result)};tick()}}
         if ProcessInfo.processInfo.arguments.contains("--recorded-model-self-test") {
             Task{do{let count=try await runner.syntheticSelfTest()
                 diagnostic.submit(.object(["at":.number(Date().timeIntervalSince1970),"model_loaded":.bool(true),"synthetic_self_test":.bool(true),"output_count":.number(Double(count)),"personal_data_used":.bool(false)]))
@@ -214,16 +220,32 @@ actor RecordedModelRunner {
     }
     func prepare(ring:String,version:Int,activity:Int,profile:BodyProfile,workoutID:String?)async throws{
         try profile.validate()
-        guard !working else{throw AppError.message("Elaborazione cardio in corso, riprova fra un momento")}
+        guard !working,prepared==nil else{throw AppError.message("Elaborazione o avvio cardio in corso")}
         guard profile.age != nil,profile.weight_kg != nil,profile.height_cm != nil,profile.resting_hr != nil else {
             throw AppError.message("Completa età, peso, altezza e FC a riposo nel profilo")
         }
         let row=try await store.perform{try $0.recordedLastRow(ring:ring)}
         let value=RecordedContext(ring:ring,afterRow:row,version:version,activity:activity,profile:profile,workoutID:workoutID)
-        try await store.perform{try $0.save(value,key:"recorded.context")}
-        context=value;result=nil;running=true;dirty=true;next = .distantPast;status="Attendo le prime tracce cardio dell’anello"
+        try await store.perform{try $0.save(value,key:"recorded.prepared")}
+        prepared=value;status="Avvio registrazione cardio in corso"
     }
-    var canPrepare:Bool{!working}
+    func resolvePreparedStart(_ accepted:Bool)async throws{
+        guard let value=prepared else{return}
+        try await store.perform{try $0.resolvePreparedRecorded(value,accepted:accepted)}
+        prepared=nil
+        if accepted{context=value;result=nil;running=true;dirty=true;next = .distantPast;status="Attendo le prime tracce cardio dell’anello";tick()}
+        else{status="Avvio non completato · pronto per riprovare"}
+    }
+    func releaseInactiveCapture()async->Bool{
+        guard !working,prepared==nil,let context else{return self.context==nil}
+        do{
+            let saved=try await store.perform{try $0.recordedInput(context:context)}
+            guard RecordedBuilder.canReleaseInactive(saved.0,hasResult:!(result?.points.isEmpty ?? true)) else{return false}
+            try await store.perform{try $0.releaseRecordedContext(context)}
+            self.context=nil;result=nil;running=false;dirty=false;status="Ripresa automatica del cardio";return true
+        }catch{return false}
+    }
+    var canPrepare:Bool{!working && prepared==nil}
     var hasContext:Bool{context != nil}
     func historyChanged(){dirty=true;tick()}
     func observeServer(_ value:JSONValue){
@@ -231,7 +253,7 @@ actor RecordedModelRunner {
         serverDiagnostic.submit(.object(["at":.number(Date().timeIntervalSince1970),"recorded_projection_received":.bool(true),"point_count":.number(count),"revision":.number(revision),"final":value["final"],"model":value["model"],"health_values_exported":.bool(false)]))
     }
     func tick(){
-        guard !working,dirty,Date()>=next,let context else{return}
+        guard !working,prepared==nil,dirty,Date()>=next,let context else{return}
         working=true;dirty=false;next=Date().addingTimeInterval(15)
         let taskID=UIApplication.shared.beginBackgroundTask(withName:"Cardio registrato locale",expirationHandler:nil)
         Task{defer{working=false;if taskID != .invalid{UIApplication.shared.endBackgroundTask(taskID)}}

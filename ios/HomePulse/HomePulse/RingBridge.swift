@@ -39,6 +39,8 @@ import UIKit
     var onBattery:((OuraBattery,Date)->Void)?
     var onIdle:(()->Void)?
     var onLive:((OuraLive,Date)->Void)?;var onHistory:(()->Void)?;var onJournal:(()->Void)?
+    var onRecordedStartResolved:((Bool)async throws->Void)?
+    var historyAligned:Bool{lastHistoryBytesLeft==0 || (lastHistoryBytesLeft==nil && lastHistoryRecordCount==0)}
     var onRecordedPrepare:((Int)async throws->Void)?
     var logicalRingID:String?{logicalRing}
     private let statusJournalQueue=DispatchQueue(label:"HomePulse.status-journal",qos:.utility)
@@ -272,6 +274,14 @@ import UIKit
             }
             if let control,control.pendingStop {
                 do{try await restoreSport(control)}catch{exerciseStatus=error.localizedDescription;setupIssues.append(error.localizedDescription)}
+            }
+            if caps[3] != nil{
+                do{
+                    let actual=try OuraWire.featureStatus(await exchange(Data([0x2f,2,0x20,3]),tag:0x2f,extended:0x21),feature:3)
+                    exerciseMode=actual;exerciseModeAt=Date()
+                    if actual.mode==2{try await onRecordedStartResolved?(true)}
+                    else if [0,1].contains(actual.mode){recordedWorkoutProbeActive=false;try await onRecordedStartResolved?(false)}
+                }catch{setupIssues.append("Stato avvio cardio da verificare")}
             }
             exerciseStep="handshake_spo2"
             let probeKey=spo2ProbeKey
@@ -541,6 +551,12 @@ import UIKit
         }
         exerciseStep=callerStep
     }
+    func activityIsInactive()async throws->Bool{
+        guard ready,!busy else{return false};busy=true;defer{finishOperation()}
+        let mode=try OuraWire.featureStatus(await exchange(Data([0x2f,2,0x20,3]),tag:0x2f,extended:0x21),feature:3)
+        exerciseMode=mode;exerciseModeAt=Date();writeBatteryDiagnostic()
+        return [0,1].contains(mode.mode) && mode.state==0
+    }
     func startSport(activity:UInt16,age:Int,resting:Int,recordedOnly:Bool=false)async throws{
         guard !spo2ProbeActive else{throw AppError.message("Concludi la prova SpO₂ prima di avviare il cardio registrato")}
         guard ready,!busy,capabilities[3] != nil else{throw AppError.message("Anello non pronto per la registrazione cardio")};busy=true;defer{finishOperation()}
@@ -562,12 +578,13 @@ import UIKit
             recordedCapture?.baselineComplete = !more && (lastHistoryBytesLeft==0 || (lastHistoryBytesLeft==nil && lastHistoryRecordCount==0))
             let cursorKey="history.cursor.\(logicalRing ?? peripheral?.identifier.uuidString ?? "unknown")"
             recordedCapture?.baselineNextRingTime=try await store.perform{$0.load(UInt32.self,key:cursorKey)}
-            guard recordedCapture?.baselineComplete == true else{nextHistoryAt=Date.distantPast;throw AppError.message("Recupero dei dati precedenti in corso: riprova quando lo storico è allineato")}
+            guard recordedCapture?.baselineComplete == true else{nextHistoryAt=Date.distantPast;throw OuraStartDeferred.history}
             try await onRecordedPrepare?(Int(activity))
         }
         let key=sportKey
         let control=SportControl(restoreMode:current[4],pendingStop:true,restoreLiveMode:liveMode,restoreLiveSubscription:recordedOnly ? liveSubscriptionActive:nil)
-        try await store.perform{try $0.save(control,key:key)}
+        do{try await store.perform{try $0.save(control,key:key)}}
+        catch{if recordedOnly{try? await onRecordedStartResolved?(false)};throw error}
         manualControlPending=true
         do{
             if recordedOnly{
@@ -582,7 +599,7 @@ import UIKit
             try await setFeatureMode(3,mode:2,operation:"Avvio cardio attività")
             var active=control;active.pendingStop=false;let activeControl=active
             try await store.perform{try $0.save(activeControl,key:key)}
-            if recordedOnly{recordedCapture?.phase="recording";recordedCapture?.requestedAt=Date();recordedHistorySummary="Raccolta progressiva dei dati dell’allenamento…"}
+            if recordedOnly{try await onRecordedStartResolved?(true);recordedCapture?.phase="recording";recordedCapture?.requestedAt=Date();recordedHistorySummary="Raccolta progressiva dei dati dell’allenamento…"}
             exerciseStep="accepted";exerciseStatus="Richiesta di avvio accettata dall’anello";status=exerciseStatus
             nextExerciseAt=Date.distantPast
             nextHistoryAt=Date.distantPast
@@ -590,7 +607,7 @@ import UIKit
             var failure:[String:JSONValue]=["at":.number(Date().timeIntervalSince1970),"step":.string(exerciseStep)]
             if let rejection=error as? OuraCommandRejection{failure["feature"] = .number(Double(rejection.feature));failure["reply"] = .number(Double(rejection.command));failure["result_raw"] = .number(Double(rejection.result))}
             exerciseFailure = .object(failure);exerciseStatus=error.localizedDescription;exerciseStep="restore_after_failure";writeBatteryDiagnostic()
-            if let control=try? await store.perform({$0.load(SportControl.self,key:key)}){try? await restoreSport(control)}
+            if let control=try? await store.perform({$0.load(SportControl.self,key:key)}){do{try await restoreSport(control);if recordedOnly{try await onRecordedStartResolved?(false)}}catch{exerciseStatus="Avvio da verificare alla riconnessione"}}
             exerciseStep="failed";writeBatteryDiagnostic()
             throw error
         }
@@ -610,4 +627,9 @@ import UIKit
         do{try await restoreSport(control);exerciseStep="stopped";exerciseStatus="Richiesta di arresto cardio accettata";nextExerciseAt=Date.distantPast}
         catch{exerciseStatus=error.localizedDescription;status="Arresto cardio da confermare alla prossima connessione"}
     }
+}
+
+enum OuraStartDeferred:Error,LocalizedError{
+    case history
+    var errorDescription:String?{"Allineamento dello storico · avvio cardio automatico appena pronto"}
 }

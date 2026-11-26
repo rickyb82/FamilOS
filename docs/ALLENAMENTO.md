@@ -23,7 +23,7 @@ Non accettano un proprietario alternativo. I dati sono disponibili esclusivament
 
 ## Trasporto live
 
-Con Home Pulse aperta, i frame sono prima salvati nel journal e poi inviati con una sessione HTTP immediata, con cadenza di invio non superiore a circa un batch al secondo. I campioni recenti hanno precedenza sullo storico ancora da inviare; UUID, sequenze e timestamp originali non cambiano. L’ACK rimuove solo i riferimenti della coda, mai il journal. Anche a schermo bloccato una nuova notifica Bluetooth apre una finestra breve per l’invio HTTP immediato; un task di completamento protegge soltanto la singola richiesta. In assenza di eventi live, URLSession background conserva la sincronizzazione differita e durevole. Il ritorno in primo piano riprende lo stesso batch durevole, con deduplicazione lato server. Con la pagina visibile, la dashboard interroga lo stato ogni secondo e i grafici ogni cinque secondi. Lo storico viene richiesto solo nella Panoramica; passando a un’altra sezione, oppure nascondendo la pagina, le richieste non necessarie si fermano e riprendono al ritorno. La latenza effettiva dipende dalla rete e dalla disponibilità di nuove misure valide.
+Con Home Pulse aperta, i frame sono prima salvati nel journal e poi inviati con una sessione HTTP immediata, con cadenza di invio non superiore a circa un batch al secondo. I campioni recenti hanno precedenza sullo storico ancora da inviare; UUID, sequenze e timestamp originali non cambiano. L’ACK rimuove dalla coda e dal journal soltanto gli eventi confermati; i record ancora necessari al modello corrente restano temporaneamente protetti. Anche a schermo bloccato una nuova notifica Bluetooth apre una finestra breve per l’invio HTTP immediato; un task di completamento protegge soltanto la singola richiesta. In assenza di eventi live, URLSession background conserva la sincronizzazione differita e durevole. Il ritorno in primo piano riprende lo stesso batch durevole, con deduplicazione lato server. Con la pagina visibile, la dashboard interroga lo stato ogni secondo e i grafici ogni cinque secondi. Lo storico viene richiesto solo nella Panoramica; passando a un’altra sezione, oppure nascondendo la pagina, le richieste non necessarie si fermano e riprendono al ritorno. La latenza effettiva dipende dalla rete e dalla disponibilità di nuove misure valide.
 
 ## Fluidità della dashboard
 
@@ -38,3 +38,10 @@ I test includono uno storico sintetico di 200.000 punti, picchi nello stesso int
 L’integrazione nel repository FamilOS aggiunge il comando opzionale Allenamento all’entry point gestito. Durante gli aggiornamenti, `cp -a` conserva proprietari e permessi di `data`, `private` e `.env`, inclusa la libreria privata del worker UID10001. Non è una modifica al motore Orbita distribuito separatamente e non richiede pubblicare altri file della sua copia di lavoro.
 
 Il branch non modifica `main`. Gli aggiornamenti futuri del modulo passano dalla versione del framework che lo contiene.
+
+
+## Storico a blocchi e recupero sonno
+
+Il backend elabora al massimo60000record per blocco, più gli ancoraggi originali. Fra blocchi mantiene18ore di sovrapposizione per conservare interi periodi notturni fino a16ore. Salva gli output validi e la loro identità; dopo un’interruzione riusa i blocchi riusciti. Il checkpoint complessivo avanza soltanto quando tutti i blocchi sono riusciti. I cicli successivi riprendono la coda temporale e gli eventuali record tardivi, senza eliminare lo storico principale. Limiti di densità o errori HTTP sono espliciti, senza trasformarli in una generica indisponibilità del motore.
+
+Per Gen3 il record0x76 produce il periodo a letto solo con copertura completa nello stesso avvio e senza discontinuità dell’orologio. Non produce fasi né sonno totale. La tab Sonno distingue questa sorgente e mostra gli errori di elaborazione; le fasi native legacy, quando presenti, hanno precedenza sui riepiloghi incompleti.

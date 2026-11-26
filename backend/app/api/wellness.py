@@ -222,31 +222,51 @@ async def stream(request:Request,ctx:AuthContext=Depends(require_adult)):
 
 
 async def process_history_once():
-    """Worker receives sensor records only, never user profiles or credentials."""
+    """Replay bounded overlapping jobs; outputs keep native acquisition times."""
     from ..services.homepulse.module import enabled
+    from ..services.homepulse import processing
+    from ..services.homepulse.sleep import NATIVE_ABI, GEN3_CONTRACT
     if not enabled():return
     await asyncio.to_thread(store().backfill_spo2_catalog)
     url=os.getenv('HOME_PULSE_CORE_URL','http://homepulse-core:8081').rstrip('/')
     for owner in await asyncio.to_thread(store().pending_owners):
-        records=await asyncio.to_thread(store().historical_records,owner)
-        sensor=[]
-        for record in records:
-            raw=bytes.fromhex(record['raw_hex'])
-            if 6<=len(raw)<=20 and raw[0] not in (0x5c,0xfd,0xfe):sensor.append(record['raw_hex'])
-        if not sensor:continue
-        canonical={'schema':'standard-ring-events-raw-hex-v1',
-                   'records':[bytes.fromhex(raw)[:bytes.fromhex(raw)[1]+2].hex() for raw in sensor]}
-        expected_hash=hashlib.sha256(json.dumps(canonical,separators=(',',':')).encode()).hexdigest()
-        try:
-            async with httpx.AsyncClient(timeout=35,trust_env=False,follow_redirects=False) as client:
+        snapshot=await asyncio.to_thread(store().processing_snapshot,owner)
+        try:jobs,replay=await asyncio.to_thread(processing.plan,snapshot['records'])
+        except (processing.PlanningError,ValueError,KeyError) as exc:
+            await asyncio.to_thread(store().publish_processed,owner,[],{'status':'history_plan_failed','error':str(exc),'process_true':False})
+            continue
+        all_complete=True
+        async with httpx.AsyncClient(timeout=35,trust_env=False,follow_redirects=False) as client:
+            for records in jobs:
+                expected_hash=processing.input_hash(records)
+                if await asyncio.to_thread(store().cached_processing_job,owner,expected_hash):continue
                 token=os.getenv('HOME_PULSE_CORE_TOKEN')
-                response=await client.post(url+'/process',json={'records':sensor},headers={'Authorization':'Bearer '+token} if token else {})
-                response.raise_for_status();result=response.json()
-                if not isinstance(result,dict) or result.get('source_input_sha256')!=expected_hash or result.get('input_record_count')!=len(sensor):
-                    result={'status':'result_mismatch','error':'Risultato non associabile ai record inviati; dati conservati',
-                            'rejected_response':result}
-        except (httpx.HTTPError,ValueError):result={'status':'worker_unavailable','error':'Motore locale non raggiungibile; record conservati'}
-        await asyncio.to_thread(store().publish_processed,owner,records,result)
+                try:
+                    for attempt in range(3):
+                        response=await client.post(url+'/process',json={'records':processing.canonical(records)['records']},headers={'Authorization':'Bearer '+token} if token else {})
+                        if response.status_code!=503 or attempt==2:break
+                        await asyncio.sleep(1)
+                    try:body=response.json()
+                    except ValueError:body=None
+                    if response.status_code!=200:result=processing.http_failure(response.status_code,body)
+                    else:
+                        result=body
+                        if not isinstance(result,dict) or result.get('source_input_sha256')!=expected_hash or result.get('input_record_count')!=len(records):
+                            result={'status':'result_mismatch','error':'Risultato non associabile ai record inviati; dati conservati','rejected_response':result}
+                except httpx.TimeoutException:
+                    result={'status':'worker_timeout','error':'Il motore storico ha superato il tempo di risposta; record conservati'}
+                except httpx.HTTPError:
+                    result={'status':'worker_unavailable','error':'Connessione al motore storico non riuscita; record conservati'}
+                if result.get('status')=='ok' and (result.get('version')!=[3,6,2] or not isinstance(result.get('mapping'),dict) or result['mapping'].get('complete') is not True):
+                    result={'status':'native_contract_failed','error':'Contratto o mapping del motore non verificato; record conservati','rejected_response':result}
+                await asyncio.to_thread(store().publish_processed,owner,records,result,False)
+                if not (result.get('status')=='ok' and result.get('process_true') is True and result.get('deinit_returned') is True and isinstance(result.get('mapping'),dict) and result['mapping'].get('complete') is True and result.get('version')==[3,6,2]):
+                    all_complete=False;break
+                if (result.get('sleep_capture_complete') is not True or result.get('sleep_callback_errors') or result.get('sleep_native_abi')!=NATIVE_ABI or not isinstance(result.get('gen3_sleep'),dict) or result['gen3_sleep'].get('contract')!=GEN3_CONTRACT):
+                    errors=result.get('sleep_callback_errors') or ['Cattura sonno incompleta']
+                    await asyncio.to_thread(store().publish_processed,owner,[],{'status':'sleep_decode_failed','error':'Decodifica sonno da completare: '+str(errors[0])[:200]})
+                    all_complete=False;break
+        if all_complete:await asyncio.to_thread(store().finish_processing,owner,snapshot,replay)
 
 
 async def processing_loop():

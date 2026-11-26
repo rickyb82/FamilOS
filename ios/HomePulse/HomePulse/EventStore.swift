@@ -295,6 +295,16 @@ final class EventStore: @unchecked Sendable {
         do{let s=try statement("SELECT body FROM recorded_segments WHERE json_extract(CAST(body AS TEXT),'$.workoutID')=? ORDER BY started");defer{sqlite3_finalize(s)};bind(workoutID,s,1);var rows:[RecordedResult]=[];while sqlite3_step(s)==SQLITE_ROW{rows.append(try JSONDecoder().decode(RecordedResult.self,from:data(s,0)))};return rows}catch{return []}
     }}
 
+    func resolvePreparedRecorded(_ context:RecordedContext,accepted:Bool)throws{try guarded{try transaction{
+        guard load(RecordedContext.self,key:"recorded.prepared")?.token==context.token else{throw AppError.message("Avvio cardio non associabile")}
+        if accepted{try put(try JSONEncoder().encode(context),key:"recorded.context");try run("DELETE FROM kv WHERE key='recorded.latest.token'")}
+        try run("DELETE FROM kv WHERE key='recorded.prepared'")
+    }}}
+    func releaseRecordedContext(_ context:RecordedContext)throws{try guarded{try transaction{
+        guard load(RecordedContext.self,key:"recorded.context")?.token==context.token else{return}
+        _=try insert(kind:"device_status",payload:.object(["source":.string("recorded_capture_recovery"),"reason":.string("inactive_empty_or_closed_capture"),"token":.string(context.token),"after_row":.number(Double(context.afterRow)),"capture":try JSONDecoder().decode(JSONValue.self,from:JSONEncoder().encode(context))]),at:Date(),eventID:UUID())
+        try run("DELETE FROM kv WHERE key IN ('recorded.context','recorded.latest.token')")
+    }}}
     func currentRecordedResult()->RecordedResult?{guarded{
         if let token=load(String.self,key:"recorded.latest.token"),let s=try? statement("SELECT body FROM recorded_segments WHERE token=?"){
             defer{sqlite3_finalize(s)};bind(token,s,1)
@@ -319,7 +329,7 @@ final class EventStore: @unchecked Sendable {
         // Keep the in-flight model window and its exact preceding time/reset
         // anchor. Everything else can be recovered from the authoritative server.
         try run("DELETE FROM history_receipts WHERE digest IN (SELECT digest FROM history_receipts ORDER BY receipt_sequence DESC,digest LIMIT -1 OFFSET 8192)")
-        let context=load(RecordedContext.self,key:"recorded.context"),latest=currentRecordedResult()
+        let context=load(RecordedContext.self,key:"recorded.context"),prepared=load(RecordedContext.self,key:"recorded.prepared"),latest=currentRecordedResult()
         let current=context?.token ?? ""
         let receipt=try statement("SELECT revision,final FROM recorded_receipts WHERE token=?");bind(current,receipt,1)
         let terminalSaved=sqlite3_step(receipt)==SQLITE_ROW && sqlite3_column_int(receipt,1)==1 && Int(sqlite3_column_int(receipt,0)) >= (latest?.revision ?? Int.max)
@@ -327,16 +337,18 @@ final class EventStore: @unchecked Sendable {
         var protected:[Int64]=[]
         let anchors=try statement("SELECT max(rowid) FROM history_records WHERE substr(raw,1,1) IN (x'41',x'42') GROUP BY ring")
         while sqlite3_step(anchors)==SQLITE_ROW{protected.append(sqlite3_column_int64(anchors,0))};sqlite3_finalize(anchors)
-        if let context{
+        for context in [context,prepared].compactMap({$0}){
             let q=try statement("SELECT max(rowid) FROM history_records WHERE ring=? AND rowid<=? AND substr(raw,1,1) IN (x'41',x'42')");bind(context.ring,q,1);sqlite3_bind_int64(q,2,context.afterRow)
             if sqlite3_step(q)==SQLITE_ROW{protected.append(sqlite3_column_int64(q,0))};sqlite3_finalize(q)
         }
         let exclusions=protected.isEmpty ? "0":protected.map(String.init).joined(separator:",")
         var sql="DELETE FROM history_records WHERE synced=1 AND rowid NOT IN ("+exclusions+")"
-        if let context{
-            sql += terminalSaved ? " AND NOT(ring=? AND rowid>? AND substr(raw,1,1)=x'6c')":" AND NOT(ring=? AND rowid>? AND substr(raw,1,1) IN (x'41',x'42',x'6c',x'73',x'74'))"
-            let q=try statement(sql);bind(context.ring,q,1);sqlite3_bind_int64(q,2,context.afterRow);try done(q);sqlite3_finalize(q)
-        }else{try run(sql)}
+        var pins:[(RecordedContext,Bool)]=[]
+        if let context{pins.append((context,terminalSaved))};if let prepared{pins.append((prepared,false))}
+        for (_,terminal) in pins{sql += terminal ? " AND NOT(ring=? AND rowid>? AND substr(raw,1,1)=x'6c')":" AND NOT(ring=? AND rowid>? AND substr(raw,1,1) IN (x'41',x'42',x'6c',x'73',x'74'))"}
+        let deletion=try statement(sql)
+        for (i,pin) in pins.enumerated(){bind(pin.0.ring,deletion,Int32(i*2+1));sqlite3_bind_int64(deletion,Int32(i*2+2),pin.0.afterRow)}
+        try done(deletion);sqlite3_finalize(deletion)
         // An acknowledged final current segment needs only transition metadata.
         if terminalSaved,var result=latest,!result.points.isEmpty{
             result.points=[];let q=try statement("UPDATE recorded_segments SET body=? WHERE token=?");bind(try JSONEncoder().encode(result),q,1);bind(current,q,2);try done(q);sqlite3_finalize(q)

@@ -12,6 +12,7 @@ import json
 import math
 import os
 import struct
+from gen3_sleep import extract as extract_gen3_sleep
 
 LIBRARY_SHA256 = '163e10037c93ef70bd939641e0d391441e74cb4dd339946cd0a5421b91703f21'
 MAX_RECORDS = 65536
@@ -325,6 +326,7 @@ def calculate(data, *, library_path='/native/libappecore-compat.so', source_inpu
                 result['status'] = 'native_processing_failed'
         result['sleep_capture_complete'] = bool(success and not sleep_errors)
         result['sleep_outputs'] = sleep_outputs if result['sleep_capture_complete'] else []
+        result['gen3_sleep'] = extract_gen3_sleep(frames, mapped, verified=success)
     return result
 
 

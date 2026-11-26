@@ -14,7 +14,7 @@ SOURCE=Path(__file__).resolve().parents[1]/'updater/orbita_support/wellness.py'
 spec=importlib.util.spec_from_file_location('wellness_probe_test',SOURCE)
 wellness=importlib.util.module_from_spec(spec);spec.loader.exec_module(wellness)
 HEALTH={'configured':True,'library_sha256':wellness.LIBRARY_SHA256}
-VALID={'process_true':True,'deinit_returned':True,'version':[3,6,2],'input_record_count':16,'mapping':{'complete':True,'record_identity_verified':True},'sleep_native_abi':'ecore-3.6.2-linux-x86_64-sleep-output-200-v1','sleep_capture_complete':True,'sleep_outputs':[]}
+VALID={'process_true':True,'deinit_returned':True,'version':[3,6,2],'input_record_count':16,'mapping':{'complete':True,'record_identity_verified':True},'sleep_native_abi':'ecore-3.6.2-linux-x86_64-sleep-output-200-v1','sleep_capture_complete':True,'sleep_outputs':[],'gen3_sleep':{'contract':'gen3-bedtime76-native-clock-v1','periods':[]}}
 
 def response(value):return io.BytesIO(json.dumps(value).encode())
 def error(code,status):return HTTPError('http://127.0.0.1:8081/process',code,'synthetic',{},response({'status':status}))

@@ -69,6 +69,8 @@ def normalize_period(owner, row, now):
 
 def merge_period(previous, current):
     """A sparse full-history replay cannot erase previously captured details."""
+    if current.get("source")=="oura-ring-bedtime" and previous.get("source")=="oura-ecore":
+        return previous
     merged = dict(current)
     for key in ('total_sleep_seconds', 'stage_seconds', 'latency_seconds', 'efficiency',
                 'phases_30_seconds', 'phases_5_minutes'):
@@ -89,3 +91,33 @@ def verified_run(result):
             and isinstance(result.get('mapping'), dict) and result['mapping'].get('complete') is True
             and result.get('version') == NATIVE_VERSION and result.get('sleep_native_abi') == NATIVE_ABI
             and result.get('sleep_capture_complete') is True and not result.get('sleep_callback_errors'))
+
+
+GEN3_CONTRACT = 'gen3-bedtime76-native-clock-v1'
+
+
+def normalize_bedtime(owner, row, now):
+    """A firmware bedtime window cannot supply a total or any sleep phase."""
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+    if (row.get('source') != 'oura-ring-bedtime' or row.get('source_tag') != 0x76
+            or row.get('mapping_method') != 'original-outer-utc-plus-same-epoch-100ms-delta'
+            or not isinstance(row.get('boot_id'), str) or len(row['boot_id']) != 64):
+        raise ValueError('Unverified firmware bedtime source')
+    start = _number(row.get('started_at_utc_ms'), 1, (now+300)*1000) / 1000
+    end = _number(row.get('ended_at_utc_ms'), 1, (now+300)*1000) / 1000
+    if not 0 < end-start <= MAX_PERIOD_SECONDS:
+        raise ValueError('Invalid firmware bedtime interval')
+    duration = _number(row.get('time_in_bed_seconds'), 1, MAX_PERIOD_SECONDS)
+    if abs(duration-(end-start)) > .001:
+        raise ValueError('Firmware bedtime duration mismatch')
+    zone = ZoneInfo('Europe/Rome')
+    offsets = [int(datetime.fromtimestamp(t, timezone.utc).astimezone(zone).utcoffset().total_seconds()/60) for t in (start, end)]
+    identity = hashlib.sha256((str(owner) + '\0' + str(start)).encode()).hexdigest()[:32]
+    return {'id': 'sleep-' + identity, 'started_at': start, 'ended_at': end,
+            'time_zone_minutes': offsets[0], 'end_time_zone_minutes': offsets[1],
+            'display_time_zone': 'Europe/Rome', 'timezone_provenance': 'explicit-display-zone',
+            'time_in_bed_seconds': duration, 'total_sleep_seconds': None,
+            'stage_seconds': None, 'latency_seconds': None, 'efficiency': None,
+            'phases_30_seconds': None, 'phases_5_minutes': None,
+            'source': 'oura-ring-bedtime', 'source_tag': 0x76, 'native_version': list(NATIVE_VERSION)}

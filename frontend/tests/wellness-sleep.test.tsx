@@ -156,3 +156,12 @@ it('shows the selected sleep SpO2 aggregate, not the current pulse or an invente
   expect(within(card).getByText('98%')).toBeTruthy()
   expect(within(card).getByText('2 campioni · minimo 96% · massimo 99%')).toBeTruthy()
 })
+
+
+it('distinguishes firmware bedtime windows from unavailable sleep stages', async () => {
+  vi.spyOn(wellness, 'sleep').mockResolvedValue(response([period({source:'oura-ring-bedtime',total_sleep_seconds:null,stage_seconds:null,latency_seconds:null,efficiency:null,phases_30_seconds:null,phases_5_minutes:null})]))
+  render(<SleepPanel />)
+  await screen.findByText(/periodo a letto registrato dal firmware/)
+  expect(screen.getByText('SpO₂ · media nel periodo a letto')).toBeTruthy()
+  expect(screen.queryByRole('img', {name:'Fasi del sonno · sequenza relativa'})).toBeNull()
+})

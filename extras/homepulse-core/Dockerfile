@@ -10,7 +10,7 @@ RUN mkdir /compat && gcc -shared -fPIC -O2 bionic_shim.c \
 FROM python:3.12-slim-bookworm@sha256:82836454a795d9d75549a9e157fd08dbac6c383292cf89e99f4248a97ce6b2ff
 COPY --from=build /compat/libx.so /compat/libx.so
 WORKDIR /app
-COPY worker.py sandbox.py service.py ./
+COPY worker.py gen3_sleep.py sandbox.py service.py ./
 ENV PYTHONDONTWRITEBYTECODE=1 \
     LD_LIBRARY_PATH=/compat \
     HOME_PULSE_NATIVE_LIBRARY=/native/libappecore-compat.so \

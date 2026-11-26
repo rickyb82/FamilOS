@@ -30,6 +30,7 @@ struct AppArchiveSnapshot:Sendable {
     private var normalAverage=FiveReadingAverage()
     @Published private(set) var continuousCardio=false
     @Published private(set) var continuousStatus="Cardio esteso disattivato"
+    private var pendingSportStart:Bool?;private var pendingSportUntil=Date.distantPast
     private var controllingContinuous=false;private var nextContinuousAttempt=Date.distantPast
     private var readingBuffer:[Reading]=[];private var lastChartUpdate=Date.distantPast
     var bpm:Int?{heartDisplay.bpm};var sampleAt:Date?{heartDisplay.capturedAt}
@@ -90,6 +91,7 @@ struct AppArchiveSnapshot:Sendable {
             guard let self,let id=ring.logicalRingID else{throw AppError.message("Configurazione cardio incompleta")}
             try await recorded.prepare(ring:id,version:ring.capabilities[3] ?? 0,activity:activity,profile:settings.profile,workoutID:continuousCardio ? nil:current.map{$0.remoteID ?? $0.id.uuidString})
         }
+        ring.onRecordedStartResolved={[weak self] accepted in try await self?.recorded.resolvePreparedStart(accepted)}
         recorded.onResult={[weak self] value in self?.receiveRecorded(value)}
         ring.onIdle={[weak self] in self?.maintainContinuousCardio()}
         ring.onJournal={[weak self] in self?.api.upload()}
@@ -282,27 +284,27 @@ struct AppArchiveSnapshot:Sendable {
             }
             if recordedOnly,ring.recordedWorkoutProbeActive{return}
             try await ring.startSport(activity:UInt16(selected),age:age,resting:rest,recordedOnly:recordedOnly)
-        }catch{message=error.localizedDescription}
+            pendingSportStart=nil
+        }catch is OuraStartDeferred{pendingSportStart=recordedOnly;pendingSportUntil=Date().addingTimeInterval(900);continuousStatus="Allineamento storico · avvio automatico appena pronto";nextContinuousAttempt = .distantPast}
+        catch{pendingSportStart=nil;message=error.localizedDescription}
     }
     func stopRingSport()async {
-        if continuousCardio {
-            do{try await store.perform{try $0.save(false,key:"cardio.continuous.enabled")} }
-            catch{message="Arresto cardio non salvato: riprova";return}
-            continuousCardio=false;recorded.continuousMode=false;continuousStatus="Cardio esteso disattivato"
-        }
+        pendingSportStart=nil
         await ring.stopSport()
+        if continuousCardio{continuousStatus="Completo il segmento · ripresa automatica";nextContinuousAttempt=Date().addingTimeInterval(5)}
     }
     func setContinuousCardio(_ enabled:Bool)async {
         do{
             try await store.perform{try $0.save(enabled,key:"cardio.continuous.enabled")}
             continuousCardio=enabled;recorded.continuousMode=enabled;nextContinuousAttempt = .distantPast
+            if !enabled{pendingSportStart=nil}
             if !enabled,current==nil{await ring.stopSport()}
             continuousStatus=enabled ? "Cardio esteso attivo · diario separato":"Cardio esteso disattivato"
             maintainContinuousCardio()
         }catch{message="Preferenza cardio non salvata"}
     }
     private func maintainContinuousCardio(){
-        guard continuousCardio,!controllingContinuous,!changingWorkout,ring.ready,!ring.busy,!ring.spo2ProbeActive,Date()>=nextContinuousAttempt else{return}
+        guard (continuousCardio || (pendingSportStart != nil && Date()<pendingSportUntil)),!controllingContinuous,!changingWorkout,ring.ready,!ring.busy,!ring.spo2ProbeActive,Date()>=nextContinuousAttempt else{return}
         nextContinuousAttempt=Date().addingTimeInterval(10);controllingContinuous=true
         Task{defer{controllingContinuous=false}
             // Charging is an explicit ring state. Missing HR is not a wear sensor.
@@ -318,12 +320,13 @@ struct AppArchiveSnapshot:Sendable {
             }
             guard recorded.canPrepare else{return}
             if recorded.hasContext,recorded.result?.final != true {
-                recorded.historyChanged();continuousStatus="Completo il segmento cardio prima di riprendere";return
+                recorded.historyChanged()
+                if ring.historyAligned,(try? await ring.activityIsInactive()) == true,await recorded.releaseInactiveCapture(){}else{continuousStatus="Completo il segmento cardio prima di riprendere";return}
             }
             guard let age=settings.profile.age,let resting=settings.profile.resting_hr else{continuousStatus="Completa il profilo per il cardio esteso";return}
             let activity=current?.config.activity_id ?? settings.config.activity_id ?? 65535
             guard (0...65535).contains(activity) else{return}
-            do{try await ring.startSport(activity:UInt16(activity),age:age,resting:resting,recordedOnly:true);continuousStatus="Cardio esteso attivo · diario separato"}
+            do{try await ring.startSport(activity:UInt16(activity),age:age,resting:resting,recordedOnly:pendingSportStart ?? true);pendingSportStart=nil;continuousStatus="Cardio esteso attivo · diario separato"}
             catch{continuousStatus=error.localizedDescription;nextContinuousAttempt=Date().addingTimeInterval(30)}
         }
     }
@@ -407,7 +410,7 @@ struct AppArchiveSnapshot:Sendable {
     }
     func refreshSleep()async{
         guard enrolled,!refreshingSleep else{return};refreshingSleep=true;defer{refreshingSleep=false}
-        do{let value=try await api.request(path:"mobile/sleep",query:[URLQueryItem(name:"days",value:"14")]);sleepData=value;sleepStatus=""}
+        do{let value=try await api.request(path:"mobile/sleep",query:[URLQueryItem(name:"days",value:"14")]);sleepData=value;sleepStatus=value["processing_error"].string ?? ""}
         catch{sleepStatus=sleepData == .null ? "Sonno non disponibile: riprova quando il server è raggiungibile":"Ultimi dati di questa apertura · aggiornamento rinviato"}
     }
     private func decode<T:Decodable>(_ type:T.Type,_ value:JSONValue)->T?{guard value != .null,let d=try? JSONEncoder().encode(value) else{return nil};return try? JSONDecoder().decode(type,from:d)}

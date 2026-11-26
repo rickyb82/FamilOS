@@ -237,7 +237,8 @@ checks={'process_true':result.get('process_true') is True,'deinit_returned':resu
  'mapping_complete':result.get('mapping',{}).get('complete') is True,
  'record_identity_verified':result.get('mapping',{}).get('record_identity_verified') is True,
  'sleep_native_abi':result.get('sleep_native_abi')=='ecore-3.6.2-linux-x86_64-sleep-output-200-v1',
- 'sleep_capture_complete':result.get('sleep_capture_complete') is True,'sleep_outputs_type':isinstance(result.get('sleep_outputs'),list)}
+ 'sleep_capture_complete':result.get('sleep_capture_complete') is True,'sleep_outputs_type':isinstance(result.get('sleep_outputs'),list),
+ 'gen3_sleep_contract':isinstance(result.get('gen3_sleep'),dict) and result['gen3_sleep'].get('contract')=='gen3-bedtime76-native-clock-v1'}
 if not all(checks.values()):fail('native_contract',checks=checks)
 print(json.dumps({'ok':True,'synthetic_records':16}))
 '''
@@ -264,7 +265,7 @@ def _probe(root, fixture):
             if type(report.get(key)) is bool:details[key] = report[key]
         if report.get('worker_status') in ('busy','not_configured','timeout','native_job_failed','worker_error','unauthorized','invalid_input','result_mismatch','output_limit'):details['worker_status'] = report['worker_status']
         checks = report.get('checks')
-        if isinstance(checks,dict):details['checks'] = {k:v for k,v in checks.items() if k in ('process_true','deinit_returned','version','input_record_count','mapping_complete','record_identity_verified','sleep_native_abi','sleep_capture_complete','sleep_outputs_type') and type(v) is bool}
+        if isinstance(checks,dict):details['checks'] = {k:v for k,v in checks.items() if k in ('process_true','deinit_returned','version','input_record_count','mapping_complete','record_identity_verified','sleep_native_abi','sleep_capture_complete','sleep_outputs_type','gen3_sleep_contract') and type(v) is bool}
         raise RuntimeError('Verifica HTTP/nativa sintetica fallita: '+json.dumps(details)+'; nessuna misura promossa')
 
 
