@@ -109,6 +109,11 @@ export default memo(function SleepPanel({ demo = false, visible = true }: { demo
           {period.spo2?.sample_count ? <p>{period.spo2.sample_count} campioni · minimo {period.spo2.minimum}% · massimo {period.spo2.maximum}%</p> : <p>Nessun campione SpO₂ elaborato in questo periodo.</p>}
           <p className="wl-note">Media dei campioni nel periodo di sonno. La data si riferisce al sonno selezionato.</p>
         </section>
+        <section className="wl-card" aria-label="Respiro durante il sonno"><h2>Respiro · periodo selezionato</h2>
+          <strong>{period.respiratory_rate?.average == null ? '—' : `${valueLabel(period.respiratory_rate.average, 1)} resp/min`}</strong>
+          {period.respiratory_rate?.sample_count ? <p>{period.respiratory_rate.sample_count} campioni · minimo {valueLabel(period.respiratory_rate.minimum, 1)} · massimo {valueLabel(period.respiratory_rate.maximum, 1)} resp/min</p> : <p>Nessun campione respiratorio disponibile in questo periodo.</p>}
+          <p className="wl-note">Media delle medie registrate dal firmware nel periodo selezionato. Dato storico; non è il conteggio dei singoli respiri.</p>
+        </section>
         <SleepPhases key={period.id} period={period} />
         <div className="wl-sleep-foot"><span>Latenza <strong>{sleepDuration(period.latency_seconds)}</strong></span><span>Efficienza <strong>{period.efficiency == null ? '—' : `${valueLabel(period.efficiency)}%`}</strong></span><span>{data?.last_processed_at != null ? `Ultima elaborazione ${dateLabel(data.last_processed_at)} · ${timeLabel(data.last_processed_at)}` : 'Elaborazione in attesa'}</span></div>
       </>}

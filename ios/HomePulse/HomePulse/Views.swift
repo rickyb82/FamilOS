@@ -289,6 +289,13 @@ struct SleepView:View {
                     Text("\(Int(period.spo2["sample_count"].number ?? 0)) campioni · minimo \(Int(period.spo2["minimum"].number ?? 0))% · massimo \(Int(period.spo2["maximum"].number ?? 0))%").font(.caption).foregroundStyle(.secondary)
                 }else{Text("—").font(.title2);Text("Nessun campione SpO₂ elaborato in questo periodo.").font(.caption).foregroundStyle(.secondary)}
             }
+            Card(title:"Respiro · periodo selezionato"){
+                if let average=period.breathing["average"].number{
+                    Text("\(average,specifier:"%.1f") respiri/min").font(.title2.bold())
+                    Text("\(Int(period.breathing["sample_count"].number ?? 0)) campioni · minimo \(period.breathing["minimum"].number ?? 0,specifier:"%.1f") · massimo \(period.breathing["maximum"].number ?? 0,specifier:"%.1f")").font(.caption).foregroundStyle(.secondary)
+                    Text("Media delle medie registrate dal firmware nel periodo selezionato.").font(.caption).foregroundStyle(.secondary)
+                }else{Text("—").font(.title2);Text("Nessun campione respiratorio disponibile in questo periodo.").font(.caption).foregroundStyle(.secondary)}
+            }
             if !period.stages.isEmpty{Card(title:"Fasi del sonno"){
                 ForEach([("awake","Sveglio"),("rem","REM"),("light","Leggero"),("deep","Profondo")],id:\.0){key,name in
                     HStack{Text(name);Spacer();Text(period.stages[key].map{$0.durationText} ?? "—").monospacedDigit()}

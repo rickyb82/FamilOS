@@ -8,7 +8,8 @@ from collections import defaultdict
 import hashlib
 import json
 
-CONTRACT = 'ecore-gen3-bedtime-overlap18h-v1'
+CONTRACT = 'ecore-gen3-physiology-overlap18h-v2'
+SENSOR_MAPPING_ABI = 'native-mapped-sensors-47-50-62-6a-v2'
 JOB_RECORDS = 60000
 WORKER_RECORD_LIMIT = 65536
 OVERLAP_TICKS = 18 * 3600 * 10

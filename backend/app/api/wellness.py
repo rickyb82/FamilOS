@@ -262,7 +262,7 @@ async def process_history_once():
                 await asyncio.to_thread(store().publish_processed,owner,records,result,False)
                 if not (result.get('status')=='ok' and result.get('process_true') is True and result.get('deinit_returned') is True and isinstance(result.get('mapping'),dict) and result['mapping'].get('complete') is True and result.get('version')==[3,6,2]):
                     all_complete=False;break
-                if (result.get('sleep_capture_complete') is not True or result.get('sleep_callback_errors') or result.get('sleep_native_abi')!=NATIVE_ABI or not isinstance(result.get('gen3_sleep'),dict) or result['gen3_sleep'].get('contract')!=GEN3_CONTRACT):
+                if (result.get('sleep_capture_complete') is not True or result.get('sleep_callback_errors') or result.get('sleep_native_abi')!=NATIVE_ABI or not isinstance(result.get('gen3_sleep'),dict) or result['gen3_sleep'].get('contract')!=GEN3_CONTRACT or result.get('sensor_mapping_abi')!=processing.SENSOR_MAPPING_ABI):
                     errors=result.get('sleep_callback_errors') or ['Cattura sonno incompleta']
                     await asyncio.to_thread(store().publish_processed,owner,[],{'status':'sleep_decode_failed','error':'Decodifica sonno da completare: '+str(errors[0])[:200]})
                     all_complete=False;break

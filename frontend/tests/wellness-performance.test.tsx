@@ -86,3 +86,22 @@ it('fetches history only on the dashboard and resumes live requests after visibi
   expect(state).toHaveBeenCalledTimes(stateCount + 1)
   expect(analysis).toHaveBeenCalledTimes(3)
 })
+
+it('shows numeric scales aligned with plotted values and units in point details', () => {
+  const points = [{t:0,v:60},{t:1,v:90},{t:2,v:120}]
+  const {container} = render(<LinePlot points={points} start={0} end={2} kind="heart" color="green" unit="BPM" label="Battito sintetico" />)
+  const labels = [...container.querySelectorAll('.wl-y-axis span')].map(node => node.textContent)
+  expect(labels).toEqual(['130,8','90','49,2'])
+  const circles = [...container.querySelectorAll('circle')]
+  expect(Number(circles[1].getAttribute('cy'))).toBeCloseTo(44)
+  expect(circles[1].querySelector('title')?.textContent).toContain('90 BPM')
+  fireEvent.click(circles[1])
+  expect(container.querySelector('output')?.textContent).toContain('90 BPM')
+  expect(points.map(point => point.v)).toEqual([60,90,120])
+})
+
+it('does not invent numeric scale labels for an empty metric', () => {
+  const {container} = render(<LinePlot points={[]} start={0} end={10} kind="dots" color="green" unit="%" label="SpO₂" />)
+  expect(container.querySelectorAll('.wl-y-axis span')).toHaveLength(0)
+  expect(screen.getByText('Nessuna rilevazione in questo periodo')).toBeTruthy()
+})

@@ -503,3 +503,17 @@
   .wl-sleep-axis > span:nth-child(2) { display: none; }
   .wl-sleep-foot > span:last-child { flex-basis: 100%; margin-left: 0; }
 }
+
+/* Fixed-width HTML tick labels stay readable on TV and phones. */
+.wl-plot { display: grid; grid-template-columns: 58px minmax(0, 1fr); }
+.wl-y-axis { position: relative; height: 100%; color: #a9bdb6; font-size: 11px; font-variant-numeric: tabular-nums; }
+.wl-y-axis > span { position: absolute; right: 10px; transform: translateY(-50%); white-space: nowrap; }
+.wl-plot-surface { position: relative; min-width: 0; height: 100%; }
+.wl-shared-axis > div { margin-left: 58px; }
+.wl-point-detail { position: absolute; top: 0; right: 0; z-index: 2; padding: 4px 7px; border: 1px solid var(--wl-border); border-radius: 5px; background: #142a2a; color: #eff9f2; font-size: 11px; pointer-events: none; }
+.wl-scale-note { color: var(--wl-muted); font-size: 11px; line-height: 1.5; margin: 14px 0 0; }
+
+.wl-shared-axis > div { position: relative; min-height: 25px; }
+.wl-shared-axis > div > span { position: absolute; top: 0; transform: translateX(-50%); max-width: 110px; text-align: center; }
+.wl-shared-axis > div > span:first-child { transform: none; text-align: left; }
+.wl-shared-axis > div > span:last-child { transform: translateX(-100%); text-align: right; }

@@ -45,3 +45,12 @@ Il branch non modifica `main`. Gli aggiornamenti futuri del modulo passano dalla
 Il backend elabora al massimo60000record per blocco, più gli ancoraggi originali. Fra blocchi mantiene18ore di sovrapposizione per conservare interi periodi notturni fino a16ore. Salva gli output validi e la loro identità; dopo un’interruzione riusa i blocchi riusciti. Il checkpoint complessivo avanza soltanto quando tutti i blocchi sono riusciti. I cicli successivi riprendono la coda temporale e gli eventuali record tardivi, senza eliminare lo storico principale. Limiti di densità o errori HTTP sono espliciti, senza trasformarli in una generica indisponibilità del motore.
 
 Per Gen3 il record0x76 produce il periodo a letto solo con copertura completa nello stesso avvio e senza discontinuità dell’orologio. Non produce fasi né sonno totale. La tab Sonno distingue questa sorgente e mostra gli errori di elaborazione; le fasi native legacy, quando presenti, hanno precedenza sui riepiloghi incompleti.
+
+
+## Respiro Gen3 e scale dei grafici
+
+Il record SleepPeriodInfo2 standard0x6a fornisce media e deviazione respiratoria in ottavi di respiro/minuto. Il backend usa il mapping UTC nativo verificato, conserva sorgente, valore grezzo e metadati e pubblica i nuovi campioni su Diario, analisi, esportazioni e tool Emily. Zero resta nei record originali ma viene mostrato come non disponibile: è una policy dell’integrazione, non un sentinel dimostrato del firmware. Non si ricava il respiro dal battito e non si attribuisce una finestra temporale sconosciuta a ciascuna media.
+
+Il pannello Sonno mostra media, minimo, massimo e numero di campioni respiratori nel periodo selezionato. La media è quella delle medie firmware disponibili, distinta dall’aggregazione notturna proprietaria Oura. I dati restano storici, con gli istanti di acquisizione originali.
+
+Ogni grafico ha tre etichette numeriche verticali allineate alla propria griglia, unità esplicita e dettaglio di ora/valore/unità al passaggio o al tocco sui punti. Le scale si adattano ai dati e possono differire fra metriche; le barre partono da zero. La linea di fine allenamento e l’asse temporale condividono la stessa superficie del disegno. Nei periodi di almeno24ore l’asse mostra anche le date. La serie Passi è affiancata a battito, SpO₂, temperatura, movimento e respiro. I campioni originali e le interruzioni restano invariati.

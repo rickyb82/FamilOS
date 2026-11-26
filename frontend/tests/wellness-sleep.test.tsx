@@ -165,3 +165,11 @@ it('distinguishes firmware bedtime windows from unavailable sleep stages', async
   expect(screen.getByText('SpO₂ · media nel periodo a letto')).toBeTruthy()
   expect(screen.queryByRole('img', {name:'Fasi del sonno · sequenza relativa'})).toBeNull()
 })
+
+
+it('shows respiratory means only for the selected sleep period', async () => {
+  vi.spyOn(wellness, 'sleep').mockResolvedValue(response([period({respiratory_rate:{sample_count:10,average:16.2,minimum:15,maximum:18,source:'oura-firmware-sleep-period-history',aggregation:'arithmetic-mean-of-record-means',is_live:false}})]))
+  render(<SleepPanel />)
+  await screen.findByText('16,2 resp/min')
+  expect(screen.getByText(/10 campioni · minimo 15 · massimo 18 resp\/min/)).toBeTruthy()
+})

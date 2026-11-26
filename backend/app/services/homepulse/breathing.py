@@ -73,3 +73,39 @@ def extract_breathing_records(capture):
         if raw and raw[0] == ON_DEMAND_MEAS_TAG:
             result.append(decode_breathing_record(raw))
     return result
+
+
+SLEEP_INFO_TAG = 0x6a
+
+
+def decode_sleep_breathing_record(frame):
+    """Gen3 SleepPeriodInfo2 mean, directly encoded by the firmware.
+
+    Proven native parser fields: payload4/8 and payload5/8. This preserves
+    the original mean/variability, without treating sleepState as quality,
+    inventing an averaging window or deriving breathing from heart rate.
+    """
+    if not isinstance(frame, (bytes, bytearray, memoryview)):
+        raise OuraProtocolError('Il record respiratorio deve contenere byte')
+    frame = bytes(frame)
+    _complete(frame, 16, SLEEP_INFO_TAG)
+    if not 16 <= len(frame) <= 20:
+        raise OuraProtocolError('Layout SleepPeriodInfo2 non riconosciuto')
+    payload = frame[6:]
+    if payload[6] > 120 or payload[7] not in (0, 1, 2):
+        raise OuraProtocolError('Campi SleepPeriodInfo2 fuori dal contratto firmware')
+    raw = payload[4]
+    return {
+        'source': 'oura-firmware-sleep-period-history',
+        'record_tag': SLEEP_INFO_TAG,
+        'timestamp_raw': int.from_bytes(frame[2:6], 'little'),
+        'average_breathing_rate_per_minute': raw / 8 if raw else None,
+        'std_breathing_rate_per_minute': payload[5] / 8,
+        'breathing_rate_raw_eighths': raw,
+        'zero_display_policy': 'zero-not-published',
+        'available': raw != 0,
+        'unavailable_reason': None if raw else 'Valore zero non mostrato come misura respiratoria',
+        'is_live': False, 'averaging_window_seconds': None,
+        'physiological_quality_validated': False,
+        'sleep_state_raw': payload[7], 'payload_length': len(payload),
+    }

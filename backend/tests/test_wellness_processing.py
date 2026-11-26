@@ -44,7 +44,7 @@ def test_resume_cache_and_incremental_tail_are_owner_scoped(tmp_path):
             db.execute('INSERT INTO history(owner_id,ring_id,raw_hex,digest,tag,cursor,received_at) VALUES(?,?,?,?,?,?,?)',('a',row['ring_id'],row['raw_hex'],row['digest'],row['tag'],row['cursor'],time.time()))
     snapshot=store.processing_snapshot('a');jobs,replay=processing.plan(snapshot['records'])
     digest=processing.input_hash(jobs[0])
-    result={'status':'ok','process_true':True,'deinit_returned':True,'version':[3,6,2],'mapping':{'complete':True},'sleep_native_abi':NATIVE_ABI,'sleep_capture_complete':True,'source_input_sha256':digest,'gen3_sleep':{'contract':gen3.CONTRACT,'periods':[]}}
+    result={'status':'ok','process_true':True,'deinit_returned':True,'version':[3,6,2],'mapping':{'complete':True},'sleep_native_abi':NATIVE_ABI,'sleep_capture_complete':True,'source_input_sha256':digest,'sensor_mapping_abi':'native-mapped-sensors-47-50-62-6a-v2','gen3_sleep':{'contract':gen3.CONTRACT,'periods':[]}}
     store.publish_processed('a',jobs[0],result,False)
     assert store.pending_owners()==['a']
     assert store.cached_processing_job('a',digest)==result
@@ -128,7 +128,7 @@ async def test_interrupted_replay_reuses_completed_job_and_only_commits_complete
             payload={'schema':'standard-ring-events-raw-hex-v1','records':json['records']}
             import json as codec
             digest=hashlib.sha256(codec.dumps(payload,separators=(',',':')).encode()).hexdigest()
-            return httpx.Response(200,json={'status':'ok','process_true':True,'deinit_returned':True,'version':[3,6,2],'input_record_count':len(json['records']),'source_input_sha256':digest,'mapping':{'complete':True},'sleep_native_abi':NATIVE_ABI,'sleep_capture_complete':True,'gen3_sleep':{'contract':gen3.CONTRACT,'periods':[]}})
+            return httpx.Response(200,json={'status':'ok','process_true':True,'deinit_returned':True,'version':[3,6,2],'input_record_count':len(json['records']),'source_input_sha256':digest,'mapping':{'complete':True},'sleep_native_abi':NATIVE_ABI,'sleep_capture_complete':True,'sensor_mapping_abi':'native-mapped-sensors-47-50-62-6a-v2','gen3_sleep':{'contract':gen3.CONTRACT,'periods':[]}})
     monkeypatch.setattr(wellness.httpx,'AsyncClient',Client)
     await wellness.process_history_once()
     assert store.pending_owners()==['a']

@@ -20,6 +20,7 @@ MAX_INPUT_BYTES = 4_000_000
 MAX_SLEEP_OUTPUTS = 1024
 MAX_SLEEP_ERRORS = 16
 SLEEP_OUTPUT_BYTES = 200
+SENSOR_MAPPING_ABI = 'native-mapped-sensors-47-50-62-6a-v2'
 SLEEP_ABI = 'ecore-3.6.2-linux-x86_64-sleep-output-200-v1'
 SLEEP_CALLBACK = C.CFUNCTYPE(None, C.c_void_p, C.c_void_p)
 
@@ -136,7 +137,7 @@ def _records(data):
 
 
 def _mapped_sensor_record(raw, utc):
-    if raw[0] not in (0x47, 0x50, 0x62):
+    if raw[0] not in (0x47, 0x50, 0x62, 0x6a):
         return None
     return {'record_sha256': hashlib.sha256(raw[:raw[1] + 2]).hexdigest(),
             'utc_ms': utc, 'tag_raw': raw[0]}
@@ -301,7 +302,7 @@ def calculate(data, *, library_path='/native/libappecore-compat.so', source_inpu
                   'sleep_outputs': [], 'sleep_callback_errors': sleep_errors,
                   'sleep_capture_complete': False, 'sleep_native_abi': SLEEP_ABI,
                   'spo2_outputs': spo2 if process_result is True and not callback_errors else [],
-                  'mapped_temperatures': temperatures,'mapped_sensor_records':sensor_times, 'deinit_returned': False,
+                  'mapped_temperatures': temperatures,'mapped_sensor_records':sensor_times,'sensor_mapping_abi':SENSOR_MAPPING_ABI, 'deinit_returned': False,
                   'medical_validation_claimed': False, 'user_profile_used': False, 'published_as_valid_measurement': False, 'architecture': 'x86_64',
                   'quality_rule': 'raw native quality; caller chooses a documented display policy',
                   'limitations': ['Post-session history, not live SpO2', 'Only the tested ecore 3.6.2 ABI',

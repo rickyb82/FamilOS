@@ -26,7 +26,7 @@ from .protocol import OuraProtocolError, parse_live
 from .history import describe_raw_record, split_history_packet
 from .activity import parse_exercise_latest
 from .motion import parse_motion_record, parse_activity_record
-from .breathing import decode_breathing_record
+from .breathing import decode_breathing_record, decode_sleep_breathing_record
 from .workout import validate_profile, validate_plan, composition, schedule, energy_for_interval
 from .sleep import GEN3_CONTRACT, normalize_bedtime, normalize_period, merge_period, verified_run, MAX_PERIODS_PER_RUN, NATIVE_ABI
 from . import recorded, spo2, processing as history_processing
@@ -490,6 +490,8 @@ class HomePulseStore:
                 (owner,start,now))]
             for period in periods:
                 period['spo2']=spo2.aggregate(db,owner,period['started_at'],period['ended_at'])
+                rate=db.execute("SELECT count(*),avg(value),min(value),max(value) FROM points WHERE owner_id=? AND kind='respiratory_rate' AND source='oura-firmware-sleep-period-history' AND t>=? AND t<=?",(owner,period['started_at'],period['ended_at'])).fetchone()
+                period['respiratory_rate']={'sample_count':rate[0],'average':rate[1],'minimum':rate[2],'maximum':rate[3],'source':'oura-firmware-sleep-period-history','aggregation':'arithmetic-mean-of-record-means','is_live':False}
             processing=db.execute('SELECT status,last_processed_at,error FROM processing WHERE owner_id=?',(owner,)).fetchone()
         return {'server_time':now,'window_start':start,'window_end':now,'periods':periods,
                 'processing_status':processing['status'] if processing else 'In attesa di record storici',
@@ -694,7 +696,7 @@ class HomePulseStore:
             if not success:return
             if checkpoint:
                 db.execute('INSERT OR IGNORE INTO processing_features VALUES(?,?)',(owner,history_processing.CONTRACT))
-            if verified_run(result) and isinstance(result.get('gen3_sleep'),dict) and result['gen3_sleep'].get('contract')==GEN3_CONTRACT and not checkpoint:
+            if verified_run(result) and isinstance(result.get('gen3_sleep'),dict) and result['gen3_sleep'].get('contract')==GEN3_CONTRACT and result.get('sensor_mapping_abi')==history_processing.SENSOR_MAPPING_ABI and not checkpoint:
                 db.execute('INSERT OR REPLACE INTO processing_jobs VALUES(?,?,?,?)',(owner,history_processing.CONTRACT,result['source_input_sha256'],result_digest))
             if checkpoint and result.get('sleep_native_abi')==NATIVE_ABI:
                 # This is a decoder-attempt checkpoint. Failed/empty callbacks
@@ -738,8 +740,9 @@ class HomePulseStore:
                     elif record['tag']==0x50:
                         decoded=parse_activity_record(raw,utc_ms=row['utc_ms'])
                         self._point(db,owner,'steps',stamp,decoded['step_count'],'oura-activity-history',record['digest'],metadata=decoded)
-                    elif record['tag']==0x62:
-                        decoded=decode_breathing_record(raw)
+                    elif record['tag'] in (0x62,0x6a):
+                        if record['tag']==0x6a and not (result.get('version')==[3,6,2] and isinstance(result.get('mapping'),dict) and result['mapping'].get('complete') is True and result.get('sensor_mapping_abi')==history_processing.SENSOR_MAPPING_ABI):continue
+                        decoded=(decode_sleep_breathing_record if record['tag']==0x6a else decode_breathing_record)(raw)
                         if decoded.get('available'):
-                            self._point(db,owner,'respiratory_rate',stamp,decoded['average_breathing_rate_per_minute'],'oura-firmware-history',record['digest'],metadata=decoded)
+                            self._point(db,owner,'respiratory_rate',stamp,decoded['average_breathing_rate_per_minute'],decoded['source'] if record['tag']==0x6a else 'oura-firmware-history',record['digest'],metadata=decoded)
                 except (OuraProtocolError,ValueError,TypeError,KeyError):continue

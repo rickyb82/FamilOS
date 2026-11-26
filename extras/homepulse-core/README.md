@@ -94,3 +94,6 @@ Il timeout di produzione è applicato dal servizio; per una CLI manuale interrom
 
 
 Il callback sleepinfo sopra descritto appartiene al percorso legacy inizializzato dal record0x49. I record moderni Gen3 non lo inizializzano da soli. `gen3_sleep` espone separatamente il contratto `gen3-bedtime76-native-clock-v1`: finestre firmware0x76, header/start/end nello stesso contatore100ms, UTC derivato dall’originale mapping nativo. Una finestra richiede ancoraggio di avvio, copertura dal suo inizio fino all’header, durata fino a16ore e offset UTC coerente entro un quanto100ms. Copertura parziale, reset, salti d’orologio e framing sconosciuto vengono contati tra i rifiuti. Sono periodi a letto, con sonno totale e fasi nulli. SleepNet moderno e i suoi operatori non sono implementati da questo estrattore.
+
+
+`sensor_mapping_abi=native-mapped-sensors-47-50-62-6a-v2` include i timestamp originali dei record SleepPeriodInfo2 Gen30x6a. Il decoder del backend accetta il prefisso standard completo16..20byte: payload4/8 media respiratoria e payload5/8 deviazione; movimento0..120 e stato0..2 seguono i controlli del parser nativo. Non aggiunge una conversione×60. La qualità respiratoria non è certificata da questi campi e la media del periodo esposta dal backend non pretende di replicare l’aggregatore Oura finale.

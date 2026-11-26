@@ -121,7 +121,7 @@ it('suppresses a recent but invalid contact reading and preserves the historical
   const { container } = render(<Wellness />)
   await screen.findByText('Il segnale richiede una verifica')
   expect(container.querySelector('.wl-heart-value strong')?.textContent).toBe('—')
-  expect(screen.getByRole('img', { name: 'Battito, istanti di acquisizione' })).toBeTruthy()
+  expect(screen.getByRole('img', { name: 'Battito, istanti di acquisizione · BPM' })).toBeTruthy()
 })
 
 it('can resume or finish a paused session even when active_session is null', async () => {
@@ -160,7 +160,7 @@ it('leaves breathing empty without its own historical records even with a live h
   expect(await screen.findByText('Nessun record del respiro disponibile')).toBeTruthy()
   const card = screen.getByText('Frequenza respiratoria').closest('.wl-sensor')!
   expect(card.querySelector('strong')?.textContent?.trim()).toBe('—')
-  const chart = screen.getByRole('img', { name: 'Respiro, istanti di acquisizione' })
+  const chart = screen.getByRole('img', { name: 'Respiro, istanti di acquisizione · resp/min' })
   expect(chart.querySelectorAll('circle')).toHaveLength(0)
 })
 
@@ -172,9 +172,9 @@ it('plots breathing from its source UTC timestamp and shows its historical rate'
   vi.mocked(wellness.analysis).mockResolvedValue(analysis)
   render(<Wellness />)
   await waitFor(() => expect(screen.getByText('Frequenza respiratoria').closest('.wl-sensor')?.textContent).toContain('15,5'))
-  const chart = screen.getByRole('img', { name: 'Respiro, istanti di acquisizione' })
+  const chart = screen.getByRole('img', { name: 'Respiro, istanti di acquisizione · resp/min' })
   expect(chart.querySelectorAll('circle')).toHaveLength(1)
-  expect(Number(chart.querySelector('circle')?.getAttribute('cx'))).toBeCloseTo(8 + 872 * 2 / 3)
+  expect(Number(chart.querySelector('circle')?.getAttribute('cx'))).toBeCloseTo(900 * 2 / 3)
 })
 
 it('signals a newer outside-display heart reading without presenting its value as the primary BPM', async () => {

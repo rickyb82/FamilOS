@@ -62,6 +62,7 @@ export type SleepPeriod = {
   total_sleep_seconds: number | null; stage_seconds: { awake: number; rem: number; light: number; deep: number } | null
   latency_seconds: number | null; efficiency: number | null
   phases_30_seconds: string | null; phases_5_minutes: string | null
+  respiratory_rate?: {sample_count:number;average:number|null;minimum:number|null;maximum:number|null;source:string;aggregation:string;is_live:boolean}
   spo2?: SpO2Aggregate
   source: 'oura-ecore' | 'oura-ring-bedtime'; display_time_zone?: string; native_version: [number, number, number]
 }

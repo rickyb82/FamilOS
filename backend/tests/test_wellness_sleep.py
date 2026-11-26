@@ -193,7 +193,7 @@ async def test_sleep_auth_owner_separation_days_and_device_revocation(admin, ann
     assert set(body) == {'server_time', 'window_start', 'window_end', 'periods', 'processing_status', 'last_processed_at', 'processing_error'}
     assert body['window_end'] - body['window_start'] == 14 * 86400
     assert len(body['periods']) == 1
-    assert set(body['periods'][0]) == {'id', 'started_at', 'ended_at', 'time_zone_minutes', 'end_time_zone_minutes', 'time_in_bed_seconds', 'spo2',
+    assert set(body['periods'][0]) == {'id', 'started_at', 'ended_at', 'time_zone_minutes', 'end_time_zone_minutes', 'time_in_bed_seconds', 'spo2', 'respiratory_rate',
               'total_sleep_seconds', 'stage_seconds', 'latency_seconds', 'efficiency',
               'phases_30_seconds', 'phases_5_minutes', 'source', 'native_version'}
     empty = (await anna.get('/api/wellness/v1/sleep', params={'owner_id': admin_id})).json()

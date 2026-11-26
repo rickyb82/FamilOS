@@ -245,7 +245,7 @@ class ShapeTests(unittest.TestCase):
             prepare_native.patch_library(b'not-the-reviewed-ELF')
 
     def test_mapped_motion_steps_and_breathing_only_use_existing_utc(self):
-        for tag in (0x47, 0x50, 0x62):
+        for tag in (0x47, 0x50, 0x62, 0x6a):
             original = bytes([tag, 5, 1, 0, 0, 0, 99])
             result = worker._mapped_sensor_record(original + bytes(13), 1577836800000)
             self.assertEqual(result, {'record_sha256': hashlib.sha256(original).hexdigest(),
