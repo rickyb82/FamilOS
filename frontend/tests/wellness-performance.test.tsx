@@ -3,7 +3,7 @@ import React from 'react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import Wellness from '../src/pages/Wellness'
-import { LinePlot } from '../src/pages/WellnessCharts'
+import { LinePlot, MiniHeart, plotScale } from '../src/pages/WellnessCharts'
 import * as model from '../src/lib/wellness'
 
 vi.mock('../src/lib/auth', () => ({ useAuth: () => ({ me: { user: { id: 'synthetic-adult', role: 'adult', display_name: 'Ada' } } }) }))
@@ -90,10 +90,12 @@ it('fetches history only on the dashboard and resumes live requests after visibi
 it('shows numeric scales aligned with plotted values and units in point details', () => {
   const points = [{t:0,v:60},{t:1,v:90},{t:2,v:120}]
   const {container} = render(<LinePlot points={points} start={0} end={2} kind="heart" color="green" unit="BPM" label="Battito sintetico" />)
-  const labels = [...container.querySelectorAll('.wl-y-axis span')].map(node => node.textContent)
-  expect(labels).toEqual(['130,8','90','49,2'])
+  const labels = [...container.querySelectorAll('.wl-y-axis-left span')].map(node => node.textContent)
+  const rightLabels = [...container.querySelectorAll('.wl-y-axis-right span')].map(node => node.textContent)
+  expect(labels).toEqual(['150','100','50'])
+  expect(rightLabels).toEqual(labels)
   const circles = [...container.querySelectorAll('circle')]
-  expect(Number(circles[1].getAttribute('cy'))).toBeCloseTo(44)
+  expect(Number(circles[1].getAttribute('cy'))).toBeCloseTo(64)
   expect(circles[1].querySelector('title')?.textContent).toContain('90 BPM')
   fireEvent.click(circles[1])
   expect(container.querySelector('output')?.textContent).toContain('90 BPM')
@@ -104,4 +106,24 @@ it('does not invent numeric scale labels for an empty metric', () => {
   const {container} = render(<LinePlot points={[]} start={0} end={10} kind="dots" color="green" unit="%" label="SpO₂" />)
   expect(container.querySelectorAll('.wl-y-axis span')).toHaveLength(0)
   expect(screen.getByText('Nessuna rilevazione in questo periodo')).toBeTruthy()
+})
+
+
+it('uses readable ticks without a saturation scale above100%', () => {
+  const oxygen=plotScale(93,100,'dots','%')
+  expect(oxygen.ticks).toEqual([100,95,90])
+  for (const [min,max,kind] of [[52,146,'heart'],[28.3,36.7,'dots'],[0,30,'bars']] as const) {
+    const scale=plotScale(min,max,kind)
+    expect(scale.low).toBeLessThanOrEqual(min);expect(scale.high).toBeGreaterThanOrEqual(max)
+    expect(scale.ticks.length).toBeLessThanOrEqual(5)
+  }
+})
+
+it('states the exact dated five-minute interval and times under the heart plot', () => {
+  const now=Date.UTC(2026,10,26,16,45)/1000
+  render(<MiniHeart points={[{t:now-60,v:93}]} now={now} />)
+  expect(screen.getByText('Ultimi 5 minuti')).toBeTruthy()
+  expect(screen.getByText('26 nov 2026 · 17:40 → 26 nov 2026 · 17:45 · Roma')).toBeTruthy()
+  const axis=screen.getByLabelText('Orari di acquisizione, Roma')
+  expect(axis.textContent).toContain('17:40');expect(axis.textContent).toContain('17:45')
 })

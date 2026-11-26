@@ -504,16 +504,33 @@
   .wl-sleep-foot > span:last-child { flex-basis: 100%; margin-left: 0; }
 }
 
-/* Fixed-width HTML tick labels stay readable on TV and phones. */
-.wl-plot { display: grid; grid-template-columns: 58px minmax(0, 1fr); }
-.wl-y-axis { position: relative; height: 100%; color: #a9bdb6; font-size: 11px; font-variant-numeric: tabular-nums; }
-.wl-y-axis > span { position: absolute; right: 10px; transform: translateY(-50%); white-space: nowrap; }
-.wl-plot-surface { position: relative; min-width: 0; height: 100%; }
-.wl-shared-axis > div { margin-left: 58px; }
-.wl-point-detail { position: absolute; top: 0; right: 0; z-index: 2; padding: 4px 7px; border: 1px solid var(--wl-border); border-radius: 5px; background: #142a2a; color: #eff9f2; font-size: 11px; pointer-events: none; }
-.wl-scale-note { color: var(--wl-muted); font-size: 11px; line-height: 1.5; margin: 14px 0 0; }
-
-.wl-shared-axis > div { position: relative; min-height: 25px; }
-.wl-shared-axis > div > span { position: absolute; top: 0; transform: translateX(-50%); max-width: 110px; text-align: center; }
-.wl-shared-axis > div > span:first-child { transform: none; text-align: left; }
-.wl-shared-axis > div > span:last-child { transform: translateX(-100%); text-align: right; }
+/* Definite chart rows prevent intrinsic SVG size from overflowing adjacent axes. */
+.wellness .wl-plot { --wl-axis-width: 58px; display: grid; grid-template-columns: var(--wl-axis-width) minmax(0, 1fr) var(--wl-axis-width); grid-template-rows: minmax(0, 1fr); height: 112px; min-height: 112px; overflow: hidden; }
+.wellness .wl-y-axis { position: relative; min-width: 0; min-height: 0; height: 112px; overflow: hidden; color: #b8cbc4; font-size: 12px; line-height: 16px; font-variant-numeric: tabular-nums; }
+.wellness .wl-y-axis > span { position: absolute; transform: translateY(-50%); white-space: nowrap; }
+.wellness .wl-y-axis-left > span { right: 10px; }
+.wellness .wl-y-axis-right > span { left: 10px; }
+.wellness .wl-plot-surface { position: relative; min-width: 0; min-height: 0; height: 112px; }
+.wellness .wl-plot-surface > svg { position: absolute; inset: 0; width: 100%; height: 112px; overflow: hidden; }
+.wellness .wl-series-row { padding-block: 12px; border-bottom: 1px solid var(--wl-border); }
+.wellness .wl-series-row + .wl-series-row { margin-top: 0; }
+.wellness .wl-shared-axis > .wl-time-axis { margin-inline: 58px; }
+.wellness .wl-time-axis { position: relative; min-height: 34px; margin: 8px 58px 0; color: #b8cbc4; font-size: 11px; line-height: 16px; font-variant-numeric: tabular-nums; }
+.wellness .wl-time-axis > span { position: absolute; top: 0; transform: translateX(-50%); text-align: center; white-space: nowrap; }
+.wellness .wl-time-axis > span:first-child { transform: none; text-align: left; }
+.wellness .wl-time-axis > span:last-child { transform: translateX(-100%); text-align: right; }
+.wellness .wl-time-axis small { display: block; font-size: inherit; }
+.wellness .wl-chart-window { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 16px; margin-bottom: 12px; color: #c4d6ce; font-size: 12px; line-height: 18px; }
+.wellness .wl-chart-window strong { color: var(--wl-text); font-weight: 500; }
+.wellness .wl-heart-chart { height: auto; margin-top: 20px; }
+.wellness .wl-point-detail { position: absolute; top: 0; right: 0; z-index: 2; padding: 4px 7px; border: 1px solid var(--wl-border); border-radius: 5px; background: #142a2a; color: #eff9f2; font-size: 11px; pointer-events: none; }
+.wellness .wl-scale-note { color: var(--wl-muted); font-size: 11px; line-height: 1.5; margin: 14px 0 0; }
+@media (max-width: 560px) {
+  .wellness .wl-plot { --wl-axis-width: 42px; }
+  .wellness .wl-y-axis { font-size: 11px; }
+  .wellness .wl-y-axis-left > span { right: 5px; }
+  .wellness .wl-y-axis-right > span { left: 5px; }
+  .wellness .wl-time-axis, .wellness .wl-shared-axis > .wl-time-axis { margin-inline: 42px; }
+  .wellness .wl-time-axis > span:nth-child(2n) { display: none; }
+  .wellness .wl-time-axis-long > span:not(:first-child):not(:last-child) { display: none; }
+}
