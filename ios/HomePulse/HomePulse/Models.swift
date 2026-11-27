@@ -259,6 +259,18 @@ enum RingReconnectPolicy {
         [5.0,10,20,30,60][max(1,min(5,consecutiveFailures))-1]
     }
 }
+/// Refreshes the server's processed sleep results without running inference or
+/// retaining a second sleep archive on the phone. BLE uploads run separately.
+struct SleepRefreshSchedule {
+    private(set) var nextAttempt = Date.distantPast
+    mutating func becameActive(at now:Date){nextAttempt=min(nextAttempt,now)}
+    mutating func reserve(at now:Date,foreground:Bool,enrolled:Bool,inFlight:Bool)->Bool{
+        guard foreground,enrolled,!inFlight,now>=nextAttempt else{return false}
+        nextAttempt=now.addingTimeInterval(30)
+        return true
+    }
+    mutating func completed(at now:Date,succeeded:Bool){nextAttempt=now.addingTimeInterval(succeeded ? 30:60)}
+}
 struct RingBatterySnapshot:Codable, Sendable {var level:Int;var at:Date;var chargingProgressRaw:Int?=nil}
 /// One alert per discharge. Hysteresis prevents repeated alerts around 10%.
 struct BatteryAlertState:Codable, Sendable {

@@ -28,7 +28,7 @@ from .activity import parse_exercise_latest
 from .motion import parse_motion_record, parse_activity_record
 from .breathing import decode_breathing_record, decode_sleep_breathing_record
 from .workout import validate_profile, validate_plan, composition, schedule, energy_for_interval
-from .sleep import GEN3_CONTRACT, normalize_bedtime, normalize_period, merge_period, verified_run, MAX_PERIODS_PER_RUN, NATIVE_ABI
+from .sleep import GEN3_CONTRACT, normalize_bedtime, normalize_period, merge_period, coalesce_periods, period_groups, period_detail_rank, verified_run, MAX_PERIODS_PER_RUN, NATIVE_ABI
 from . import recorded, spo2, processing as history_processing
 
 
@@ -485,9 +485,9 @@ class HomePulseStore:
         if type(days) is not int or not 1<=days<=90:raise StoreError('Intervallo sonno non valido')
         now=time.time();start=now-days*86400
         with self.connection() as db:
-            periods=[json.loads(row['period']) for row in db.execute(
+            periods=coalesce_periods([json.loads(row['period']) for row in db.execute(
                 'SELECT period FROM sleep_periods WHERE owner_id=? AND ended_at>=? AND started_at<=? ORDER BY started_at DESC',
-                (owner,start,now))]
+                (owner,start,now))])
             for period in periods:
                 period['spo2']=spo2.aggregate(db,owner,period['started_at'],period['ended_at'])
                 rate=db.execute("SELECT count(*),avg(value),min(value),max(value) FROM points WHERE owner_id=? AND kind='respiratory_rate' AND source='oura-firmware-sleep-period-history' AND t>=? AND t<=?",(owner,period['started_at'],period['ended_at'])).fetchone()
@@ -716,6 +716,18 @@ class HomePulseStore:
                     if previous:period=merge_period(json.loads(previous['period']),period)
                     db.execute('INSERT INTO sleep_periods VALUES(?,?,?,?,?,?,?) ON CONFLICT(owner_id,started_at) DO UPDATE SET ended_at=excluded.ended_at,period=excluded.period,native_result_sha256=excluded.native_result_sha256,updated_at=excluded.updated_at',
                                (owner,period['started_at'],period['ended_at'],period['id'],_json(period),result_digest,time.time()))
+                    # Repair duplicate projections transactionally as new data
+                    # arrives, retaining the row with analysis in either order.
+                    # Immutable native runs and raw history remain untouched.
+                    nearby=[json.loads(item['period']) for item in db.execute(
+                        'SELECT period FROM sleep_periods WHERE owner_id=? AND started_at BETWEEN ? AND ? AND ended_at BETWEEN ? AND ?',
+                        (owner,period['started_at']-30,period['started_at']+30,period['ended_at']-30,period['ended_at']+30))]
+                    for group in period_groups(nearby):
+                        preferred=max(group,key=period_detail_rank)
+                        for duplicate in group:
+                            if duplicate is not preferred:
+                                db.execute('DELETE FROM sleep_periods WHERE owner_id=? AND started_at=?',
+                                           (owner,duplicate['started_at']))
             run_id=db.execute('SELECT id FROM native_runs WHERE owner_id=? AND result_sha256=?',(owner,result_digest)).fetchone()[0]
             spo2.capture(db,owner,run_id,result)
             db.execute('INSERT OR IGNORE INTO spo2_catalog_runs VALUES(?)',(run_id,))

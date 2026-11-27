@@ -61,14 +61,17 @@ struct AppArchiveSnapshot:Sendable {
     let store:EventStore;let api:WellnessAPI;let ring:RingBridge;let gym:GymDetection
     let recorded:RecordedCardioController
     private var ticking:Task<Void,Never>?;private var refreshing=false
+    private var foreground=false;private var sleepRefreshSchedule=SleepRefreshSchedule()
     private var nextStorageMaintenance=Date.distantPast
     private var refreshingArchive=false;private var archiveNeedsMetrics=false;private var lastArchiveRefresh=Date.distantPast
     private let notificationDiagnostics:DiagnosticWriter
     private let storageDiagnostics:DiagnosticWriter
     private let diaryDiagnostics:DiagnosticWriter
+    private let sleepDiagnostics:DiagnosticWriter
     init(store:EventStore,folder:URL,snapshot:AppArchiveSnapshot){
         storageDiagnostics=DiagnosticWriter(url:folder.appendingPathComponent("storage-status.json"))
         diaryDiagnostics=DiagnosticWriter(url:folder.appendingPathComponent("diary-status.json"))
+        sleepDiagnostics=DiagnosticWriter(url:folder.appendingPathComponent("sleep-status.json"))
         self.store=store;notificationDiagnostics=DiagnosticWriter(url:folder.appendingPathComponent("notification-status.json"))
         settings=snapshot.settings;persistedSettings=snapshot.settings;continuousCardio=snapshot.continuousCardio
         api=WellnessAPI(store:store,folder:folder.appendingPathComponent("uploads"))
@@ -84,8 +87,9 @@ struct AppArchiveSnapshot:Sendable {
         gym.apply(settings.auto_detection)
         api.onStatus={[weak self] status in Task{@MainActor in self?.uploadStatus=status}}
         api.onUpload={[weak self] in Task{@MainActor in self?.refreshArchiveStatus()}}
-        api.onAcknowledged={[weak self] in Task{@MainActor in self?.refreshArchiveStatus();self?.maintainStorage()}}
-        ring.onLive={[weak self] value,time in self?.api.noteBluetoothActivity();self?.receive(value,at:time)}
+        api.onAcknowledged={[weak self] in Task{@MainActor in self?.refreshArchiveStatus();self?.maintainStorage();self?.refreshSleepAutomatically()}}
+        ring.onBluetoothActivity={[weak self] in self?.api.noteBluetoothActivity()}
+        ring.onLive={[weak self] value,time in self?.receive(value,at:time)}
         ring.onHistory={[weak self] in self?.archiveNeedsMetrics=true;self?.recorded.historyChanged()}
         ring.onRecordedPrepare={[weak self] activity in
             guard let self,let id=ring.logicalRingID else{throw AppError.message("Configurazione cardio incompleta")}
@@ -104,7 +108,7 @@ struct AppArchiveSnapshot:Sendable {
         Task{await refreshBatteryNotificationStatus()}
         pending=snapshot.pending;journalCount=snapshot.journalCount
         if current==nil,let id=gym.engine.state.candidateSessionID,let date=gym.engine.state.candidateAt{startWorkout(auto:true,id:id,at:date)}
-        ticking=Task{[weak self] in var ticks=0;while !Task.isCancelled{try? await Task.sleep(nanoseconds:1_000_000_000);guard let self else{return};ring.maintenance();recorded.tick();maintainContinuousCardio();refreshArchiveStatus();ticks+=1;if ticks%30==0{await refresh()}}}
+        ticking=Task{[weak self] in var ticks=0;while !Task.isCancelled{try? await Task.sleep(nanoseconds:1_000_000_000);guard !Task.isCancelled,let self else{return};ring.maintenance();recorded.tick();maintainContinuousCardio();refreshArchiveStatus();refreshSleepAutomatically();ticks+=1;if ticks%30==0{Task{await self.refresh()}}}}
         let arguments=ProcessInfo.processInfo.arguments
         if let i=arguments.firstIndex(of:"--diary-keep-window"),i+3<arguments.count,let start=Double(arguments[i+1]),let end=Double(arguments[i+2]),let cutoff=Double(arguments[i+3]){
             let rule=DiaryCleanup(retain_start:start,retain_end:end,created_before:cutoff)
@@ -128,6 +132,15 @@ struct AppArchiveSnapshot:Sendable {
                 }
             }
         }
+    }
+    func setForeground(_ active:Bool){
+        let becameActive=active && !foreground;foreground=active
+        ring.setForeground(active);api.setForeground(active)
+        if becameActive{sleepRefreshSchedule.becameActive(at:Date());refreshSleepAutomatically()}
+    }
+    private func refreshSleepAutomatically(){
+        guard sleepRefreshSchedule.reserve(at:Date(),foreground:foreground,enrolled:enrolled,inFlight:refreshingSleep) else{return}
+        Task{[weak self] in await self?.refreshSleep()}
     }
     private func maintainStorage(){
         guard Date()>=nextStorageMaintenance else{return};nextStorageMaintenance=Date().addingTimeInterval(10)
@@ -321,7 +334,7 @@ struct AppArchiveSnapshot:Sendable {
             guard recorded.canPrepare else{return}
             if recorded.hasContext,recorded.result?.final != true {
                 recorded.historyChanged()
-                if ring.historyAligned,(try? await ring.activityIsInactive()) == true,await recorded.releaseInactiveCapture(){}else{continuousStatus="Completo il segmento cardio prima di riprendere";return}
+                if ring.historyDataDrained,(try? await ring.activityIsInactive()) == true,await recorded.releaseInactiveCapture(){}else{continuousStatus="Completo il segmento cardio prima di riprendere";return}
             }
             guard let age=settings.profile.age,let resting=settings.profile.resting_hr else{continuousStatus="Completa il profilo per il cardio esteso";return}
             let activity=current?.config.activity_id ?? settings.config.activity_id ?? 65535
@@ -410,8 +423,17 @@ struct AppArchiveSnapshot:Sendable {
     }
     func refreshSleep()async{
         guard enrolled,!refreshingSleep else{return};refreshingSleep=true;defer{refreshingSleep=false}
-        do{let value=try await api.request(path:"mobile/sleep",query:[URLQueryItem(name:"days",value:"14")]);sleepData=value;sleepStatus=value["processing_error"].string ?? ""}
-        catch{sleepStatus=sleepData == .null ? "Sonno non disponibile: riprova quando il server è raggiungibile":"Ultimi dati di questa apertura · aggiornamento rinviato"}
+        do{let value=try await api.request(path:"mobile/sleep",query:[URLQueryItem(name:"days",value:"14")]);sleepData=value;sleepStatus=value["processing_error"].string ?? "";sleepRefreshSchedule.completed(at:Date(),succeeded:true)
+            // One overwritten operational snapshot, without sample values or
+            // phase arrays; the phone does not retain a second sleep archive.
+            let summaries=value["periods"].array.prefix(32).map{period in JSONValue.object([
+                "started_at":period["started_at"],"ended_at":period["ended_at"],"source":period["source"],
+                "has_total":.bool(period["total_sleep_seconds"] != .null),"has_stages":.bool(period["stage_seconds"] != .null),
+                "phase_count":.number(Double(period["phases_30_seconds"].string?.count ?? 0)),
+                "spo2_samples":period["spo2"]["sample_count"],"breathing_samples":period["respiratory_rate"]["sample_count"]])}
+            sleepDiagnostics.submit(.object(["at":.number(Date().timeIntervalSince1970),"processing_status":value["processing_status"],"processing_error":value["processing_error"],"last_processed_at":value["last_processed_at"],"period_count":.number(Double(value["periods"].array.count)),"periods":.array(Array(summaries))]))
+        }
+        catch{sleepStatus=sleepData == .null ? "Sonno non disponibile: riprova quando il server è raggiungibile":"Ultimi dati di questa apertura · aggiornamento rinviato";sleepRefreshSchedule.completed(at:Date(),succeeded:false)}
     }
     private func decode<T:Decodable>(_ type:T.Type,_ value:JSONValue)->T?{guard value != .null,let d=try? JSONEncoder().encode(value) else{return nil};return try? JSONDecoder().decode(type,from:d)}
     private var unsavedSettings:Bool{

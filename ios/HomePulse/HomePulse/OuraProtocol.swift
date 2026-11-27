@@ -43,6 +43,35 @@ enum ExercisePolling{
         due ? now.addingTimeInterval(manualControlPending ? 5:60):previous
     }
 }
+struct OuraHistorySummary:Equatable {
+    var count:Int;var sleepAnalysisProgress:Int?;var bytesLeft:UInt32?
+    var dataDrained:Bool{bytesLeft==0 || (bytesLeft==nil && count==0)}
+    var analysisInProgress:Bool{(sleepAnalysisProgress ?? 0)>0}
+}
+/// A non-forcing firmware check precedes normal history sync. An in-progress
+/// analysis is polled without occupying the command lane or restarting it.
+struct RingSleepAnalysisSchedule {
+    private(set) var progress:Int?
+    private(set) var progressBeganAt:Date?
+    private(set) var nextCheckAt=Date.distantPast
+    mutating func reserveCheck(at now:Date)->Bool{
+        guard (progress ?? 0)==0,now>=nextCheckAt else{return false}
+        nextCheckAt=now.addingTimeInterval(900);return true
+    }
+    mutating func checkFailed(at now:Date){nextCheckAt=now.addingTimeInterval(300)}
+    mutating func observe(progress:Int?,at now:Date){
+        self.progress=progress
+        if (progress ?? 0)>0{if progressBeganAt==nil{progressBeganAt=now}}
+        else{progressBeganAt=nil}
+    }
+    func historyDelay(more:Bool,regular:TimeInterval,at now:Date)->TimeInterval{
+        guard more else{return regular}
+        guard (progress ?? 0)>0,let progressBeganAt else{return 2}
+        // Firmware progress can remain stale. Yield the radio between polls and
+        // bound high-frequency polling so cardio is never held behind it.
+        return now.timeIntervalSince(progressBeganAt)<120 ? 0.5:30
+    }
+}
 struct RecordedWorkoutCapture{
     var phase="baseline";var baselineComplete=false;var requestedAt:Date?;var stopRequestedAt:Date?;var stoppedAt:Date?
     var baselineNextRingTime:UInt32?;var firstTraceAt:Date?;var firstTraceRingTime:UInt32?
@@ -165,6 +194,14 @@ enum OuraWire {
         return b.count>=3 && b[0]==0x2f && (0x2b...0x2f).contains(b[2])
     }
     static func historyRequest(cursor:UInt32,max:UInt8=64)->Data {Data([0x10,9,UInt8(cursor&255),UInt8((cursor>>8)&255),UInt8((cursor>>16)&255),UInt8((cursor>>24)&255),max,255,255,255,255])}
+    static let checkSleepAnalysisRequest=Data([0x28,1,0])
+    static func sleepAnalysisResult(_ frame:Data)throws->UInt8{try complete(frame,minimum:3,tag:0x29)[2]}
+    static func historySummary(_ frame:Data,received:Int,requestedMax:UInt8)throws->OuraHistorySummary{
+        let b=try complete(frame,minimum:3,tag:0x11)
+        guard Int(b[2])==received,received<=Int(requestedMax) else{throw AppError.message("Conteggio storico incoerente: cursore conservato")}
+        let remaining=b.count>=8 ? UInt32(b[4])|(UInt32(b[5])<<8)|(UInt32(b[6])<<16)|(UInt32(b[7])<<24):nil
+        return OuraHistorySummary(count:received,sleepAnalysisProgress:b.count>=4 ? Int(b[3]):nil,bytesLeft:remaining)
+    }
     static func cursor(_ frame:Data)throws->UInt32 {let b=[UInt8](frame);guard b.count>=6,b[0]>=0x41,b[0]<=0x85,Int(b[1])+2==b.count else{throw AppError.message("Cursore storico esteso non supportato")};return UInt32(b[2])|(UInt32(b[3])<<8)|(UInt32(b[4])<<16)|(UInt32(b[5])<<24)}
     static func sportParameters(activity:UInt16,age:Int,resting:Int,capabilityVersion:Int=0)throws->Data {
         guard (18...100).contains(age),(30...200).contains(resting) else{throw AppError.message("Servono età e FC a riposo valide")}

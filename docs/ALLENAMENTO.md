@@ -50,6 +50,12 @@ Il backend elabora al massimo60000record per blocco, più gli ancoraggi original
 
 Per Gen3 il record0x76 produce il periodo a letto solo con copertura completa nello stesso avvio e senza discontinuità dell’orologio. Non produce fasi né sonno totale. La tab Sonno distingue questa sorgente e mostra gli errori di elaborazione; le fasi native legacy, quando presenti, hanno precedenza sui riepiloghi incompleti.
 
+Home Pulse richiede automaticamente l’analisi firmware non forzata prima dello scaricamento dello storico (controllo ogni 15 minuti, nuovo tentativo dopo 5 minuti su errore). La risposta dello storico distingue i byte ancora da scaricare dal progresso dell’analisi: se l’anello sta ancora elaborando, il client continua a controllare senza occupare il canale fra le richieste. Dopo 2 minuti il controllo rallenta a 30 secondi. Questi intervalli sono una policy del client. Un ACK non viene presentato come un risultato sonno: periodi, totali e fasi provengono soltanto dai record e dall’output nativo verificati.
+
+L’iPhone rilegge automaticamente i risultati di FamilOS quando l’app è visibile e al ritorno in primo piano. Il timer Bluetooth/cardio non attende le richieste di rete; anche le notifiche storiche già archiviate consentono l’invio immediato nella breve finestra di esecuzione in background. Il server mantiene l’archivio completo, mentre il telefono conserva la coda non confermata e i buffer necessari.
+
+Una finestra firmware vuota e la sua analisi nativa non diventano due notti nel pannello o nei tool Emily. Vengono riconciliate soltanto se entrambi gli estremi differiscono al massimo di un’epoca da 30 secondi, conservando la proiezione con analisi. Gli altri confronti mantengono una tolleranza di 1 secondo; due finestre vuote della stessa fonte restano distinte. I record grezzi e le esecuzioni native originali sono conservati.
+
 
 ## Respiro Gen3 e scale dei grafici
 

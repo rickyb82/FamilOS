@@ -85,6 +85,64 @@ def merge_period(previous, current):
     return merged
 
 
+def same_period(left, right):
+    """Match native analysis and its firmware window at known source precision.
+
+    Compare both endpoints, never just the calendar date or overlap: distinct
+    naps/nights and an unmatched empty period must remain visible.
+    """
+    left_analysis, right_analysis = period_detail_rank(left)[0], period_detail_rank(right)[0]
+    if left.get('source') == right.get('source') and not (left_analysis and right_analysis):
+        return False
+    analysed_vs_firmware = (
+        left.get('source') == 'oura-ecore' and left_analysis
+        and right.get('source') == 'oura-ring-bedtime' and not right_analysis
+    ) or (
+        right.get('source') == 'oura-ecore' and right_analysis
+        and left.get('source') == 'oura-ring-bedtime' and not left_analysis
+    )
+    # Real Gen3 output can round the analysed interval by a 30-second phase
+    # epoch relative to its unanalysed firmware window. Other matches retain
+    # the narrow one-second tolerance; two empty same-source rows never merge.
+    tolerance = 30 if analysed_vs_firmware else 1
+    for key in ('started_at', 'ended_at'):
+        a, b = left.get(key), right.get(key)
+        if (type(a) not in (int, float) or type(b) not in (int, float)
+                or not math.isfinite(a) or not math.isfinite(b) or abs(a-b) > tolerance):
+            return False
+    return True
+
+
+def period_detail_rank(period):
+    """Prefer an actual analysis over an otherwise matching firmware window."""
+    stages = period.get('stage_seconds')
+    phases = [period.get('phases_30_seconds'), period.get('phases_5_minutes')]
+    details = [period.get('total_sleep_seconds') is not None,
+               isinstance(stages, dict) and bool(stages),
+               *[isinstance(value, str) and bool(value) for value in phases]]
+    return (any(details), sum(details), period.get('source') == 'oura-ecore',
+            sum(len(value) for value in phases if isinstance(value, str)))
+
+
+def period_groups(periods):
+    """Only group mutually matching intervals; avoid transitive time drift."""
+    groups = []
+    for period in sorted(periods, key=lambda value: value['started_at'], reverse=True):
+        group = next((group for group in groups if all(same_period(period, other) for other in group)), None)
+        if group is None:
+            groups.append([period])
+        else:
+            group.append(period)
+    return groups
+
+
+def coalesce_periods(periods):
+    # Return the preferred real projection unchanged: do not invent a hybrid
+    # interval, phases, total, identifier or provenance from nearby records.
+    return sorted((max(group, key=period_detail_rank) for group in period_groups(periods)),
+                  key=lambda value: value['started_at'], reverse=True)
+
+
 def verified_run(result):
     return (result.get('status') == 'ok' and result.get('process_true') is True
             and result.get('deinit_returned') is True

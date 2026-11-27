@@ -19,7 +19,7 @@ import UIKit
             }.value
             let model=AppModel(store:archive.0,folder:archive.1,snapshot:archive.2)
             let active=UIApplication.shared.applicationState == .active
-            model.ring.setForeground(active);model.api.setForeground(active)
+            model.setForeground(active)
             #if DEBUG
             let arguments=ProcessInfo.processInfo.arguments
             if arguments.contains("--uitest-isolated-store"),arguments.contains("--uitest-storage-stall"){
@@ -58,7 +58,7 @@ final class AppDelegate:NSObject,UIApplicationDelegate {
     func applicationDidBecomeActive(_ application:UIApplication){updateActivity(true)}
     private func updateActivity(_ active:Bool){Task{@MainActor in
         guard let model=try? await AppRuntime.load() else{return}
-        model.ring.setForeground(active);model.api.setForeground(active)
+        model.setForeground(active)
     }}
     func application(_ application:UIApplication,handleEventsForBackgroundURLSession identifier:String,completionHandler:@escaping()->Void){
         guard identifier=="com.familos.homepulse.uploads" else{completionHandler();return}
@@ -68,9 +68,12 @@ final class AppDelegate:NSObject,UIApplicationDelegate {
 @main struct HomePulseApp:App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var bootstrap=AppBootstrap()
+    @Environment(\.scenePhase) private var scenePhase
     var body:some Scene{WindowGroup{
-        if let model=bootstrap.model{RootView().environmentObject(model)}
-        else if let error=bootstrap.error{ContentUnavailableView("Archivio non disponibile",systemImage:"externaldrive.badge.exclamationmark",description:Text(error))}
-        else{ProgressView("Apertura archivio…")}
+        Group {
+            if let model=bootstrap.model{RootView().environmentObject(model).onAppear{model.setForeground(scenePhase == .active)}}
+            else if let error=bootstrap.error{ContentUnavailableView("Archivio non disponibile",systemImage:"externaldrive.badge.exclamationmark",description:Text(error))}
+            else{ProgressView("Apertura archivio…")}
+        }.onChange(of:scenePhase,initial:true){_,phase in bootstrap.model?.setForeground(phase == .active)}
     }}
 }

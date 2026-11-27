@@ -3,6 +3,65 @@ import SQLite3
 @testable import HomePulse
 
 final class HomePulseTests:XCTestCase {
+    func testFirmwareSleepAnalysisRequestIsNonForcingAndStatusIsNotAResult()throws{
+        XCTAssertEqual(OuraWire.checkSleepAnalysisRequest,Data([0x28,1,0]))
+        XCTAssertEqual(try OuraWire.sleepAnalysisResult(Data([0x29,1,0])),0)
+        XCTAssertEqual(try OuraWire.sleepAnalysisResult(Data([0x29,1,32])),32)
+        XCTAssertThrowsError(try OuraWire.sleepAnalysisResult(Data([0x29,2,0])))
+        XCTAssertThrowsError(try OuraWire.sleepAnalysisResult(Data([0x28,1,0])))
+    }
+    func testEmptyHistoryWithPendingSleepStillRequiresPolling()throws{
+        let pending=try OuraWire.historySummary(Data([0x11,6,0,70,0,0,0,0]),received:0,requestedMax:64)
+        XCTAssertTrue(pending.dataDrained);XCTAssertTrue(pending.analysisInProgress)
+        let done=try OuraWire.historySummary(Data([0x11,6,0,0,0,0,0,0]),received:0,requestedMax:64)
+        XCTAssertTrue(done.dataDrained);XCTAssertFalse(done.analysisInProgress)
+        let remaining=try OuraWire.historySummary(Data([0x11,6,1,0,1,2,0,0]),received:1,requestedMax:64)
+        XCTAssertEqual(remaining.bytesLeft,513);XCTAssertFalse(remaining.dataDrained)
+        XCTAssertThrowsError(try OuraWire.historySummary(Data([0x11,6,2,0,0,0,0,0]),received:1,requestedMax:64))
+        XCTAssertThrowsError(try OuraWire.historySummary(Data([0x11,6,2,0,0,0,0,0]),received:2,requestedMax:1))
+        let old=try OuraWire.historySummary(Data([0x11,1,0]),received:0,requestedMax:64)
+        XCTAssertNil(old.sleepAnalysisProgress);XCTAssertNil(old.bytesLeft);XCTAssertTrue(old.dataDrained)
+    }
+    func testFirmwareSleepChecksThrottleAndProgressPollingYieldsAfterDeadline(){
+        let start=Date(timeIntervalSince1970:1000)
+        var schedule=RingSleepAnalysisSchedule()
+        XCTAssertTrue(schedule.reserveCheck(at:start));XCTAssertFalse(schedule.reserveCheck(at:start.addingTimeInterval(899)))
+        schedule.observe(progress:50,at:start)
+        XCTAssertEqual(schedule.historyDelay(more:true,regular:60,at:start.addingTimeInterval(119)),0.5)
+        XCTAssertEqual(schedule.historyDelay(more:true,regular:60,at:start.addingTimeInterval(120)),30)
+        XCTAssertFalse(schedule.reserveCheck(at:start.addingTimeInterval(1000)))
+        schedule.observe(progress:0,at:start.addingTimeInterval(1001))
+        XCTAssertTrue(schedule.reserveCheck(at:start.addingTimeInterval(1001)))
+        schedule.checkFailed(at:start.addingTimeInterval(1001))
+        XCTAssertFalse(schedule.reserveCheck(at:start.addingTimeInterval(1300)))
+        XCTAssertTrue(schedule.reserveCheck(at:start.addingTimeInterval(1301)))
+        XCTAssertEqual(schedule.historyDelay(more:false,regular:60,at:start.addingTimeInterval(1302)),60)
+        XCTAssertEqual(schedule.historyDelay(more:true,regular:60,at:start.addingTimeInterval(1302)),2)
+    }
+    func testAutomaticSleepRefreshSurvivesUploadBurstsAndForegroundReturn(){
+        let start=Date(timeIntervalSince1970:1000)
+        var schedule=SleepRefreshSchedule()
+        XCTAssertFalse(schedule.reserve(at:start,foreground:false,enrolled:true,inFlight:false))
+        XCTAssertFalse(schedule.reserve(at:start,foreground:true,enrolled:false,inFlight:false))
+        XCTAssertTrue(schedule.reserve(at:start,foreground:true,enrolled:true,inFlight:false))
+        // A stream of upload acknowledgements must not create parallel GETs.
+        for second in 1..<30{XCTAssertFalse(schedule.reserve(at:start.addingTimeInterval(Double(second)),foreground:true,enrolled:true,inFlight:false))}
+        XCTAssertFalse(schedule.reserve(at:start.addingTimeInterval(31),foreground:true,enrolled:true,inFlight:true))
+        schedule.completed(at:start.addingTimeInterval(32),succeeded:true)
+        XCTAssertFalse(schedule.reserve(at:start.addingTimeInterval(61),foreground:true,enrolled:true,inFlight:false))
+        XCTAssertTrue(schedule.reserve(at:start.addingTimeInterval(62),foreground:true,enrolled:true,inFlight:false))
+        // Returning to the app refreshes the server's completed night promptly.
+        schedule.becameActive(at:start.addingTimeInterval(65))
+        XCTAssertTrue(schedule.reserve(at:start.addingTimeInterval(65),foreground:true,enrolled:true,inFlight:false))
+    }
+    func testAutomaticSleepRefreshBacksOffOfflineWithoutBackgroundPolling(){
+        let start=Date(timeIntervalSince1970:1000)
+        var schedule=SleepRefreshSchedule()
+        schedule.completed(at:start,succeeded:false)
+        XCTAssertFalse(schedule.reserve(at:start.addingTimeInterval(59),foreground:true,enrolled:true,inFlight:false))
+        XCTAssertFalse(schedule.reserve(at:start.addingTimeInterval(60),foreground:false,enrolled:true,inFlight:false))
+        XCTAssertTrue(schedule.reserve(at:start.addingTimeInterval(60),foreground:true,enrolled:true,inFlight:false))
+    }
     func testPreparedCapturePinsRawBeforeACKAndRejectionPreservesCurrent()throws{
         let folder=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString);defer{try? FileManager.default.removeItem(at:folder)}
         let store=try EventStore(url:folder.appendingPathComponent("synthetic.sqlite"))

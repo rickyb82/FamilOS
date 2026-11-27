@@ -14,6 +14,9 @@ import UIKit
     @Published var recordedHistorySummary="Prova dai dati registrati non avviata"
     private var recordedCapture:RecordedWorkoutCapture?;private var recordedDrainUntil=Date.distantPast
     private var liveSubscriptionActive=false;private var lastHistoryBytesLeft:UInt32?;private var lastHistoryRecordCount:Int?
+    private var sleepAnalysisSchedule=RingSleepAnalysisSchedule();private var sleepAnalysisAttemptAt:Date?
+    private var sleepAnalysisResult:UInt8?;private var sleepAnalysisError:String?;private var sleepAnalysisProgressAt:Date?
+    private var historyPollTask:Task<Void,Never>?
     private var exerciseStep="idle";private var exerciseAttemptAt:Date?;private var exerciseFailure:JSONValue?
     private var commandReplies:[JSONValue]=[];private var exerciseMode:OuraFeatureStatus?;private var exerciseModeAt:Date?
     private var setupIssues:[String]=[]
@@ -37,10 +40,12 @@ import UIKit
     private var spo2Before:OuraFeatureStatus?;private var spo2After:OuraFeatureStatus?
     @Published var lastConnectionError:String?
     var onBattery:((OuraBattery,Date)->Void)?
+    var onBluetoothActivity:(()->Void)?
     var onIdle:(()->Void)?
     var onLive:((OuraLive,Date)->Void)?;var onHistory:(()->Void)?;var onJournal:(()->Void)?
     var onRecordedStartResolved:((Bool)async throws->Void)?
-    var historyAligned:Bool{lastHistoryBytesLeft==0 || (lastHistoryBytesLeft==nil && lastHistoryRecordCount==0)}
+    var historyDataDrained:Bool{lastHistoryBytesLeft==0 || (lastHistoryBytesLeft==nil && lastHistoryRecordCount==0)}
+    var historyAligned:Bool{historyDataDrained && (sleepAnalysisSchedule.progress ?? 0)==0}
     var onRecordedPrepare:((Int)async throws->Void)?
     var logicalRingID:String?{logicalRing}
     private let statusJournalQueue=DispatchQueue(label:"HomePulse.status-journal",qos:.utility)
@@ -128,6 +133,7 @@ import UIKit
     func centralManager(_ central:CBCentralManager,didFailToConnect peripheral:CBPeripheral,error:Error?){connectionFailure=error.map{"Connessione non riuscita: \($0.localizedDescription)"};lastConnectionError=connectionFailure;lost()}
     func centralManager(_ central:CBCentralManager,didDisconnectPeripheral peripheral:CBPeripheral,error:Error?){lost()}
     private func lost(){
+        historyPollTask?.cancel();historyPollTask=nil
         let scheduledDelay=chargeWakeDelay;chargeWakeDelay=nil;packetSession=UUID()
         connectionTimeout?.cancel();connected=false;ready=false;writeCharacteristic=nil;notifyCharacteristic=nil;busy=false;authenticating=false
         failWaiter(AppError.message("Collegamento anello interrotto"));status=connectionFailure ?? "Anello scollegato"
@@ -179,6 +185,10 @@ import UIKit
             DispatchQueue.main.async{[weak self] in
                 guard let self,self.packetSession==session else{return}
                 if result.storageFailed{self.desired=false;self.packetSession=UUID();self.central.cancelPeripheralConnection(peripheral)}
+                // History, battery and other notifications wake iOS too. Their
+                // durable journal must not wait for a valid live heart sample
+                // before using the short immediate-upload execution window.
+                if !result.storageFailed{self.onBluetoothActivity?()}
                 for frame in result.frames{self.receive(frame,at:result.at)}
                 self.onJournal?()
                 if let error=result.error{self.status=error;self.failWaiter(AppError.message(error))}
@@ -298,7 +308,7 @@ import UIKit
             exerciseStep="connected";status="Collegato · attendi un IBI valido"
             nextBatteryAt=Date().addingTimeInterval(60)
             do{try await batteryRead();nextBatteryAt=Date().addingTimeInterval(15)}catch{status="Lettura batteria rinviata"}
-            let more=try await historyPages(maxPages:32);nextHistoryAt=Date().addingTimeInterval(more ? 2:60)
+            let more=try await historyPages(maxPages:32);scheduleHistory(more:more,regular:60)
             if !setupIssues.isEmpty{status="Collegato · "+setupIssues.joined(separator:"; ")}
         }catch{status=error.localizedDescription}
     }
@@ -392,8 +402,32 @@ import UIKit
         busy=true;defer{finishOperation()}
         do{try await restoreSpO2Probe()}catch{spo2Status="Ripristino SpO₂ da riprovare";nextSpO2At=Date().addingTimeInterval(10)}
     }
-    func downloadHistory()async{guard ready,!busy else{return};busy=true;defer{finishOperation()};do{let more=try await historyPages(maxPages:32);nextHistoryAt=Date().addingTimeInterval(more ? 2:60)}catch{status=error.localizedDescription;nextHistoryAt=Date().addingTimeInterval(60)}}
+    func downloadHistory()async{guard ready,!busy else{return};busy=true;defer{finishOperation()};do{let more=try await historyPages(maxPages:32);scheduleHistory(more:more,regular:60)}catch{status=error.localizedDescription;nextHistoryAt=Date().addingTimeInterval(60)}}
+    private func scheduleHistory(more:Bool,regular:TimeInterval){
+        historyPollTask?.cancel();historyPollTask=nil
+        let delay=sleepAnalysisSchedule.historyDelay(more:more,regular:regular,at:Date())
+        nextHistoryAt=Date().addingTimeInterval(delay)
+        guard more,(sleepAnalysisSchedule.progress ?? 0)>0 else{return}
+        historyPollTask=Task{[weak self] in
+            try? await Task.sleep(nanoseconds:UInt64(delay*1_000_000_000))
+            guard !Task.isCancelled,let self else{return}
+            self.historyPollTask=nil;self.maintenance()
+        }
+    }
+    private func checkSleepAnalysisIfDue()async{
+        guard sleepAnalysisSchedule.reserveCheck(at:Date()) else{return}
+        sleepAnalysisAttemptAt=Date();sleepAnalysisResult=nil;sleepAnalysisError=nil
+        do{
+            let result=try OuraWire.sleepAnalysisResult(await exchange(OuraWire.checkSleepAnalysisRequest,tag:0x29,seconds:8))
+            sleepAnalysisResult=result
+            if result != 0{sleepAnalysisError="Verifica sonno rinviata (esito \(result))";sleepAnalysisSchedule.checkFailed(at:Date())}
+        }catch{sleepAnalysisError=error.localizedDescription;sleepAnalysisSchedule.checkFailed(at:Date())}
+        // A rejected optional sleep check must never prevent historical data,
+        // recorded cardio, or unsent packets from reaching the server.
+        writeBatteryDiagnostic()
+    }
     private func historyPages(maxPages:Int)async throws->Bool{
+        await checkSleepAnalysisIfDue()
         let key="history.cursor.\(logicalRing ?? peripheral?.identifier.uuidString ?? "unknown")"
         var cursor=try await store.perform{$0.load(UInt32.self,key:key) ?? 0}
         for _ in 0..<maxPages {
@@ -402,23 +436,24 @@ import UIKit
             let reply:Data
             do{reply=try await exchange(OuraWire.historyRequest(cursor:cursor,max:requestMax),tag:0x11,seconds:25)}catch{pageRecords=nil;throw error}
             let records=pageRecords ?? [];pageRecords=nil
-            let b=try OuraWire.complete(reply,minimum:3,tag:0x11)
-            guard Int(b[2])==records.count,records.count<=Int(requestMax) else{throw AppError.message("Conteggio storico incoerente: cursore conservato")}
+            let summary=try OuraWire.historySummary(reply,received:records.count,requestedMax:requestMax)
             var next=cursor,previous=cursor
             for record in records {let value=try OuraWire.cursor(record);guard value>=previous,value<UInt32.max else{throw AppError.message("Cursore storico inatteso")};previous=value;next=value+1}
             guard records.isEmpty || next>cursor else{throw AppError.message("Storico senza avanzamento")}
             let nextCursor=next,api=apiVersion,ring=logicalRing
             try await store.perform{try $0.archiveHistory(frames:records,nextCursor:nextCursor,key:key,api:api,ring:ring)}
             if !records.isEmpty{onHistory?()};onJournal?();cursor=next
-            let bytesLeft=b.count>=8 ? UInt32(b[4])|(UInt32(b[5])<<8)|(UInt32(b[6])<<16)|(UInt32(b[7])<<24):0
-            lastHistoryBytesLeft=b.count>=8 ? bytesLeft:nil
+            lastHistoryBytesLeft=summary.bytesLeft
             lastHistoryRecordCount=records.count
+            sleepAnalysisSchedule.observe(progress:summary.sleepAnalysisProgress,at:Date());sleepAnalysisProgressAt=Date()
             if recordedCapture != nil{
                 recordedCapture?.pages+=1;recordedCapture?.lastPageAt=Date();recordedCapture?.bytesLeft=lastHistoryBytesLeft
                 if let capture=recordedCapture{recordedHistorySummary="\(capture.recordingTraceCount) tracce cardio · \(capture.recordingAcmCount) record movimento acquisiti durante la prova"}
                 writeBatteryDiagnostic()
             }
-            if bytesLeft==0 || records.isEmpty{status="Collegato · storico aggiornato";return false}
+            if summary.analysisInProgress && summary.dataDrained{status="Collegato · elaborazione sonno nell’anello";writeBatteryDiagnostic();return true}
+            if summary.dataDrained{status="Collegato · storico aggiornato";return false}
+            if records.isEmpty{status="Collegato · recupero dello storico in corso";return true}
         }
         status="Collegato · recupero dello storico in corso";return true
     }
@@ -437,7 +472,7 @@ import UIKit
             if spo2Due{do{try await configureAutomaticSpO2()}catch{spo2Status="SpO₂: configurazione rinviata"}}
             if batteryDue{do{try await batteryRead();nextBatteryAt=Date().addingTimeInterval(15)}catch{status="Lettura batteria rinviata"}}
             if exerciseDue{do{try await exerciseRead()}catch{status="Lettura cardio attività rinviata"}}
-            if historyDue{do{let more=try await historyPages(maxPages:manualControlPending ? 2:32);nextHistoryAt=Date().addingTimeInterval(more ? 2:historyInterval)}catch{status=error.localizedDescription}}
+            if historyDue{do{let more=try await historyPages(maxPages:manualControlPending ? 2:32);scheduleHistory(more:more,regular:historyInterval)}catch{status=error.localizedDescription}}
         }
     }
     func refreshBattery()async{
@@ -455,6 +490,14 @@ import UIKit
         // Snapshot only; encoding and protected atomic file I/O run off-main.
         var value:[String:JSONValue]=["at":.number(Date().timeIntervalSince1970),"status":.string(batteryStatus),"ring_status":.string(status),"connected":.bool(connected),"ready":.bool(ready),"busy":.bool(busy),"foreground":.bool(foreground),"waiting_for_charge_check":.bool(waitingForChargeCheck),"bluetooth_state":.number(Double(central?.state.rawValue ?? -1)),"peripheral_state":.number(Double(peripheral?.state.rawValue ?? -1))]
         if let batteryAt{value["battery_read_at"] = .number(batteryAt.timeIntervalSince1970)}
+        if let at=sleepAnalysisAttemptAt{value["sleep_analysis_check_at"] = .number(at.timeIntervalSince1970)}
+        if let result=sleepAnalysisResult{value["sleep_analysis_check_result_raw"] = .number(Double(result))}
+        if let error=sleepAnalysisError{value["sleep_analysis_check_error"] = .string(error)}
+        if let progress=sleepAnalysisSchedule.progress{value["sleep_analysis_progress_raw"] = .number(Double(progress))}
+        if let at=sleepAnalysisProgressAt{value["sleep_analysis_progress_at"] = .number(at.timeIntervalSince1970)}
+        value["sleep_analysis_check_forced"] = .bool(false)
+        value["history_data_drained"] = .bool(historyDataDrained)
+        value["history_aligned"] = .bool(historyAligned)
         if let lastLivePacketAt{value["last_live_packet_at"] = .number(lastLivePacketAt.timeIntervalSince1970)}
         if let lastValidLivePacketAt{value["last_valid_live_packet_at"] = .number(lastValidLivePacketAt.timeIntervalSince1970)}
         if let spo2Before{value["spo2_mode_before"] = .number(Double(spo2Before.mode))}
@@ -574,8 +617,8 @@ import UIKit
             let live=try OuraWire.complete(await exchange(Data([0x2f,2,0x20,2]),tag:0x2f,extended:0x21),minimum:8,tag:0x2f,extended:0x21)
             guard live[3]==2,[0,1,3].contains(live[4]) else{throw AppError.message("Sorgente cardio già occupata da un’altra misura")}
             liveMode=live[4];recordedCapture=RecordedWorkoutCapture();recordedHistorySummary="Sincronizzazione iniziale della prova…"
-            let more=try await historyPages(maxPages:8)
-            recordedCapture?.baselineComplete = !more && (lastHistoryBytesLeft==0 || (lastHistoryBytesLeft==nil && lastHistoryRecordCount==0))
+            _ = try await historyPages(maxPages:8)
+            recordedCapture?.baselineComplete = historyDataDrained
             let cursorKey="history.cursor.\(logicalRing ?? peripheral?.identifier.uuidString ?? "unknown")"
             recordedCapture?.baselineNextRingTime=try await store.perform{$0.load(UInt32.self,key:cursorKey)}
             guard recordedCapture?.baselineComplete == true else{nextHistoryAt=Date.distantPast;throw OuraStartDeferred.history}
